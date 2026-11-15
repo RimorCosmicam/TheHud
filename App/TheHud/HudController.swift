@@ -84,6 +84,8 @@ final class HudController: ObservableObject {
     var browser: WebBrowser { tabs[activeTab] }
 
     private var cursorHideTimer: Timer?
+    /// Put away for idleness or a lock; the next touch wakes it without clicking.
+    private var cursorAsleep = false
     private var lastHover: Date = .distantPast
 
     // Real data. Each panel degrades on its own: no calendar access drops one line, no location
@@ -238,6 +240,12 @@ final class HudController: ObservableObject {
     /// Called once the phone scene is on screen.
     func start() {
         captions.language = captionsLanguage
+        // Locked, the phone is in a pocket: nothing to point at.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.putCursorAway() }
+        }
+        scheduleCursorHide()
         tickClock()
         // Every second, for the clock app's seconds hand; the other layouts only take the
         // update when the minute changes.
@@ -512,7 +520,10 @@ final class HudController: ObservableObject {
 
     private func browserChanged(_ state: WebBrowser.State) {
         var browser = snapshot.browser
-        if browser.isFullscreen && !state.isFullscreen { snapshot.cursor = pointer.position }
+        if browser.isFullscreen && !state.isFullscreen, !cursorAsleep {
+            snapshot.cursor = pointer.position
+            scheduleCursorHide()
+        }
         browser.isFullscreen = state.isFullscreen
         browser.isHome = state.isHome
         browser.isFavorite = !state.isHome && favorites.contains {
@@ -1071,6 +1082,19 @@ final class HudController: ObservableObject {
     private func handle(_ event: GestureEvent) {
         pointer.apply(event)
 
+        // Put away for being idle or the phone being locked: the first touch only brings it
+        // back, so nothing is clicked where it could not be seen.
+        if cursorAsleep {
+            cursorAsleep = false
+            snapshot.cursor = pointer.position
+            switch event {
+            case .tapClick, .rightClick:
+                scheduleCursorHide()
+                return
+            default: break
+            }
+        }
+
         switch event {
         case let .scrollFling(vx, vy): startMomentum(vx: vx, vy: vy)
         case .move:
@@ -1131,16 +1155,29 @@ final class HudController: ObservableObject {
     }
 
     /// Over a fullscreen video the cursor gets out of the way once it stops, as it does on a
-    /// desktop. Anywhere else it stays: it is the only way to know where a click will land.
+    /// desktop. Anywhere else it waits a minute untouched, then goes: left lying on the glasses
+    /// it sits over whatever the wearer is looking at, out in the street.
     private func scheduleCursorHide() {
         cursorHideTimer?.invalidate()
-        guard snapshot.browser.isFullscreen else { return }
-        cursorHideTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+        let fullscreen = snapshot.browser.isFullscreen
+        cursorHideTimer = Timer.scheduledTimer(withTimeInterval: fullscreen ? 2.5 : 60,
+                                               repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.snapshot.browser.isFullscreen else { return }
-                self.snapshot.cursor = nil
+                guard let self else { return }
+                if fullscreen {
+                    if self.snapshot.browser.isFullscreen { self.snapshot.cursor = nil }
+                } else {
+                    self.putCursorAway()
+                }
             }
         }
+    }
+
+    /// Off the glasses until the trackpad is next touched.
+    private func putCursorAway() {
+        cursorHideTimer?.invalidate()
+        cursorAsleep = true
+        snapshot.cursor = nil
     }
 
     /// MiniMate ran the fling on a coroutine. A timer is the same shape; the scroller itself is
