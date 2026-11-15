@@ -28,7 +28,7 @@ public enum BrowserMetrics {
     public static let barHeight: CGFloat = 66
     /// Back, forward and reload: hidden until the cursor is on the bar.
     public static let buttonWidth: CGFloat = 78
-    public static let panelRadius: CGFloat = 28
+    public static var panelRadius: CGFloat { HudTheme.cornerRadius }
 
     /// Where the page starts when scrolled to the top, so nothing begins hidden under the bar.
     public static var contentTopInset: CGFloat { barInset + barHeight + 10 }
@@ -191,5 +191,95 @@ public enum TextEdit {
     public static func between(_ old: String, _ new: String) -> (deletes: Int, insert: String) {
         let common = zip(old, new).prefix { $0 == $1 }.count
         return (old.count - common, String(new.dropFirst(common)))
+    }
+}
+
+/// What a click on the Maps app landed on.
+public enum MapsHitTarget: Equatable, Sendable {
+    case search
+    case result(Int)
+    case endRoute
+    case transport
+    case zoomIn
+    case zoomOut
+    case none
+}
+
+/// The Maps app's floating controls, for drawing and for hit testing, as `GlassesLayout` is for
+/// the browser.
+public struct MapsLayout: Sendable {
+    public var resultCount: Int
+    public var navigating: Bool
+
+    public init(resultCount: Int = 0, navigating: Bool = false) {
+        self.resultCount = resultCount
+        self.navigating = navigating
+    }
+
+    public static let margin: CGFloat = 28
+    public static let cardWidth: CGFloat = 640
+    public static let searchHeight: CGFloat = 72
+    public static let rowHeight: CGFloat = 88
+    public static let buttonSize: CGFloat = 76
+    public static let tripHeight: CGFloat = 104
+    public static let tripButtonWidth: CGFloat = 132
+
+    /// The map itself: the canvas inside the safe inset.
+    public var panel: CGRect {
+        let inset = HudTheme.safeInset
+        return CGRect(x: inset, y: inset, width: HudTheme.glassesSize.width - inset * 2,
+                      height: HudTheme.glassesSize.height - inset * 2)
+    }
+
+    public var searchFrame: CGRect {
+        CGRect(x: panel.minX + Self.margin, y: panel.minY + Self.margin,
+               width: Self.cardWidth, height: Self.searchHeight)
+    }
+
+    public func resultFrame(_ index: Int) -> CGRect {
+        CGRect(x: searchFrame.minX, y: searchFrame.maxY + 12 + CGFloat(index) * Self.rowHeight,
+               width: Self.cardWidth, height: Self.rowHeight)
+    }
+
+    /// Next turn, top left, where the search field is when not navigating.
+    public var turnFrame: CGRect {
+        CGRect(x: searchFrame.minX, y: searchFrame.minY, width: Self.cardWidth, height: 200)
+    }
+
+    /// Time, distance and arrival, bottom left, with the transport and end buttons at its end.
+    public var tripFrame: CGRect {
+        CGRect(x: panel.minX + Self.margin, y: panel.maxY - Self.margin - Self.tripHeight,
+               width: Self.cardWidth + 260, height: Self.tripHeight)
+    }
+
+    public var endFrame: CGRect {
+        CGRect(x: tripFrame.maxX - 12 - Self.tripButtonWidth, y: tripFrame.minY + 14,
+               width: Self.tripButtonWidth, height: tripFrame.height - 28)
+    }
+
+    public var transportFrame: CGRect {
+        endFrame.offsetBy(dx: -(Self.tripButtonWidth + 10), dy: 0)
+    }
+
+    public var zoomInFrame: CGRect {
+        CGRect(x: panel.maxX - Self.margin - Self.buttonSize, y: panel.midY - Self.buttonSize - 6,
+               width: Self.buttonSize, height: Self.buttonSize)
+    }
+
+    public var zoomOutFrame: CGRect { zoomInFrame.offsetBy(dx: 0, dy: Self.buttonSize + 12) }
+
+    public func hitTest(_ point: CGPoint) -> MapsHitTarget {
+        if zoomInFrame.contains(point) { return .zoomIn }
+        if zoomOutFrame.contains(point) { return .zoomOut }
+        if navigating {
+            if endFrame.contains(point) { return .endRoute }
+            if transportFrame.contains(point) { return .transport }
+            return .none
+        }
+        if searchFrame.contains(point) { return .search }
+        for index in 0..<resultCount where resultFrame(index).contains(point) {
+            return .result(index)
+        }
+        return .none
     }
 }

@@ -69,10 +69,11 @@ struct PhoneRootView: View {
         TextField("", text: Binding(get: { controller.draft },
                                     set: { controller.draftChanged($0) }))
             .focused($typing)
-            .keyboardType(controller.keyboardTarget == .address ? .webSearch : .default)
+            .keyboardType(controller.keyboardTarget == .page ? .default : .webSearch)
             .textInputAutocapitalization(controller.keyboardTarget == .address ? .never : .sentences)
             .autocorrectionDisabled(controller.keyboardTarget == .address)
-            .submitLabel(controller.keyboardTarget == .address ? .go : .return)
+            .submitLabel(controller.keyboardTarget == .address ? .go
+                         : controller.keyboardTarget == .mapSearch ? .search : .return)
             .onSubmit { controller.submitTyping() }
             .frame(width: 1, height: 1)
             .opacity(0.01)

@@ -13,6 +13,7 @@ runGestureTests()
 runLayoutTests()
 runHomePageTests()
 runTabTests()
+runAppTests()
 MainActor.assumeIsolated { runPageScriptTests() }
 
 exit(TestKit.summarise())

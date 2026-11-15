@@ -59,7 +59,7 @@ public struct BrowserPanel: View {
             }
             .background(Color.black)
             .clipShape(shape)
-            .overlay(shape.strokeBorder(.white.opacity(0.10), lineWidth: 1.5))
+            .overlay(shape.strokeBorder(HudTheme.edge, lineWidth: 1))
         }
     }
 

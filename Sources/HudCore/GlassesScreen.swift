@@ -73,27 +73,19 @@ public struct GlassesScreen: View {
                      hoveredTab: layout.tab(at: snapshot.cursor), liveGlass: liveGlass)
     }
 
-    /// One panel on its own, given the room: the map fills the canvas, the clock and the weather
-    /// are drawn large in the middle. (The browser on its own is `browserLayout` without the
-    /// column, which already takes the full width.)
+    /// One panel on its own, as an app: Maps with search and directions, the forecast, the
+    /// clock with the day. (The browser on its own is `browserLayout` without the column, which
+    /// already takes the full width.)
     @ViewBuilder
     private func soloLayout(_ kind: HudPanelKind) -> some View {
         switch kind {
         case .map:
-            minimap()
-                .padding(HudTheme.safeInset)
+            MapsApp(minimap: snapshot.minimap, maps: snapshot.maps, ground: mapGround,
+                    proceduralGround: placeholders, cursor: snapshot.cursor)
         case .clock:
-            ClockPanel(snapshot.clock)
-                .frame(width: 620)
-                .scaleEffect(1.9)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ClockApp(snapshot.clock).padding(HudTheme.safeInset)
         case .weather:
-            if let weather = snapshot.weather {
-                WeatherPanel(weather)
-                    .frame(width: 430)
-                    .scaleEffect(2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            WeatherApp(snapshot.weather).padding(HudTheme.safeInset)
         case .browser:
             browserLayout
         }

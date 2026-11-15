@@ -39,6 +39,31 @@ public final class CalendarProvider {
         formatter.dateFormat = "HH:mm"
         return (title, formatter.string(from: next.startDate))
     }
+
+    /// What is left of today: what is on now, then what is still to come.
+    public func agenda(now: Date = Date(), limit: Int = 6) -> [HudSnapshot.Clock.Event] {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return [] }
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: now)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        let events = store.events(matching: store.predicateForEvents(withStart: start, end: end,
+                                                                      calendars: nil))
+            .filter { $0.endDate > now }
+            .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let uses24Hour = (DateFormatter.dateFormat(fromTemplate: "j", options: 0,
+                                                   locale: .current) ?? "H").contains("H")
+        formatter.dateFormat = uses24Hour ? "H:mm" : "h:mm"
+        return events.prefix(limit).map { event in
+            HudSnapshot.Clock.Event(
+                title: event.title ?? "",
+                time: event.isAllDay ? "ALL DAY" : formatter.string(from: event.startDate),
+                end: event.isAllDay ? nil : formatter.string(from: event.endDate),
+                isNow: !event.isAllDay && event.startDate <= now)
+        }
+    }
 }
 
 public extension HudSnapshot.Clock {
@@ -69,10 +94,50 @@ public extension HudSnapshot.Clock {
             return formatter
         }
 
-        return HudSnapshot.Clock(
+        var clock = HudSnapshot.Clock(
             time: fixed(uses24Hour ? "HH:mm" : "h:mm").string(from: date),
             meridiem: uses24Hour ? nil : fixed("a").string(from: date),
             weekday: localised("EEEE").string(from: date).uppercased(),
             date: localised("d MMMM").string(from: date).uppercased())
+
+        let parts = Calendar.current.dateComponents([.hour, .minute, .second, .nanosecond],
+                                                    from: date)
+        let second = Double(parts.second ?? 0)
+        let minute = Double(parts.minute ?? 0) + second / 60
+        clock.seconds = String(format: "%02d", parts.second ?? 0)
+        clock.secondHand = second
+        clock.minuteHand = minute
+        clock.hourHand = Double((parts.hour ?? 0) % 12) + minute / 60
+
+        clock.worldClocks = worldCities.map { city, zone in
+            HudSnapshot.Clock.worldClock(city, zone, at: date, uses24Hour: uses24Hour)
+        }
+        return clock
+    }
+
+    /// The other places on the clock app. A fixed set for now; the useful three for most people.
+    static let worldCities: [(String, TimeZone)] = [
+        ("NEW YORK", TimeZone(identifier: "America/New_York")!),
+        ("LONDON", TimeZone(identifier: "Europe/London")!),
+        ("TOKYO", TimeZone(identifier: "Asia/Tokyo")!),
+    ]
+
+    static func worldClock(_ city: String, _ zone: TimeZone, at date: Date,
+                           uses24Hour: Bool, here: TimeZone = .current) -> WorldClock {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = zone
+        formatter.dateFormat = uses24Hour ? "H:mm" : "h:mm a"
+        let hours = Double(zone.secondsFromGMT(for: date) - here.secondsFromGMT(for: date)) / 3600
+        let sign = hours < 0 ? "\u{2212}" : "+"
+        let magnitude = abs(hours)
+        let amount = magnitude == magnitude.rounded() ? String(Int(magnitude))
+            : String(format: "%.1f", magnitude)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let hour = calendar.component(.hour, from: date)
+        return WorldClock(city: city, time: formatter.string(from: date),
+                          offset: hours == 0 ? "SAME TIME" : "\(sign)\(amount)H",
+                          isDay: (7..<19).contains(hour))
     }
 }

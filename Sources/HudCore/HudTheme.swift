@@ -1,11 +1,12 @@
 import SwiftUI
 import CoreText
 
-/// MiniMate's "Mont" panel material, carried over unchanged: black at ninety-two percent, Mont in
-/// white, no border and no corner rounding. State is carried by brightness alone.
+/// MiniMate's "Mont" panel material: black at ninety-two percent, Mont in white. State is
+/// carried by brightness alone.
 ///
-/// It is the right material for glasses as well as for a cover display — a hairline and a rounded
-/// corner both cost contrast, and contrast is the one thing a transparent display is short of.
+/// Every surface shares one continuous corner and one faint edge, the browser's, so the panels
+/// read as one set of glass rather than a browser beside some boxes. The edge is kept just above
+/// invisible: contrast is the one thing a transparent display is short of.
 public enum HudTheme {
     public static let surfaceAlpha: Double = 0.92
     public static let surface = Color.black.opacity(surfaceAlpha)
@@ -15,6 +16,11 @@ public enum HudTheme {
 
     /// MiniMate's Mustard accent (`uC2` of the default colorway), for the few marks that carry state.
     public static let accent = Color(red: 0xD8 / 255, green: 0xA6 / 255, blue: 0x28 / 255)
+
+    /// One corner for every panel on the glasses.
+    public static let cornerRadius: CGFloat = 28
+    /// The hairline round a panel.
+    public static let edge = Color.white.opacity(0.09)
 
     /// The glasses' own canvas. The Air reports 1920x1080 over DisplayPort.
     public static let glassesSize = CGSize(width: 1920, height: 1080)
@@ -66,7 +72,12 @@ public struct HudPanel: ViewModifier {
     public func body(content: Content) -> some View {
         content
             .padding(padding)
-            .background(HudTheme.surface)
+            .background(HudTheme.surface,
+                        in: RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous)
+                    .strokeBorder(HudTheme.edge, lineWidth: 1)
+            )
     }
 }
 

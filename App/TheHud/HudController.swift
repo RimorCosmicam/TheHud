@@ -39,7 +39,7 @@ final class HudController: ObservableObject {
     @Published var cornerPressed = false
 
     /// Where keystrokes go while the keyboard is up.
-    enum KeyboardTarget { case address, page }
+    enum KeyboardTarget { case address, page, mapSearch }
     @Published private(set) var keyboardTarget: KeyboardTarget?
     /// The invisible text field's contents. For the address bar it is the draft itself; for the
     /// page it is a proxy that is diffed into insertions and deletions.
@@ -61,6 +61,16 @@ final class HudController: ObservableObject {
     private let location = LocationProvider()
     private let weatherProvider: WeatherProviding = OpenMeteoWeatherProvider()
     private let maps = MapSnapshotProvider()
+    private let mapsService = MapsService()
+
+    /// The Maps app's zoom: metres across a 470pt panel. Shared with the small map.
+    private var mapSpan: Int = UserDefaults.standard.object(forKey: "mapSpan") as? Int ?? 300
+    private var zoomRefetch: Timer?
+    private var searchResults: [MapsService.Result] = []
+    private var searchDebounce: Timer?
+    /// The route being followed, and where the wearer is along it.
+    private var tracker: NavigationTracker?
+    private var routeDestination: MapsService.Result?
 
     @Published private(set) var mapGround: Image?
 
@@ -114,12 +124,17 @@ final class HudController: ObservableObject {
     /// Called once the phone scene is on screen.
     func start() {
         tickClock()
-        clockTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+        // Every second, for the clock app's seconds hand; the other layouts only take the
+        // update when the minute changes.
+        clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { self.tickClock() }
         }
 
         Task {
-            if await calendar.requestAccess() { tickClock() }
+            if await calendar.requestAccess() {
+                lastCalendarRead = .distantPast
+                tickClock()
+            }
         }
 
         location.onUpdate = { [weak self] minimap, coordinate in
@@ -130,17 +145,33 @@ final class HudController: ObservableObject {
         browser.goHome()
     }
 
+    private var lastCalendarRead: Date = .distantPast
+    private var calendarNext: (title: String, time: String)?
+    private var calendarAgenda: [HudSnapshot.Clock.Event] = []
+
     private func tickClock() {
         var clock = HudSnapshot.Clock.now()
-        if let next = calendar.nextEvent() {
-            clock.nextEvent = next.title
-            clock.nextEventTime = next.time
+        var calendarChanged = false
+        if Date().timeIntervalSince(lastCalendarRead) > 30 {
+            lastCalendarRead = Date()
+            calendarNext = calendar.nextEvent()
+            calendarAgenda = calendar.agenda()
+            calendarChanged = true
         }
+        clock.nextEvent = calendarNext?.title
+        clock.nextEventTime = calendarNext?.time
+        clock.agenda = calendarAgenda
+        // A redraw a second is for the clock app alone.
+        guard shownPanels == [.clock] || calendarChanged
+                || clock.time != snapshot.clock.time else { return }
         snapshot.clock = clock
     }
 
     private func locationChanged(_ minimap: HudSnapshot.Minimap,
                                  _ coordinate: CLLocationCoordinate2D) {
+        var minimap = minimap
+        minimap.spanMetres = mapSpan
+        minimap.route = snapshot.minimap.route
         snapshot.minimap = minimap
 
         // Weather every fifteen minutes: it does not change faster than that, and the request
@@ -159,6 +190,10 @@ final class HudController: ObservableObject {
 
         lastCoordinate = coordinate
         applyGroundOffset()
+        if var tracker {
+            snapshot.maps.navigation = tracker.update(at: coordinate)
+            self.tracker = tracker
+        }
 
         // A new raster once the old one is running out under the marker.
         let walked = groundCentre.map { metres(from: $0, to: coordinate) } ?? .infinity
@@ -179,10 +214,12 @@ final class HudController: ObservableObject {
             let canvas = HudTheme.glassesSize
             let inset = HudTheme.safeInset * 2
             let diagonal = Double(hypot(canvas.width - inset, canvas.height - inset)) / ppm
-            let room = 120.0
+            // Walking room in proportion to the zoom: a street's worth close in, a district's
+            // worth far out, so the raster stays a similar number of pixels either way.
+            let room = max(40, spanMetres * 0.4)
             // One point per pixel: the glasses are drawn at 1x, and a 2x raster this size would
             // be a hundred megabytes for nothing.
-            return (diagonal + room * 2 + 60, room, 1)
+            return (diagonal + room * 2 + spanMetres * 0.2, room, 1)
         }
         // A fifth of the span either way, the same rule as before the solo map existed.
         return (spanMetres * HudSnapshot.Minimap.groundOversize, spanMetres * 0.2, 2)
@@ -217,8 +254,12 @@ final class HudController: ObservableObject {
 
     private func soloChanged(from old: HudPanelKind?) {
         panelsChanged()
-        // Without the browser on screen there is no bar to type into.
-        if !shownPanels.contains(.browser), keyboardTarget != nil { endTyping() }
+        // Typing into something no longer on screen stops.
+        switch keyboardTarget {
+        case .address, .page: if !shownPanels.contains(.browser) { endTyping() }
+        case .mapSearch: if !mapFillsCanvas { endTyping() }
+        case nil: break
+        }
     }
 
     /// The map's raster is sized for its panel; going to or from the full canvas needs another
@@ -233,10 +274,29 @@ final class HudController: ObservableObject {
     private func applyGroundOffset() {
         guard let centre = groundCentre, let here = lastCoordinate else { return }
         snapshot.minimap.groundSpanMetres = groundSpan
+        applyRoute()
         let metresPerDegree = 111_320.0
         snapshot.minimap.groundOffsetNorth = (here.latitude - centre.latitude) * metresPerDegree
         snapshot.minimap.groundOffsetEast = (here.longitude - centre.longitude) * metresPerDegree
             * cos(centre.latitude * .pi / 180)
+    }
+
+    /// East and north of the raster's centre, in metres.
+    private func offset(of point: CLLocationCoordinate2D,
+                        from centre: CLLocationCoordinate2D) -> CGPoint {
+        let metresPerDegree = 111_320.0
+        return CGPoint(x: (point.longitude - centre.longitude) * metresPerDegree
+                            * cos(centre.latitude * .pi / 180),
+                       y: (point.latitude - centre.latitude) * metresPerDegree)
+    }
+
+    /// The route, in the current raster's frame.
+    private func applyRoute() {
+        guard let tracker, let centre = groundCentre else {
+            if !snapshot.minimap.route.isEmpty { snapshot.minimap.route = [] }
+            return
+        }
+        snapshot.minimap.route = tracker.plan.points.map { offset(of: $0, from: centre) }
     }
 
     private func metres(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
@@ -341,7 +401,12 @@ final class HudController: ObservableObject {
         case let .selectTab(index): selectTab(index)
         case let .closeTab(index): closeTab(index)
         case .favorite: toggleFavorite()
-        case .address: keyboardTarget == .address ? endTyping() : beginAddressEditing()
+        case .address:
+            if mapFillsCanvas {
+                keyboardTarget == .mapSearch ? endTyping() : beginMapSearch()
+            } else {
+                keyboardTarget == .address ? endTyping() : beginAddressEditing()
+            }
         case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
         case .settings: showingSettings = true
         case let .toggle(kind):
@@ -405,6 +470,7 @@ final class HudController: ObservableObject {
     /// against the layout the canvas was drawn with. The pointer's own position, not the drawn
     /// cursor, which hides itself over a fullscreen video.
     private func click() {
+        if mapFillsCanvas { return mapClick() }
         switch layout.hitTest(pointer.position) {
         case .back: browser.back()
         case .forward: browser.forward()
@@ -425,7 +491,10 @@ final class HudController: ObservableObject {
     /// Scrolls the page under the cursor, or the page as a whole when the cursor is elsewhere:
     /// the rail should scroll the page wherever the pointer happens to be parked.
     private func scrollPage(_ ticks: Int) {
-        guard ticks != 0, let content = layout.contentFrame else { return }
+        guard ticks != 0 else { return }
+        // In the Maps app, scrolling zooms: down to see more, up to see closer.
+        if mapFillsCanvas { return zoomMap(pow(1.1, Double(ticks))) }
+        guard let content = layout.contentFrame else { return }
         let point: CGPoint
         if case let .page(p) = layout.hitTest(pointer.position) {
             point = p
@@ -454,7 +523,15 @@ final class HudController: ObservableObject {
         draft = Self.sentinel
     }
 
+    func beginMapSearch() {
+        if keyboardTarget == .address { snapshot.browser.isEditingAddress = false }
+        keyboardTarget = .mapSearch
+        draft = snapshot.maps.query
+        snapshot.maps.isEditing = true
+    }
+
     func endTyping() {
+        if keyboardTarget == .mapSearch { snapshot.maps.isEditing = false }
         if keyboardTarget == .address {
             snapshot.browser.isEditingAddress = false
             snapshot.browser.url = browser.state.url
@@ -469,6 +546,14 @@ final class HudController: ObservableObject {
         case .address:
             draft = new
             snapshot.browser.url = new
+        case .mapSearch:
+            draft = new
+            snapshot.maps.query = new
+            // Results as you type, once the typing pauses.
+            searchDebounce?.invalidate()
+            searchDebounce = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                MainActor.assumeIsolated { self.runMapSearch() }
+            }
         case .page:
             let sentinel = Self.sentinel
             let old = draft.hasPrefix(sentinel) ? String(draft.dropFirst()) : draft
@@ -500,9 +585,111 @@ final class HudController: ObservableObject {
         case .page:
             browser.submit()
             endTyping()
+        case .mapSearch:
+            searchDebounce?.invalidate()
+            if searchResults.isEmpty {
+                runMapSearch()
+            } else {
+                startRoute(to: 0)
+            }
+            endTyping()
         case nil:
             break
         }
+    }
+
+    // ------------------------------------------------------------------ maps
+
+    private var mapsLayout: MapsLayout {
+        MapsLayout(resultCount: snapshot.maps.navigation == nil ? snapshot.maps.results.count : 0,
+                   navigating: snapshot.maps.navigation != nil)
+    }
+
+    private func mapClick() {
+        switch mapsLayout.hitTest(pointer.position) {
+        case .search: keyboardTarget == .mapSearch ? endTyping() : beginMapSearch()
+        case let .result(index): startRoute(to: index)
+        case .endRoute: endRoute()
+        case .transport:
+            snapshot.maps.driving.toggle()
+            if let destination = routeDestination { route(to: destination) }
+        case .zoomIn: zoomMap(1 / 1.6)
+        case .zoomOut: zoomMap(1.6)
+        case .none: if keyboardTarget == .mapSearch { endTyping() }
+        }
+    }
+
+    /// The zoom changes at once, by stretching the raster already there; a sharp one for the new
+    /// zoom follows when the zooming stops.
+    private func zoomMap(_ factor: Double) {
+        let next = min(max(Int((Double(mapSpan) * factor).rounded()), 120), 8000)
+        guard next != mapSpan else { return }
+        mapSpan = next
+        snapshot.minimap.spanMetres = next
+        UserDefaults.standard.set(next, forKey: "mapSpan")
+        zoomRefetch?.invalidate()
+        zoomRefetch = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
+            MainActor.assumeIsolated { self.panelsChanged() }
+        }
+    }
+
+    private func runMapSearch() {
+        let query = snapshot.maps.query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else {
+            searchResults = []
+            snapshot.maps.results = []
+            snapshot.maps.status = nil
+            return
+        }
+        guard let here = lastCoordinate else {
+            snapshot.maps.status = "WAITING FOR LOCATION"
+            return
+        }
+        snapshot.maps.status = "SEARCHING"
+        Task {
+            let found = (try? await mapsService.search(query, near: here)) ?? []
+            // A newer search has started since; its answer is the one that counts.
+            guard snapshot.maps.query.trimmingCharacters(in: .whitespaces) == query else { return }
+            searchResults = found
+            snapshot.maps.results = found.map(\.place)
+            snapshot.maps.status = found.isEmpty ? "NO RESULTS" : nil
+        }
+    }
+
+    private func startRoute(to index: Int) {
+        guard searchResults.indices.contains(index) else { return }
+        if keyboardTarget == .mapSearch { endTyping() }
+        route(to: searchResults[index])
+    }
+
+    private func route(to destination: MapsService.Result) {
+        guard let here = lastCoordinate else { return }
+        routeDestination = destination
+        snapshot.maps.status = "FINDING A ROUTE"
+        let driving = snapshot.maps.driving
+        Task {
+            do {
+                let plan = try await mapsService.route(from: here, to: destination.item,
+                                                       driving: driving)
+                var tracker = NavigationTracker(plan: plan)
+                snapshot.maps.navigation = tracker.update(at: lastCoordinate ?? here)
+                self.tracker = tracker
+                snapshot.maps.results = []
+                snapshot.maps.query = ""
+                snapshot.maps.status = nil
+                searchResults = []
+                applyRoute()
+            } catch {
+                snapshot.maps.status = "NO ROUTE"
+            }
+        }
+    }
+
+    private func endRoute() {
+        tracker = nil
+        routeDestination = nil
+        snapshot.maps.navigation = nil
+        applyRoute()
     }
 
     // ------------------------------------------------------------------ settings

@@ -111,25 +111,30 @@ public struct MinimapPanel: View {
     public var ground: Image?
     /// Draw made-up streets while there is no raster. Right for a still, wrong on a face.
     public var proceduralGround: Bool
+    /// The place and speed above the map. The Maps app draws its own.
+    public var showsHeader: Bool
 
     public init(_ minimap: HudSnapshot.Minimap, ground: Image? = nil,
-                proceduralGround: Bool = true) {
+                proceduralGround: Bool = true, showsHeader: Bool = true) {
         self.minimap = minimap
         self.ground = ground
         self.proceduralGround = proceduralGround
+        self.showsHeader = showsHeader
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(minimap.place).font(HudTheme.mont(20, .black)).tracking(3)
-                    .foregroundStyle(HudTheme.ink)
-                Spacer()
-                Text(minimap.speed).font(HudTheme.mont(18, .black)).tracking(2)
-                    .foregroundStyle(HudTheme.inkDim)
+            if showsHeader {
+                HStack {
+                    Text(minimap.place).font(HudTheme.mont(20, .black)).tracking(3)
+                        .foregroundStyle(HudTheme.ink)
+                    Spacer()
+                    Text(minimap.speed).font(HudTheme.mont(18, .black)).tracking(2)
+                        .foregroundStyle(HudTheme.inkDim)
+                }
+                .padding(.horizontal, 24)
+                .frame(height: 58)
             }
-            .padding(.horizontal, 24)
-            .frame(height: 58)
 
             GeometryReader { geometry in
                 ZStack {
@@ -147,16 +152,25 @@ public struct MinimapPanel: View {
                         // until there is actual routing to draw.
                         route(size: geometry.size)
                     }
+                    // The edge fades into the dark rather than stopping at a hard line: on a
+                    // see-through display a bright map ending in a straight cut reads as a
+                    // window frame.
+                    RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous)
+                        .strokeBorder(Color.black.opacity(0.85), lineWidth: 36)
+                        .blur(radius: 22)
+                        .allowsHitTesting(false)
                     marks(size: geometry.size)
                 }
                 // Canvas does not clip to its own bounds, and the street grid is deliberately
                 // drawn a diagonal wider than the panel so rotation never exposes a corner.
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous)
+                        .strokeBorder(HudTheme.edge, lineWidth: 1)
+                )
             }
         }
-        .background(HudTheme.surface)
-        .clipped()
     }
 
     /// The map raster, heading-up: it turns under the marker as the wearer turns, and slides
@@ -168,8 +182,10 @@ public struct MinimapPanel: View {
     private func groundLayer(_ ground: Image, size: CGSize) -> some View {
         let pointsPerMetre = CGFloat(minimap.pointsPerMetre)
         let side = CGFloat(minimap.effectiveGroundSpan) * pointsPerMetre
-        return ground
-            .resizable()
+        return ZStack {
+            ground.resizable()
+            routeLayer(side: side, pointsPerMetre: pointsPerMetre)
+        }
             .frame(width: side, height: side)
             .offset(x: -CGFloat(minimap.groundOffsetEast) * pointsPerMetre,
                     y: CGFloat(minimap.groundOffsetNorth) * pointsPerMetre)
@@ -180,6 +196,42 @@ public struct MinimapPanel: View {
             .rotationEffect(.degrees(-minimap.heading))
             .animation(.easeOut(duration: 0.25), value: minimap.heading)
             .frame(width: size.width, height: size.height)
+    }
+
+    /// The route, in the raster's own frame so it turns and slides with the streets under it.
+    private func routeLayer(side: CGFloat, pointsPerMetre: CGFloat) -> some View {
+        Canvas { context, size in
+            guard minimap.route.count > 1 else { return }
+            func point(_ p: CGPoint) -> CGPoint {
+                CGPoint(x: size.width / 2 + p.x * pointsPerMetre,
+                        y: size.height / 2 - p.y * pointsPerMetre)
+            }
+            var line = Path()
+            line.move(to: point(minimap.route[0]))
+            for p in minimap.route.dropFirst() { line.addLine(to: point(p)) }
+            let style = { (width: CGFloat) in
+                StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)
+            }
+            context.stroke(line, with: .color(.black.opacity(0.7)), style: style(18))
+            context.stroke(line, with: .color(HudTheme.accent), style: style(10))
+
+            let end = point(minimap.route[minimap.route.count - 1])
+            context.fill(Path(ellipseIn: CGRect(x: end.x - 16, y: end.y - 16, width: 32, height: 32)),
+                         with: .color(.black.opacity(0.7)))
+            context.fill(Path(ellipseIn: CGRect(x: end.x - 11, y: end.y - 11, width: 22, height: 22)),
+                         with: .color(HudTheme.accent))
+            context.fill(Path(ellipseIn: CGRect(x: end.x - 4, y: end.y - 4, width: 8, height: 8)),
+                         with: .color(.black))
+        }
+        .frame(width: side, height: side)
+    }
+
+    /// A scale bar length that reads as a round number and stays between about 80 and 220
+    /// points, whatever the zoom.
+    public static func scaleBar(pointsPerMetre: Double) -> (metres: Int, label: String) {
+        let steps = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000]
+        let metres = steps.first { Double($0) * pointsPerMetre >= 80 } ?? steps.last!
+        return (metres, metres >= 1000 ? "\(metres / 1000) KM" : "\(metres) M")
     }
 
     /// A deterministic, slightly irregular grid. Alfama is not a grid, which is the point of the
@@ -272,23 +324,26 @@ public struct MinimapPanel: View {
                                                   width: 34, height: 34)),
                            with: .color(HudTheme.accent), lineWidth: 3)
 
-            // Scale bar, bottom left: a true 100 m at the map's zoom.
+            // Scale bar: a round distance at the map's zoom. Bottom left on the small panel;
+            // beside the north mark in the app, where the trip card has the bottom left.
             let barY = size.height - 30
-            let barLength = CGFloat(100 * minimap.pointsPerMetre)
+            let scale = Self.scaleBar(pointsPerMetre: minimap.pointsPerMetre)
+            let barLength = CGFloat(Double(scale.metres) * minimap.pointsPerMetre)
+            let barX: CGFloat = showsHeader ? 24 : size.width - 104 - barLength
             var bar = Path()
-            bar.move(to: CGPoint(x: 24, y: barY))
-            bar.addLine(to: CGPoint(x: 24 + barLength, y: barY))
+            bar.move(to: CGPoint(x: barX, y: barY))
+            bar.addLine(to: CGPoint(x: barX + barLength, y: barY))
             context.stroke(bar, with: .color(.white.opacity(0.65)), lineWidth: 3)
-            for x in [CGFloat(24), 24 + barLength] {
+            for x in [barX, barX + barLength] {
                 var tick = Path()
                 tick.move(to: CGPoint(x: x, y: barY - 6))
                 tick.addLine(to: CGPoint(x: x, y: barY + 6))
                 context.stroke(tick, with: .color(.white.opacity(0.65)), lineWidth: 3)
             }
-            context.draw(Text("100 M")
+            context.draw(Text(scale.label)
                 .font(HudTheme.mont(15, .black))
                 .foregroundStyle(HudTheme.inkDim),
-                at: CGPoint(x: 24 + barLength / 2, y: barY - 20))
+                at: CGPoint(x: barX + barLength / 2, y: barY - 20))
 
             // North, bottom right, rotated to the heading.
             let northCentre = CGPoint(x: size.width - 48, y: size.height - 48)

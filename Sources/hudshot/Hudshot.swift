@@ -124,6 +124,18 @@ struct Hudshot {
                       to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
         }
 
+        // Maps: searching, with the cursor on the second result; then following a route.
+        var searching = HudSnapshot(cursor: nil)
+        searching.maps = .previewSearch
+        searching.cursor = CGPoint(x: MapsLayout(resultCount: 4).resultFrame(1).midX + 120,
+                                   y: MapsLayout(resultCount: 4).resultFrame(1).midY)
+        try write(GlassesScreen(snapshot: searching, visible: [.map]),
+                  to: outDir, "glasses-maps-search", scale: 1)
+        var navigating = HudSnapshot(cursor: nil)
+        navigating.maps = .previewNavigation
+        try write(GlassesScreen(snapshot: navigating, visible: [.map]),
+                  to: outDir, "glasses-maps-route", scale: 1)
+
         if live {
             let (snapshot, ground, soloGround) = try liveSnapshot()
             try write(GlassesScreen(snapshot: snapshot, mapGround: ground),
