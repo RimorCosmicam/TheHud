@@ -340,23 +340,25 @@ final class HudController: ObservableObject {
         case .newTab: openTab()
         case let .selectTab(index): selectTab(index)
         case let .closeTab(index): closeTab(index)
-        case .fullscreen: browser.toggleFullscreen()
         case .favorite: toggleFavorite()
         case .address: keyboardTarget == .address ? endTyping() : beginAddressEditing()
         case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
         case .settings: showingSettings = true
         case let .toggle(kind):
-            // While one panel is alone, the tiles pick which one: another tile swaps it in, the
-            // same tile puts the whole set back.
-            if let current = solo {
-                solo = current == kind ? nil : kind
+            // Fullscreen, whether a held tile or a video, and a tap on any tile ends it.
+            if solo != nil {
+                solo = nil
+                return
+            }
+            if snapshot.browser.isFullscreen {
+                browser.toggleFullscreen()
                 return
             }
             if visible.contains(kind) { visible.remove(kind) } else { visible.insert(kind) }
             UserDefaults.standard.set(visible.map(\.rawValue), forKey: Self.visibleKey)
             panelsChanged()
         case let .solo(kind):
-            solo = solo == kind ? nil : kind
+            solo = kind
         }
     }
 

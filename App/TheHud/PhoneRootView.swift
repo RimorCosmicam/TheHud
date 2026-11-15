@@ -35,7 +35,6 @@ struct PhoneRootView: View {
                              glassesConnected: controller.glassesConnected,
                              tabs: controller.snapshot.browser.tabs,
                              activeTab: controller.snapshot.browser.activeTab,
-                             fullscreen: controller.snapshot.browser.isFullscreen,
                              action: controller.perform)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .clipped()

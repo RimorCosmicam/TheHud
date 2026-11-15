@@ -121,7 +121,7 @@ struct StatusBar: View {
 /// What the phone's buttons can ask for. One enum so the app and the stills share the bar.
 public enum PhoneAction: Sendable {
     case back, forward, reload, home, favorite, address, keyboard, settings
-    case newTab, fullscreen
+    case newTab
     case selectTab(Int), closeTab(Int)
     case toggle(HudPanelKind)
     /// Show one panel alone on the glasses, or put the set back if it already is.
@@ -275,7 +275,6 @@ public struct SettingsArea: View {
     public var glassesConnected: Bool
     public var tabs: [String]
     public var activeTab: Int
-    public var fullscreen: Bool
     public var action: (PhoneAction) -> Void
 
     public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
@@ -283,21 +282,19 @@ public struct SettingsArea: View {
                 glassesConnected: Bool = true,
                 tabs: [String] = ["New Tab"],
                 activeTab: Int = 0,
-                fullscreen: Bool = false,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.visible = visible
         self.solo = solo
         self.glassesConnected = glassesConnected
         self.tabs = tabs
         self.activeTab = activeTab
-        self.fullscreen = fullscreen
         self.action = action
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(solo == nil ? "ON THE GLASSES" : "ALONE ON THE GLASSES").hudLabel()
+                Text(solo == nil ? "ON THE GLASSES" : "FULLSCREEN · TAP TO EXIT").hudLabel()
                 Spacer()
                 HStack(spacing: 6) {
                     Circle()
@@ -315,25 +312,8 @@ public struct SettingsArea: View {
                 }
             }
 
-            HStack {
-                Text("TABS").hudLabel()
-                Spacer()
-                Button { action(.fullscreen) } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: fullscreen
-                              ? "arrow.down.right.and.arrow.up.left"
-                              : "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 12, weight: .bold))
-                        Text(fullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN")
-                            .font(HudTheme.mont(9, .black)).tracking(1.5)
-                    }
-                    .foregroundStyle(fullscreen ? HudTheme.accent : HudTheme.inkDim)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.top, 4)
+            Text("TABS").hudLabel()
+                .padding(.top, 10)
 
             tabStrip
         }
@@ -404,14 +384,13 @@ public struct SettingsArea: View {
         }
     }
 
-    /// Tap to put a panel on the glasses or take it off. Hold to show it alone, filling the
-    /// glasses; while one is alone, a tap on another swaps it in and a tap on the same one puts
-    /// the set back.
+    /// Tap to put a panel on the glasses or take it off. Hold to show it fullscreen, alone on
+    /// the glasses; then any tap puts things back as they were.
     private func tile(_ kind: HudPanelKind) -> some View {
         let alone = solo == kind
         let on = solo == nil ? visible.contains(kind) : alone
         return VStack(spacing: 8) {
-            Image(systemName: alone ? "arrow.up.left.and.arrow.down.right" : kind.symbol)
+            Image(systemName: kind.symbol)
                 .font(.system(size: 22, weight: .medium))
             Text(kind.rawValue.uppercased())
                 .font(HudTheme.mont(9, .black))
@@ -429,8 +408,13 @@ public struct SettingsArea: View {
             if alone { Rectangle().strokeBorder(HudTheme.accent.opacity(0.6), lineWidth: 1) }
         }
         .contentShape(Rectangle())
-        .onTapGesture { action(.toggle(kind)) }
-        .onLongPressGesture(minimumDuration: 0.4) { action(.solo(kind)) }
+        // One gesture, the hold tried first: a tap only counts once the finger lifts before
+        // the hold completes, so a hold never also toggles the tile.
+        .gesture(
+            LongPressGesture(minimumDuration: 0.4)
+                .onEnded { _ in action(.solo(kind)) }
+                .exclusively(before: TapGesture().onEnded { action(.toggle(kind)) })
+        )
         .sensoryFeedback(.impact(weight: .medium), trigger: alone)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Hold to show it alone")
