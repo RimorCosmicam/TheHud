@@ -295,7 +295,10 @@ public struct SettingsArea: View {
     public var action: (PhoneAction) -> Void
 
     @State private var drag: (kind: HudPanelKind, location: CGPoint)?
+    /// Where the miniature is, and where this whole area is, both on screen: a drag and its
+    /// drop are measured in the same global points.
     @State private var miniFrame: CGRect = .zero
+    @State private var areaOrigin: CGPoint = .zero
 
     public init(arrangement: HudArrangement = .standard,
                 solo: HudPanelKind? = nil,
@@ -330,18 +333,13 @@ public struct SettingsArea: View {
         shown(.mac) && (!shown(.browser) || showsWindows)
     }
 
-    private static let space = "glassesEditor"
-
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
 
             miniature
                 .frame(height: editing ? 210 : 104)
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: MiniFrameKey.self,
-                                           value: geometry.frame(in: .named(Self.space)))
-                })
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { miniFrame = $0 }
 
             if editing {
                 tray
@@ -354,13 +352,12 @@ public struct SettingsArea: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, maxHeight: editing ? .infinity : nil, alignment: .top)
         .background(.black)
-        .coordinateSpace(name: Self.space)
-        .onPreferenceChange(MiniFrameKey.self) { miniFrame = $0 }
+        .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: { areaOrigin = $0 }
         .overlay(alignment: .topLeading) {
             if let drag {
                 MiniChip(kind: drag.kind, state: .lifted)
                     .frame(width: 92, height: 40)
-                    .position(drag.location)
+                    .position(x: drag.location.x - areaOrigin.x, y: drag.location.y - areaOrigin.y)
                     .allowsHitTesting(false)
             }
         }
@@ -523,7 +520,7 @@ public struct SettingsArea: View {
     }
 
     private func dragGesture(_ kind: HudPanelKind) -> some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .named(Self.space))
+        DragGesture(minimumDistance: 2, coordinateSpace: .global)
             .onChanged { value in drag = (kind, value.location) }
             .onEnded { value in
                 drop(kind, at: value.location)
@@ -711,11 +708,6 @@ public struct SettingsArea: View {
         }
     }
 
-}
-
-private struct MiniFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
 /// One panel in the miniature or the tray: its icon and name.
