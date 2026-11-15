@@ -192,17 +192,13 @@ struct Hudshot {
         try write(GlassesScreen(snapshot: tube, arrangement: fullGrid, solo: .youtube),
                   to: outDir, "glasses-youtube-browse", scale: 1)
         tube.youtube.page = .player
-        tube.cursor = CGPoint(x: HudTheme.safeInset + YouTubeAppLayout.sideFrame(2).midX,
-                              y: HudTheme.safeInset + YouTubeAppLayout.sideFrame(2).midY)
+        tube.cursor = nil
         try write(GlassesScreen(snapshot: tube, arrangement: fullGrid, solo: .youtube),
                   to: outDir, "glasses-youtube-player", scale: 1)
-        var advert = tube
-        advert.youtube.isAd = true
-        advert.youtube.canSkipAd = true
-        advert.youtube.queue = []
-        advert.cursor = nil
-        try write(GlassesScreen(snapshot: advert, arrangement: fullGrid, solo: .youtube),
-                  to: outDir, "glasses-youtube-ad", scale: 1)
+        var paused = tube
+        paused.youtube.isPlaying = false
+        try write(GlassesScreen(snapshot: paused, arrangement: fullGrid, solo: .youtube),
+                  to: outDir, "glasses-youtube-paused", scale: 1)
         var tubeGrid = fullGrid
         tubeGrid.place(.youtube, at: .slot(.right, 0))
         tube.cursor = nil

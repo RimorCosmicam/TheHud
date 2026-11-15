@@ -9,19 +9,13 @@ import SwiftUI
 /// Where everything sits in the app held up alone, in the safe frame's points (1792 by 952),
 /// so clicks can be worked out from the cursor.
 public enum YouTubeAppLayout {
-    public enum Control: CaseIterable, Sendable { case back5, playPause, forward5, next }
-
     public enum Target: Equatable, Sendable {
         case tab(HudSnapshot.YouTube.Tab)
         case nowPlaying
         /// A card in the browse grid, by its index in the tab's list.
         case card(Int)
-        case back
+        /// Watching: the video is the whole canvas, and a click pauses it.
         case video
-        case control(Control)
-        case skipAd
-        /// A row in the player's side column, by its index in `sideList`.
-        case side(Int)
     }
 
     public static let size = CGSize(width: 1792, height: 952)
@@ -64,30 +58,6 @@ public enum YouTubeAppLayout {
                       width: cardWidth, height: cardHeight)
     }
 
-    // Player.
-    public static let backButton = CGRect(x: 72, y: 40, width: 220, height: 60)
-    public static let video = CGRect(x: 72, y: 124, width: 1120, height: 630)
-    public static let skipAd = CGRect(x: 952, y: 664, width: 220, height: 70)
-    static let progress = CGRect(x: 72, y: 778, width: 1120, height: 8)
-    static let titleFrame = CGRect(x: 72, y: 832, width: 720, height: 96)
-    public static let sideX: CGFloat = 1232
-    static let sideWidth: CGFloat = 488
-    static let sideY: CGFloat = 124
-    static let sideRow: CGFloat = 96
-    static let sideStride: CGFloat = 112
-    public static let sideRows = 7
-
-    public static func controlFrame(_ control: Control) -> CGRect {
-        let index = CGFloat(Control.allCases.firstIndex(of: control) ?? 0)
-        let side: CGFloat = 84, gap: CGFloat = 14
-        let x0 = video.maxX - (side * 4 + gap * 3)
-        return CGRect(x: x0 + index * (side + gap), y: 836, width: side, height: side)
-    }
-
-    public static func sideFrame(_ index: Int) -> CGRect {
-        CGRect(x: sideX, y: sideY + CGFloat(index) * sideStride, width: sideWidth, height: sideRow)
-    }
-
     public static func target(at point: CGPoint, _ youtube: HudSnapshot.YouTube) -> Target? {
         switch youtube.page {
         case .browse:
@@ -102,15 +72,7 @@ public enum YouTubeAppLayout {
             }
             return nil
         case .player:
-            if backButton.contains(point) { return .back }
-            if youtube.canSkipAd, skipAd.contains(point) { return .skipAd }
-            if video.contains(point) { return .video }
-            for control in Control.allCases where controlFrame(control).contains(point) {
-                return .control(control)
-            }
-            let count = min(youtube.sideList.count, sideRows)
-            for index in 0..<count where sideFrame(index).contains(point) { return .side(index) }
-            return nil
+            return .video
         }
     }
 
@@ -198,8 +160,8 @@ struct PlayerFrame: View {
 
 // MARK: - The app
 
-/// Held up alone: lists to pick from in our own cards, or the video with its controls and
-/// what comes next.
+/// Held up alone, not watching: lists to pick from, in our own cards. Watching is
+/// `YouTubeFullscreen`, the video and nothing else.
 public struct YouTubeApp: View {
     public var youtube: HudSnapshot.YouTube
     public var content: AnyView?
@@ -220,10 +182,7 @@ public struct YouTubeApp: View {
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
-            switch youtube.page {
-            case .browse: browse
-            case .player: player
-            }
+            browse
         }
         .frame(width: YouTubeAppLayout.size.width, height: YouTubeAppLayout.size.height,
                alignment: .topLeading)
@@ -303,85 +262,54 @@ public struct YouTubeApp: View {
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    // ------------------------------------------------------------------ player
+}
 
-    @ViewBuilder
-    private var player: some View {
-        Chip(text: "BROWSE", symbol: "chevron.left", selected: false, hovered: target == .back)
-            .at(YouTubeAppLayout.backButton)
+// MARK: - Watching
 
-        ZStack(alignment: .topLeading) {
+/// The video over the whole canvas, edge to edge. The phone has the controls; the glasses only
+/// say what this is, and how far along, while it is paused.
+public struct YouTubeFullscreen: View {
+    public var youtube: HudSnapshot.YouTube
+    public var content: AnyView?
+    public var standIn: Bool
+
+    public init(_ youtube: HudSnapshot.YouTube, content: AnyView?, standIn: Bool = false) {
+        self.youtube = youtube
+        self.content = content
+        self.standIn = standIn
+    }
+
+    public var body: some View {
+        ZStack(alignment: .bottomLeading) {
             Color.black
-            if youtube.hasVideo {
-                PlayerFrame(content: content, standIn: standIn)
-            } else {
-                Text("Pick something to watch").font(HudTheme.mont(30, .semibold))
-                    .foregroundStyle(HudTheme.inkFaint)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            if youtube.isAd || youtube.isLive {
-                Text(youtube.isAd ? "AD" : "LIVE").font(HudTheme.mont(18, .black)).tracking(3)
-                    .foregroundStyle(.black).padding(.horizontal, 14).frame(height: 36)
-                    .background(youtube.isAd ? HudTheme.accent : Color(red: 0.9, green: 0.2, blue: 0.2), in: Capsule())
-                    .padding(22)
-            }
+            PlayerFrame(content: content, standIn: standIn)
             if !youtube.notice.isEmpty {
-                Text(youtube.notice).font(HudTheme.mont(26, .semibold)).foregroundStyle(HudTheme.inkDim)
-                    .multilineTextAlignment(.center).padding(60)
+                Text(youtube.notice).font(HudTheme.mont(30, .semibold)).foregroundStyle(HudTheme.inkDim)
+                    .multilineTextAlignment(.center).padding(120)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if youtube.hasVideo && !youtube.isPlaying {
-                Image(systemName: "pause.fill").font(.system(size: 90, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if youtube.hasVideo && !youtube.isPlaying && !youtube.isAd {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(youtube.channel.uppercased()).font(HudTheme.mont(20, .black)).tracking(4)
+                        .foregroundStyle(HudTheme.accent).lineLimit(1)
+                    Text(youtube.title).font(HudTheme.mont(52, .black)).foregroundStyle(HudTheme.ink)
+                        .lineLimit(2)
+                    if !youtube.isLive {
+                        HStack(spacing: 20) {
+                            Text(HudSnapshot.NowPlaying.time(youtube.elapsed))
+                            ProgressLine(progress: youtube.progress).frame(height: 8)
+                            Text("\u{2212}" + HudSnapshot.NowPlaying.time(max(youtube.duration - youtube.elapsed, 0)))
+                        }
+                        .font(HudTheme.mont(24, .black)).monospacedDigit().foregroundStyle(HudTheme.inkDim)
+                        .padding(.top, 8)
+                    }
+                }
+                .padding(.horizontal, 120).padding(.top, 200).padding(.bottom, 90)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(LinearGradient(colors: [.black.opacity(0), .black.opacity(0.9)],
+                                           startPoint: .top, endPoint: .bottom))
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .at(YouTubeAppLayout.video)
-
-        if youtube.canSkipAd {
-            Chip(text: "SKIP AD", symbol: "forward.end.fill", selected: true, hovered: target == .skipAd)
-                .at(YouTubeAppLayout.skipAd)
-        }
-
-        if youtube.hasVideo && !youtube.isLive {
-            ProgressLine(progress: youtube.progress).at(YouTubeAppLayout.progress)
-            HStack {
-                Text(HudSnapshot.NowPlaying.time(youtube.elapsed))
-                Spacer()
-                Text("\u{2212}" + HudSnapshot.NowPlaying.time(max(youtube.duration - youtube.elapsed, 0)))
-            }
-            .font(HudTheme.mont(20, .black)).monospacedDigit().foregroundStyle(HudTheme.inkDim)
-            .at(CGRect(x: 72, y: 794, width: 1120, height: 28))
-        }
-
-        VStack(alignment: .leading, spacing: 6) {
-            Text(youtube.hasVideo ? youtube.title : "").font(HudTheme.mont(32, .black))
-                .foregroundStyle(HudTheme.ink).lineLimit(2)
-            Text(youtube.channel).font(HudTheme.mont(22, .semibold)).foregroundStyle(HudTheme.inkDim)
-                .lineLimit(1)
-        }
-        .at(YouTubeAppLayout.titleFrame)
-
-        ForEach(YouTubeAppLayout.Control.allCases, id: \.self) { control in
-            ControlButton(control: control, isPlaying: youtube.isPlaying,
-                          hovered: target == .control(control))
-                .at(YouTubeAppLayout.controlFrame(control))
-        }
-
-        let side = youtube.sideList
-        HStack(spacing: 12) {
-            WidgetLabel(text: youtube.queue.isEmpty ? "UP NEXT" : "QUEUE \u{00B7} \(youtube.queue.count)",
-                        accent: !youtube.queue.isEmpty)
-            if !youtube.queue.isEmpty && side.count > youtube.queue.count {
-                WidgetLabel(text: "THEN UP NEXT")
-            }
-        }
-        .at(CGRect(x: YouTubeAppLayout.sideX, y: 66, width: 488, height: 30))
-        ForEach(0..<min(side.count, YouTubeAppLayout.sideRows), id: \.self) { index in
-            SideRow(video: side[index], queued: index < youtube.queue.count,
-                    hovered: target == .side(index))
-                .at(YouTubeAppLayout.sideFrame(index))
-        }
+        .frame(width: HudTheme.glassesSize.width, height: HudTheme.glassesSize.height)
     }
 }
 
@@ -401,29 +329,6 @@ private struct Chip: View {
         .foregroundStyle(selected ? Color.black : HudTheme.ink)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(selected ? HudTheme.accent : Color.white.opacity(hovered ? 0.2 : 0.08), in: Capsule())
-    }
-}
-
-private struct ControlButton: View {
-    var control: YouTubeAppLayout.Control
-    var isPlaying: Bool
-    var hovered: Bool
-
-    var body: some View {
-        let symbol: String = switch control {
-        case .back5: "gobackward.5"
-        case .playPause: isPlaying ? "pause.fill" : "play.fill"
-        case .forward5: "goforward.5"
-        case .next: "forward.end.fill"
-        }
-        let lit = control == .playPause
-        return Image(systemName: symbol)
-            .font(.system(size: 34, weight: .bold))
-            .foregroundStyle(lit ? Color.black : HudTheme.ink)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(lit ? HudTheme.accent : Color.white.opacity(hovered ? 0.2 : 0.08),
-                        in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .opacity(hovered && lit ? 0.85 : 1)
     }
 }
 
@@ -482,27 +387,6 @@ private struct VideoCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .scaleEffect(hovered ? 1.02 : 1, anchor: .center)
-    }
-}
-
-private struct SideRow: View {
-    var video: YouTubeVideo
-    var queued: Bool
-    var hovered: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Thumbnail(video: video, corner: 12, badge: 14).frame(width: 170, height: 96)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(video.title).font(HudTheme.mont(19, .black)).foregroundStyle(HudTheme.ink).lineLimit(2)
-                Text(video.channel).font(HudTheme.mont(15, .semibold))
-                    .foregroundStyle(queued ? HudTheme.accent : HudTheme.inkDim).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(hovered ? 0 : 0)
-        .background(Color.white.opacity(hovered ? 0.14 : 0.0001),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 

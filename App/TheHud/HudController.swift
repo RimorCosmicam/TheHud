@@ -1038,8 +1038,16 @@ final class HudController: ObservableObject {
 
     // ------------------------------------------------------------------ YouTube
 
+    /// The video over the whole canvas.
+    private var watchingYouTube: Bool {
+        solo == .youtube && !clearView && snapshot.youtube.page == .player
+    }
+
     private func youtubeAction(_ action: YouTubeAction) {
         switch action {
+        case let .page(page):
+            snapshot.youtube.page = page
+            if page == .player { scheduleCursorHide() }
         case .togglePlay:
             if snapshot.youtube.hasVideo { youtubePlayer.togglePlay() } else { playNextVideo() }
         case .next: playNextVideo()
@@ -1072,6 +1080,7 @@ final class HudController: ObservableObject {
         youtube.queue.removeAll { $0.id == video.id }
         // Picked while the app is up: watch it.
         if solo == .youtube { youtube.page = .player }
+        defer { if watchingYouTube { scheduleCursorHide() } }
         snapshot.youtube = youtube
         youtubePlayer.play(video.id)
         loadUpNext(for: video.id)
@@ -1194,24 +1203,7 @@ final class HudController: ObservableObject {
         case let .card(index):
             let list = snapshot.youtube.list(snapshot.youtube.tab)
             if list.indices.contains(index) { playVideo(list[index]) }
-        case .back: snapshot.youtube.page = .browse
         case .video: youtubePlayer.togglePlay()
-        case let .control(control):
-            switch control {
-            case .back5: youtubePlayer.seek(by: -5)
-            case .playPause: youtubeAction(.togglePlay)
-            case .forward5: youtubePlayer.seek(by: 5)
-            case .next: playNextVideo()
-            }
-        case .skipAd: youtubePlayer.skipAd()
-        case let .side(index):
-            let queued = snapshot.youtube.queue.count
-            if index < queued {
-                youtubeAction(.playQueued(index))
-            } else {
-                let side = snapshot.youtube.sideList
-                if side.indices.contains(index) { playVideo(side[index]) }
-            }
         case nil: break
         }
     }
@@ -1620,6 +1612,10 @@ final class HudController: ObservableObject {
             momentum.stop()
             pointerMoved()
         case .tapClick: click()
+        case .rightClick where watchingYouTube:
+            // Out of the video, back to the lists; it plays on in the corner.
+            snapshot.youtube.page = .browse
+            scheduleCursorHide()
         case .rightClick where solo == .sky && !clearView:
             // The sky's wheel zooms; the other button puts the view back.
             snapshot.skyView.recentre()
@@ -1682,13 +1678,13 @@ final class HudController: ObservableObject {
     /// it sits over whatever the wearer is looking at, out in the street.
     private func scheduleCursorHide() {
         cursorHideTimer?.invalidate()
-        let fullscreen = snapshot.browser.isFullscreen
+        let fullscreen = snapshot.browser.isFullscreen || watchingYouTube
         cursorHideTimer = Timer.scheduledTimer(withTimeInterval: fullscreen ? 2.5 : 60,
                                                repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if fullscreen {
-                    if self.snapshot.browser.isFullscreen { self.snapshot.cursor = nil }
+                    if self.snapshot.browser.isFullscreen || self.watchingYouTube { self.snapshot.cursor = nil }
                 } else {
                     self.putCursorAway()
                 }

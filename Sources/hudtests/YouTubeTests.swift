@@ -79,18 +79,11 @@ func runYouTubeTests() {
         expectEqual(YouTubeAppLayout.maxRow(3), 0)
     }
 
-    test("the player page: controls, skip only during a skippable ad, queue before Up next") {
+    test("watching: the whole video is one button") {
         var youtube = HudSnapshot.YouTube.preview
         youtube.page = .player
-        let skip = YouTubeAppLayout.skipAd
-        expectEqual(YouTubeAppLayout.target(at: CGPoint(x: skip.midX, y: skip.midY), youtube), .video)
-        youtube.canSkipAd = true
-        expectEqual(YouTubeAppLayout.target(at: CGPoint(x: skip.midX, y: skip.midY), youtube), .skipAd)
-        let plus = YouTubeAppLayout.controlFrame(.forward5)
-        expectEqual(YouTubeAppLayout.target(at: CGPoint(x: plus.midX, y: plus.midY), youtube), .control(.forward5))
+        expectEqual(YouTubeAppLayout.target(at: CGPoint(x: 10, y: 10), youtube), .video)
+        expectEqual(YouTubeAppLayout.target(at: CGPoint(x: 1700, y: 900), youtube), .video)
         expectEqual(Array(youtube.sideList.prefix(2)), youtube.queue)
-        let frames = YouTubeAppLayout.Control.allCases.map(YouTubeAppLayout.controlFrame)
-        for (i, a) in frames.enumerated() { for b in frames[(i + 1)...] { expect(!a.intersects(b), "apart") } }
-        expectLess(YouTubeAppLayout.sideFrame(YouTubeAppLayout.sideRows - 1).maxY, YouTubeAppLayout.size.height)
     }
 }

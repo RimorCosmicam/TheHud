@@ -78,6 +78,9 @@ public struct GlassesScreen: View {
                     // Maps lays its controls out on the whole canvas itself.
                     MapsApp(minimap: snapshot.minimap, maps: snapshot.maps, ground: mapGround,
                             proceduralGround: placeholders, cursor: snapshot.cursor)
+                } else if solo == .youtube && snapshot.youtube.page == .player {
+                    // Watching: the video is the canvas.
+                    YouTubeFullscreen(snapshot.youtube, content: youtubeContent, standIn: placeholders)
                 } else if solo == .sky {
                     // The sky is the whole canvas, edge to edge.
                     SkyApp(snapshot.sky, overhead: snapshot.overhead, view: snapshot.skyView,

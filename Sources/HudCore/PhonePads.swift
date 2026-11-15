@@ -64,6 +64,8 @@ public enum YouTubeAction: Sendable, Equatable {
     case playQueued(Int)
     case enqueue(YouTubeVideo)
     case dequeue(Int)
+    /// On the glasses: the lists, or the video over everything.
+    case page(HudSnapshot.YouTube.Page)
 }
 
 public enum NoteAction: Sendable {
@@ -823,7 +825,23 @@ public struct YouTubeControls: View {
                 }
             }
             .frame(height: 58)
-            searchField
+            HStack(spacing: 8) {
+                searchField
+                if youtube.hasVideo {
+                    let watching = youtube.page == .player
+                    Button { action(.youtube(.page(watching ? .browse : .player))) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: watching ? "square.grid.2x2" : "play.rectangle.fill")
+                                .font(.system(size: 13, weight: .bold))
+                            Text(watching ? "BROWSE" : "WATCH").font(HudTheme.mont(10, .black)).tracking(1.4)
+                        }
+                        .foregroundStyle(watching ? HudTheme.ink : Color.black)
+                        .padding(.horizontal, 14).frame(height: 40)
+                        .background(watching ? Color(white: 0.14) : HudTheme.accent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             HStack(spacing: 6) {
                 ForEach(lists, id: \.self) { choice in
                     Button { picked = choice } label: {
