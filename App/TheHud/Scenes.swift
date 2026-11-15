@@ -83,6 +83,7 @@ struct GlassesHost: View {
                           clearView: controller.clearView,
                           browserContent: AnyView(WebBrowserView(controller.browser)),
                           desktopContent: AnyView(DesktopVideoView(layer: controller.desktopLink.displayLayer)),
+                          youtubeContent: AnyView(YouTubePlayerView(controller.youtubePlayer)),
                           mapGround: controller.mapGround,
                           artwork: controller.artwork,
                           placeholders: false,

@@ -5,7 +5,7 @@ import CoreGraphics
 /// the slots either side of it.
 public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable {
     case browser, mac
-    case clock, weather, map, activity, sky, music, note, captions
+    case clock, weather, map, activity, sky, music, note, captions, youtube
 
     public var id: String { rawValue }
 
@@ -15,7 +15,7 @@ public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable 
 
     public static let bigs: [HudPanelKind] = [.browser, .mac]
     public static let widgets: [HudPanelKind] = [.clock, .weather, .map, .activity, .sky,
-                                                 .music, .note, .captions]
+                                                 .music, .note, .captions, .youtube]
 
     public var symbol: String {
         switch self {
@@ -29,6 +29,7 @@ public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable 
         case .music: return "music.note"
         case .note: return "note.text"
         case .captions: return "captions.bubble"
+        case .youtube: return "play.rectangle"
         }
     }
 

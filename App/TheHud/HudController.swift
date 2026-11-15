@@ -103,7 +103,7 @@ final class HudController: ObservableObject {
     @Published var cornerPressed = false
 
     /// Where keystrokes go while the keyboard is up.
-    enum KeyboardTarget { case address, page, mapSearch, mac, note }
+    enum KeyboardTarget { case address, page, mapSearch, mac, note, youtubeSearch }
     @Published private(set) var keyboardTarget: KeyboardTarget?
     /// The invisible text field's contents. For the address bar it is the draft itself; for the
     /// page it is a proxy that is diffed into insertions and deletions.
@@ -136,6 +136,24 @@ final class HudController: ObservableObject {
     private let music = MusicProvider()
     private let activityProvider = ActivityProvider()
     let captions = CaptionsEngine()
+    /// YouTube's player, a web view of its own on the browser's sign-in.
+    let youtubePlayer = YouTubePlayer()
+    /// Off unless asked for: the Subscriptions list.
+    @Published var youtubeSubscriptions = UserDefaults.standard.bool(forKey: "youtubeSubscriptions") {
+        didSet {
+            UserDefaults.standard.set(youtubeSubscriptions, forKey: "youtubeSubscriptions")
+            snapshot.youtube.showsSubscriptions = youtubeSubscriptions
+            if youtubeSubscriptions {
+                loadYouTube(.subscriptions)
+            } else if snapshot.youtube.tab == .subscriptions {
+                snapshot.youtube.tab = .home
+            }
+        }
+    }
+    private var youtubeLoaded: [HudSnapshot.YouTube.Tab: Date] = [:]
+    private var youtubeSearchDebounce: Timer?
+    /// Scroll ticks not yet a whole row, or a whole five seconds.
+    private var youtubeScroll = 0
     /// The Music app's artwork for what is playing.
     @Published private(set) var artwork: Image?
     /// The activity ring's target.
@@ -333,6 +351,8 @@ final class HudController: ObservableObject {
         activityProvider.goal = stepGoal
         activityProvider.onChange = { [weak self] activity in self?.snapshot.activity = activity }
         captions.onChange = { [weak self] captions in self?.snapshot.captions = captions }
+        snapshot.youtube.showsSubscriptions = youtubeSubscriptions
+        youtubePlayer.onChange = { [weak self] state in self?.youtubeChanged(state) }
         panelsChanged()
 
         browser.goHome()
@@ -455,6 +475,7 @@ final class HudController: ObservableObject {
         case .mapSearch: if !mapFillsCanvas { endTyping() }
         case .mac: if !isOnGlasses(.mac) { endTyping() }
         case .note: if !isOnGlasses(.note) { endTyping() }
+        case .youtubeSearch: if !isOnGlasses(.youtube) { endTyping() }
         case nil: break
         }
     }
@@ -695,6 +716,8 @@ final class HudController: ObservableObject {
             showingCaptionSessions = true
         case let .captionsLanguage(id):
             captionsLanguage = id
+        case let .youtube(action):
+            youtubeAction(action)
         case let .note(action):
             switch action {
             case .write:
@@ -956,6 +979,8 @@ final class HudController: ObservableObject {
             case .next: music.next()
             case nil: break
             }
+        case .youtube:
+            youtubeClick(at: point, alone: alone)
         case .clock where alone:
             if ClockAppLayout.timerCard.contains(point) {
                 timer.toggle(at: Date())
@@ -990,6 +1015,9 @@ final class HudController: ObservableObject {
                 timerChanged()
             }
             return
+        case let .widget(.youtube, p, _):
+            youtubeScrolled(ticks, at: p, alone: solo == .youtube)
+            return
         case .widget(.note, _, _) where solo == .note:
             snapshot.note.scroll = max(snapshot.note.scroll + CGFloat(ticks) * 40, 0)
             return
@@ -1006,6 +1034,203 @@ final class HudController: ObservableObject {
             point = CGPoint(x: content.width / 2, y: content.height / 2)
         }
         browser.scroll(ticks: ticks, at: point)
+    }
+
+    // ------------------------------------------------------------------ YouTube
+
+    private func youtubeAction(_ action: YouTubeAction) {
+        switch action {
+        case .togglePlay:
+            if snapshot.youtube.hasVideo { youtubePlayer.togglePlay() } else { playNextVideo() }
+        case .next: playNextVideo()
+        case .skipAd: youtubePlayer.skipAd()
+        case let .seek(seconds): youtubePlayer.seek(by: seconds)
+        case .search:
+            keyboardTarget == .youtubeSearch ? endTyping() : beginYouTubeSearch()
+        case let .play(video): playVideo(video)
+        case let .playQueued(index):
+            guard snapshot.youtube.queue.indices.contains(index) else { return }
+            playVideo(snapshot.youtube.queue.remove(at: index))
+        case let .enqueue(video):
+            if !snapshot.youtube.queue.contains(video) { snapshot.youtube.queue.append(video) }
+        case let .dequeue(index):
+            if snapshot.youtube.queue.indices.contains(index) { snapshot.youtube.queue.remove(at: index) }
+        }
+    }
+
+    private func playVideo(_ video: YouTubeVideo) {
+        var youtube = snapshot.youtube
+        youtube.hasVideo = true
+        youtube.videoId = video.id
+        youtube.title = video.title
+        youtube.channel = video.channel
+        youtube.isLive = video.isLive
+        youtube.elapsed = 0
+        youtube.duration = 0
+        youtube.isPlaying = false
+        youtube.upNext = []
+        youtube.queue.removeAll { $0.id == video.id }
+        // Picked while the app is up: watch it.
+        if solo == .youtube { youtube.page = .player }
+        snapshot.youtube = youtube
+        youtubePlayer.play(video.id)
+        loadUpNext(for: video.id)
+    }
+
+    /// The queue first, then whatever YouTube would play next.
+    private func playNextVideo() {
+        if !snapshot.youtube.queue.isEmpty {
+            playVideo(snapshot.youtube.queue.removeFirst())
+        } else if let next = snapshot.youtube.upNext.first(where: { $0.id != snapshot.youtube.videoId }) {
+            playVideo(next)
+        } else if let first = snapshot.youtube.home.first, !snapshot.youtube.hasVideo {
+            playVideo(first)
+        }
+    }
+
+    private func youtubeChanged(_ state: YouTubePlayer.State) {
+        var youtube = snapshot.youtube
+        let wasEnded = youtube.hasVideo && !youtube.isPlaying && youtube.duration > 0
+            && youtube.elapsed >= youtube.duration - 0.5
+        let movedOn = !state.videoId.isEmpty && state.videoId != youtube.videoId
+        youtube.hasVideo = state.hasVideo
+        youtube.videoId = state.videoId
+        if !state.title.isEmpty { youtube.title = state.title }
+        if !state.channel.isEmpty { youtube.channel = state.channel }
+        youtube.isPlaying = state.isPlaying
+        youtube.isAd = state.isAd
+        youtube.canSkipAd = state.canSkipAd
+        if !state.isAd {
+            youtube.elapsed = state.elapsed
+            youtube.duration = state.duration
+            if state.duration > 0 { youtube.isLive = false }
+        }
+        snapshot.youtube = youtube
+        if movedOn { loadUpNext(for: state.videoId) }
+        // Finished: on to the queue, or Up next. Once, not every second it stays ended.
+        if state.ended, !state.isAd, !wasEnded { playNextVideo() }
+    }
+
+    private func loadUpNext(for id: String) {
+        guard let url = URL(string: "https://www.youtube.com/watch?v=\(id)") else { return }
+        Task {
+            let videos = await YouTubePlayer.videos(at: url) ?? []
+            guard snapshot.youtube.videoId == id else { return }
+            snapshot.youtube.upNext = videos.filter { $0.id != id }
+            // The page's own title and channel are better than nothing while the player loads.
+            if let this = videos.first(where: { $0.id == id }), snapshot.youtube.channel.isEmpty {
+                snapshot.youtube.channel = this.channel
+            }
+        }
+    }
+
+    /// Home and Subscriptions, fetched when the app comes up and again after a while.
+    private func loadYouTube(_ tab: HudSnapshot.YouTube.Tab, force: Bool = false) {
+        let url: URL
+        switch tab {
+        case .home: url = YouTubePlayer.homeURL
+        case .subscriptions: url = YouTubePlayer.subscriptionsURL
+        case .search: return searchYouTube()
+        }
+        if !force, let last = youtubeLoaded[tab], Date().timeIntervalSince(last) < 15 * 60 { return }
+        youtubeLoaded[tab] = Date()
+        snapshot.youtube.loading = true
+        Task {
+            let videos = await YouTubePlayer.videos(at: url)
+            snapshot.youtube.loading = false
+            guard let videos else {
+                youtubeLoaded[tab] = nil
+                snapshot.youtube.problem = "Couldn\u{2019}t reach YouTube"
+                return
+            }
+            snapshot.youtube.problem = ""
+            switch tab {
+            case .home: snapshot.youtube.home = videos
+            case .subscriptions: snapshot.youtube.subscriptions = videos
+            case .search: break
+            }
+        }
+    }
+
+    private func searchYouTube() {
+        let query = snapshot.youtube.query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty, let url = YouTubePlayer.searchURL(query) else {
+            snapshot.youtube.results = []
+            return
+        }
+        snapshot.youtube.loading = true
+        if snapshot.youtube.page == .browse {
+            snapshot.youtube.tab = .search
+            snapshot.youtube.scrollRow = 0
+        }
+        Task {
+            let videos = await YouTubePlayer.videos(at: url)
+            // Typing went on while this was out: a newer search will answer.
+            guard snapshot.youtube.query.trimmingCharacters(in: .whitespaces) == query else { return }
+            snapshot.youtube.loading = false
+            snapshot.youtube.problem = videos == nil ? "Couldn\u{2019}t reach YouTube" : ""
+            snapshot.youtube.results = videos ?? []
+            if snapshot.youtube.tab == .search { snapshot.youtube.scrollRow = 0 }
+        }
+    }
+
+    private func youtubeClick(at point: CGPoint, alone: Bool) {
+        guard alone else {
+            // In a slot: the video is the button.
+            if snapshot.youtube.hasVideo { youtubePlayer.togglePlay() }
+            return
+        }
+        switch YouTubeAppLayout.target(at: point, snapshot.youtube) {
+        case let .tab(tab):
+            snapshot.youtube.tab = tab
+            snapshot.youtube.scrollRow = 0
+            if tab == .search, snapshot.youtube.query.isEmpty {
+                beginYouTubeSearch()
+            } else if tab != .search {
+                loadYouTube(tab)
+            }
+        case .nowPlaying: snapshot.youtube.page = .player
+        case let .card(index):
+            let list = snapshot.youtube.list(snapshot.youtube.tab)
+            if list.indices.contains(index) { playVideo(list[index]) }
+        case .back: snapshot.youtube.page = .browse
+        case .video: youtubePlayer.togglePlay()
+        case let .control(control):
+            switch control {
+            case .back5: youtubePlayer.seek(by: -5)
+            case .playPause: youtubeAction(.togglePlay)
+            case .forward5: youtubePlayer.seek(by: 5)
+            case .next: playNextVideo()
+            }
+        case .skipAd: youtubePlayer.skipAd()
+        case let .side(index):
+            let queued = snapshot.youtube.queue.count
+            if index < queued {
+                youtubeAction(.playQueued(index))
+            } else {
+                let side = snapshot.youtube.sideList
+                if side.indices.contains(index) { playVideo(side[index]) }
+            }
+        case nil: break
+        }
+    }
+
+    /// Browsing, the wheel moves the grid a row at a time; over the video, it scrubs by five
+    /// seconds.
+    private func youtubeScrolled(_ ticks: Int, at point: CGPoint, alone: Bool) {
+        youtubeScroll += ticks
+        let step = 3
+        guard abs(youtubeScroll) >= step else { return }
+        let notches = youtubeScroll / step
+        youtubeScroll -= notches * step
+        if alone, snapshot.youtube.page == .browse {
+            let count = snapshot.youtube.list(snapshot.youtube.tab).count
+            snapshot.youtube.scrollRow = min(max(snapshot.youtube.scrollRow + notches, 0),
+                                             YouTubeAppLayout.maxRow(count))
+        } else if snapshot.youtube.hasVideo, !snapshot.youtube.isLive {
+            // Down the page is on in the video.
+            youtubePlayer.seek(by: Double(notches) * 5)
+        }
     }
 
     // ------------------------------------------------------------------ keyboard
@@ -1047,7 +1272,15 @@ final class HudController: ObservableObject {
         snapshot.note.isEditing = true
     }
 
+    func beginYouTubeSearch() {
+        if keyboardTarget == .address { snapshot.browser.isEditingAddress = false }
+        keyboardTarget = .youtubeSearch
+        draft = snapshot.youtube.query
+        snapshot.youtube.isEditingQuery = true
+    }
+
     func endTyping() {
+        if keyboardTarget == .youtubeSearch { snapshot.youtube.isEditingQuery = false }
         if keyboardTarget == .mapSearch { snapshot.maps.isEditing = false }
         if keyboardTarget == .note {
             snapshot.note.isEditing = false
@@ -1070,6 +1303,14 @@ final class HudController: ObservableObject {
         case .note:
             draft = new
             snapshot.note.text = new
+        case .youtubeSearch:
+            draft = new
+            snapshot.youtube.query = new
+            // Results as you type, once the typing pauses; the video plays on.
+            youtubeSearchDebounce?.invalidate()
+            youtubeSearchDebounce = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { _ in
+                MainActor.assumeIsolated { self.searchYouTube() }
+            }
         case .mapSearch:
             draft = new
             snapshot.maps.query = new
@@ -1124,6 +1365,10 @@ final class HudController: ObservableObject {
             browser.submit()
             endTyping()
         case .note:
+            endTyping()
+        case .youtubeSearch:
+            youtubeSearchDebounce?.invalidate()
+            searchYouTube()
             endTyping()
         case .mac:
             // Return on a Mac is a line, not the end of typing: the keyboard stays up.
@@ -1247,6 +1492,14 @@ final class HudController: ObservableObject {
         // Hidden or cleared away, captions keep listening (the phone shows a red dot); taken
         // off the glasses, they stop.
         if captions.state.isListening && !placed(.captions) { captions.stop() }
+        if placed(.youtube) {
+            loadYouTube(.home)
+            if youtubeSubscriptions { loadYouTube(.subscriptions) }
+        } else if snapshot.youtube.hasVideo {
+            // Taken off the glasses: nothing should go on playing unseen.
+            youtubePlayer.stop()
+            snapshot.youtube.page = .browse
+        }
     }
 
     /// Every second, with the clock.

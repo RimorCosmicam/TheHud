@@ -112,7 +112,8 @@ struct PhoneRootView: View {
             .textInputAutocapitalization(controller.keyboardTarget == .address ? .never : .sentences)
             .autocorrectionDisabled(controller.keyboardTarget == .address)
             .submitLabel(controller.keyboardTarget == .address ? .go
-                         : controller.keyboardTarget == .mapSearch ? .search : .return)
+                         : controller.keyboardTarget == .mapSearch || controller.keyboardTarget == .youtubeSearch
+                         ? .search : .return)
             .onSubmit {
                 controller.submitTyping()
                 if controller.keyboardTarget == .mac { typing = true }
@@ -201,6 +202,14 @@ struct SettingsSheet: View {
                     Stepper("Daily steps: \(controller.stepGoal.formatted())",
                             value: $controller.stepGoal, in: 2000...30000, step: 1000)
                     NavigationLink("Saved captions") { CaptionsSessionsView() }
+                }
+
+                Section {
+                    Toggle("Show Subscriptions", isOn: $controller.youtubeSubscriptions)
+                } header: {
+                    Text("YouTube")
+                } footer: {
+                    Text("Adds your subscriptions feed next to Home and search.")
                 }
 
                 Section("Surface") {

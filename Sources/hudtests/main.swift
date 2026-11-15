@@ -17,6 +17,7 @@ runAppTests()
 runDesktopTests()
 runGridTests()
 runSkyTests()
+runYouTubeTests()
 MainActor.assumeIsolated { runPageScriptTests() }
 
 exit(TestKit.summarise())

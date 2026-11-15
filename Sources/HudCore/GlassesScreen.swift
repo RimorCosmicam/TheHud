@@ -17,6 +17,8 @@ public struct GlassesScreen: View {
     public var browserContent: AnyView?
     /// The Mac's picture. Nil draws a stand-in desktop when `placeholders` is on.
     public var desktopContent: AnyView?
+    /// The YouTube player's page. Nil draws a stand-in frame when `placeholders` is on.
+    public var youtubeContent: AnyView?
     /// The map raster, when one has arrived.
     public var mapGround: Image?
     /// The Music app's artwork for what is playing.
@@ -33,6 +35,7 @@ public struct GlassesScreen: View {
                 clearView: Bool = false,
                 browserContent: AnyView? = nil,
                 desktopContent: AnyView? = nil,
+                youtubeContent: AnyView? = nil,
                 mapGround: Image? = nil,
                 artwork: Image? = nil,
                 placeholders: Bool = true,
@@ -43,6 +46,7 @@ public struct GlassesScreen: View {
         self.clearView = clearView
         self.browserContent = browserContent
         self.desktopContent = desktopContent
+        self.youtubeContent = youtubeContent
         self.mapGround = mapGround
         self.artwork = artwork
         self.placeholders = placeholders
@@ -147,6 +151,7 @@ public struct GlassesScreen: View {
         case .music: MusicWidget(snapshot.music, artwork: artwork, hover: hover(in: frame))
         case .note: NoteWidget(snapshot.note)
         case .captions: CaptionsWidget(snapshot.captions)
+        case .youtube: YouTubeWidget(snapshot.youtube, content: youtubeContent, standIn: placeholders)
         case .browser, .mac: EmptyView()
         }
     }
@@ -162,6 +167,7 @@ public struct GlassesScreen: View {
         case .music: MusicApp(snapshot.music, artwork: artwork, hover: hover)
         case .note: NoteApp(snapshot.note)
         case .captions: CaptionsApp(snapshot.captions)
+        case .youtube: YouTubeApp(snapshot.youtube, content: youtubeContent, standIn: placeholders, hover: hover)
         case .map, .sky, .browser, .mac: EmptyView()
         }
     }

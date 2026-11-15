@@ -184,6 +184,38 @@ struct Hudshot {
                       to: outDir, "phone-pad-\(kind.rawValue)", scale: scale)
         }
 
+        // YouTube held up alone: the browse grid with the cursor on a card, then the player.
+        var tube = still
+        tube.youtube = .preview
+        tube.cursor = CGPoint(x: HudTheme.safeInset + YouTubeAppLayout.cardFrame(slot: 1).midX,
+                              y: HudTheme.safeInset + YouTubeAppLayout.cardFrame(slot: 1).midY - 40)
+        try write(GlassesScreen(snapshot: tube, arrangement: fullGrid, solo: .youtube),
+                  to: outDir, "glasses-youtube-browse", scale: 1)
+        tube.youtube.page = .player
+        tube.cursor = CGPoint(x: HudTheme.safeInset + YouTubeAppLayout.sideFrame(2).midX,
+                              y: HudTheme.safeInset + YouTubeAppLayout.sideFrame(2).midY)
+        try write(GlassesScreen(snapshot: tube, arrangement: fullGrid, solo: .youtube),
+                  to: outDir, "glasses-youtube-player", scale: 1)
+        var advert = tube
+        advert.youtube.isAd = true
+        advert.youtube.canSkipAd = true
+        advert.youtube.queue = []
+        advert.cursor = nil
+        try write(GlassesScreen(snapshot: advert, arrangement: fullGrid, solo: .youtube),
+                  to: outDir, "glasses-youtube-ad", scale: 1)
+        var tubeGrid = fullGrid
+        tubeGrid.place(.youtube, at: .slot(.right, 0))
+        tube.cursor = nil
+        try write(GlassesScreen(snapshot: tube, arrangement: tubeGrid),
+                  to: outDir, "glasses-youtube-widget", scale: 1)
+        try write(PhoneScreen(surface: plain, solo: .youtube, pad: .app, appSnapshot: tube),
+                  to: outDir, "phone-pad-youtube", scale: scale)
+        var tubeSearch = tube
+        tubeSearch.youtube.query = "lofi hip hop"
+        tubeSearch.youtube.isEditingQuery = true
+        try write(PhoneScreen(surface: plain, solo: .youtube, pad: .app, appSnapshot: tubeSearch),
+                  to: outDir, "phone-pad-youtube-search", scale: scale)
+
         // A running timer in the clock app, the cursor on it.
         var timing = still
         var timer = HudTimer(setSeconds: 25 * 60)

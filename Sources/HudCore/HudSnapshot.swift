@@ -28,6 +28,8 @@ public struct HudSnapshot: Sendable {
     public var music: NowPlaying? = .preview
     public var note: Note = .preview
     public var captions: Captions = .preview
+    /// What the YouTube widget is playing.
+    public var youtube: YouTube = .preview
     public var browser: Browser
     /// Where the trackpad has put the pointer, in canvas points. Nil hides it.
     public var cursor: CGPoint?
@@ -345,6 +347,87 @@ public struct HudSnapshot: Sendable {
                                                isPlaying: true, elapsed: 97, duration: 243)
     }
 
+    public struct YouTube: Sendable, Equatable {
+        /// The lists the app browses.
+        public enum Tab: String, CaseIterable, Sendable {
+            case home, subscriptions, search
+            public var title: String {
+                switch self {
+                case .home: "HOME"
+                case .subscriptions: "SUBSCRIPTIONS"
+                case .search: "SEARCH"
+                }
+            }
+        }
+        /// Held up alone, the app shows lists to pick from, or the video being watched.
+        public enum Page: Sendable { case browse, player }
+
+        /// A video is loaded in the player, playing or not.
+        public var hasVideo = false
+        public var videoId = ""
+        public var title = ""
+        public var channel = ""
+        public var isPlaying = false
+        public var isLive = false
+        public var elapsed: TimeInterval = 0
+        public var duration: TimeInterval = 0
+        /// An advert is playing in place of the video, and whether it can be skipped yet.
+        public var isAd = false
+        public var canSkipAd = false
+
+        public var page: Page = .browse
+        public var tab: Tab = .home
+        /// Off unless asked for in Settings: not everyone follows channels.
+        public var showsSubscriptions = false
+        public var query = ""
+        public var isEditingQuery = false
+        public var home: [YouTubeVideo] = []
+        public var subscriptions: [YouTubeVideo] = []
+        public var results: [YouTubeVideo] = []
+        /// What YouTube would play after this one.
+        public var upNext: [YouTubeVideo] = []
+        /// What the wearer asked to play next, before any of Up next.
+        public var queue: [YouTubeVideo] = []
+        /// The browse grid's first row.
+        public var scrollRow = 0
+        /// A list is on its way.
+        public var loading = false
+        /// Something went wrong reaching YouTube; empty when all is well.
+        public var problem = ""
+
+        public init() {}
+        public var progress: Double { duration > 0 ? min(elapsed / duration, 1) : 0 }
+
+        public var tabs: [Tab] { showsSubscriptions ? Tab.allCases : [.home, .search] }
+
+        public func list(_ tab: Tab) -> [YouTubeVideo] {
+            switch tab {
+            case .home: home
+            case .subscriptions: subscriptions
+            case .search: results
+            }
+        }
+
+        /// The player page's side column: the queue first, then Up next.
+        public var sideList: [YouTubeVideo] { queue + upNext.filter { $0.id != videoId } }
+
+        public static let preview: YouTube = {
+            var youtube = YouTube()
+            youtube.hasVideo = true
+            youtube.videoId = "preview"
+            youtube.title = "Building a heads-up display from scratch"
+            youtube.channel = "Tech Explained"
+            youtube.isPlaying = true
+            youtube.elapsed = 412
+            youtube.duration = 1140
+            youtube.home = YouTubeVideo.samples
+            youtube.results = Array(YouTubeVideo.samples.reversed())
+            youtube.upNext = Array(YouTubeVideo.samples.dropFirst(3))
+            youtube.queue = Array(YouTubeVideo.samples.prefix(2))
+            return youtube
+        }()
+    }
+
     public struct Note: Sendable, Equatable {
         public var text: String
         public var isEditing: Bool = false
@@ -623,6 +706,7 @@ public struct HudSnapshot: Sendable {
         snapshot.music = nil
         snapshot.note = Note()
         snapshot.captions = Captions()
+        snapshot.youtube = YouTube()
         return snapshot
     }
 }

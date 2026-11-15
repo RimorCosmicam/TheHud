@@ -15,7 +15,7 @@ extension HudPanelKind {
     /// Apps that are better worked with a thumb than a cursor when they fill the glasses.
     public var hasPhoneControls: Bool {
         switch self {
-        case .sky, .music, .clock, .captions, .note: return true
+        case .sky, .music, .clock, .captions, .note, .youtube: return true
         default: return false
         }
     }
@@ -51,6 +51,19 @@ public enum TimerAction: Sendable {
     /// Minutes to count down from; 0 is the stopwatch.
     case set(minutes: Int)
     case add(minutes: Int)
+}
+
+public enum YouTubeAction: Sendable, Equatable {
+    case togglePlay, next, skipAd
+    /// Seconds to jump, back (negative) or on.
+    case seek(Double)
+    /// Raise the keyboard to search YouTube; the glasses keep playing.
+    case search
+    case play(YouTubeVideo)
+    /// Play something from the queue, taking it out.
+    case playQueued(Int)
+    case enqueue(YouTubeVideo)
+    case dequeue(Int)
 }
 
 public enum NoteAction: Sendable {
@@ -740,6 +753,224 @@ public struct NoteControls: View {
     }
 }
 
+// MARK: - YouTube
+
+public struct YouTubeControls: View {
+    public enum List: Hashable, Sendable { case results, upNext, home, subscriptions, queue }
+
+    public var youtube: HudSnapshot.YouTube
+    public var scrolls: Bool
+    public var action: (PhoneAction) -> Void
+    /// Picked by hand; until then the list follows what is going on.
+    @State private var picked: List?
+
+    public init(youtube: HudSnapshot.YouTube, scrolls: Bool = true,
+                action: @escaping (PhoneAction) -> Void = { _ in }) {
+        self.youtube = youtube
+        self.scrolls = scrolls
+        self.action = action
+    }
+
+    private var lists: [List] {
+        var lists: [List] = []
+        if !youtube.query.isEmpty { lists.append(.results) }
+        if youtube.hasVideo { lists.append(.upNext) }
+        lists.append(.home)
+        if youtube.showsSubscriptions { lists.append(.subscriptions) }
+        lists.append(.queue)
+        return lists
+    }
+
+    /// Searching shows results; something playing shows what comes next.
+    private var list: List {
+        if let picked, lists.contains(picked) { return picked }
+        return lists[0]
+    }
+
+    private func title(_ list: List) -> String {
+        switch list {
+        case .results: "RESULTS"
+        case .upNext: "UP NEXT"
+        case .home: "HOME"
+        case .subscriptions: "SUBS"
+        case .queue: youtube.queue.isEmpty ? "QUEUE" : "QUEUE \(youtube.queue.count)"
+        }
+    }
+
+    private var videos: [YouTubeVideo] {
+        switch list {
+        case .results: youtube.results
+        case .upNext: youtube.upNext.filter { $0.id != youtube.videoId }
+        case .home: youtube.home
+        case .subscriptions: youtube.subscriptions
+        case .queue: youtube.queue
+        }
+    }
+
+    public var body: some View {
+        VStack(spacing: 8) {
+            nowPlaying
+            HStack(spacing: 8) {
+                PadButton(symbol: "gobackward.5", title: nil) { action(.youtube(.seek(-5))) }
+                PadButton(symbol: youtube.isPlaying ? "pause.fill" : "play.fill", title: nil, lit: true, big: true) {
+                    action(.youtube(.togglePlay))
+                }
+                PadButton(symbol: "goforward.5", title: nil) { action(.youtube(.seek(5))) }
+                if youtube.canSkipAd {
+                    PadButton(symbol: "forward.end.fill", title: "SKIP AD", lit: true) { action(.youtube(.skipAd)) }
+                } else {
+                    PadButton(symbol: "forward.end.fill", title: nil) { action(.youtube(.next)) }
+                }
+            }
+            .frame(height: 58)
+            searchField
+            HStack(spacing: 6) {
+                ForEach(lists, id: \.self) { choice in
+                    Button { picked = choice } label: {
+                        Text(title(choice)).font(HudTheme.mont(10, .black)).tracking(1.2)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                            .foregroundStyle(choice == list ? Color.black : HudTheme.inkDim)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(choice == list ? HudTheme.accent : Color(white: 0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(height: 30)
+            rows
+                .frame(maxHeight: .infinity, alignment: .top)
+                .layoutPriority(-1)
+        }
+        .onChange(of: youtube.query) { _, _ in picked = nil }
+    }
+
+    private var nowPlaying: some View {
+        PadCard {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(state).font(HudTheme.mont(10, .black)).tracking(2)
+                        .foregroundStyle(youtube.isPlaying || youtube.isAd ? HudTheme.accent : HudTheme.inkDim)
+                    Text(youtube.channel).font(HudTheme.mont(11, .semibold)).foregroundStyle(HudTheme.inkDim)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                Text(youtube.hasVideo ? youtube.title : "Pick something below, or search")
+                    .font(HudTheme.mont(15, youtube.hasVideo ? .black : .semibold))
+                    .foregroundStyle(youtube.hasVideo ? HudTheme.ink : HudTheme.inkFaint)
+                    .lineLimit(1)
+                if youtube.hasVideo && !youtube.isLive {
+                    HStack(spacing: 8) {
+                        Text(HudSnapshot.NowPlaying.time(youtube.elapsed))
+                        ProgressLine(progress: youtube.progress).frame(height: 4)
+                        Text("\u{2212}" + HudSnapshot.NowPlaying.time(max(youtube.duration - youtube.elapsed, 0)))
+                    }
+                    .font(HudTheme.mont(10, .black)).monospacedDigit().foregroundStyle(HudTheme.inkDim)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var state: String {
+        if youtube.isAd { return "AD" }
+        if !youtube.hasVideo { return "YOUTUBE" }
+        if youtube.isLive { return "LIVE" }
+        return youtube.isPlaying ? "PLAYING" : "PAUSED"
+    }
+
+    private var searchField: some View {
+        Button { action(.youtube(.search)) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(youtube.isEditingQuery ? HudTheme.accent : HudTheme.inkDim)
+                Text(youtube.query.isEmpty ? "Search YouTube" : youtube.query)
+                    .font(HudTheme.mont(14, youtube.query.isEmpty ? .semibold : .black))
+                    .foregroundStyle(youtube.query.isEmpty ? HudTheme.inkFaint : HudTheme.ink)
+                    .lineLimit(1)
+                if youtube.isEditingQuery {
+                    Rectangle().fill(HudTheme.accent).frame(width: 2, height: 18)
+                }
+                Spacer(minLength: 0)
+                if youtube.loading {
+                    Text("\u{2026}").font(HudTheme.mont(14, .black)).foregroundStyle(HudTheme.inkDim)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity).frame(height: 40)
+            .background(Color(white: 0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(youtube.isEditingQuery ? HudTheme.accent : .clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var rows: some View {
+        let videos = self.videos
+        if videos.isEmpty {
+            Text(emptyText).font(HudTheme.mont(13, .semibold)).foregroundStyle(HudTheme.inkFaint)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if scrolls {
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(Array(videos.enumerated()), id: \.offset) { index, video in row(video, index) }
+                }
+            }
+            .scrollIndicators(.hidden)
+        } else {
+            VStack(spacing: 6) {
+                ForEach(Array(videos.prefix(3).enumerated()), id: \.offset) { index, video in row(video, index) }
+            }
+        }
+    }
+
+    private var emptyText: String {
+        if youtube.loading { return "Loading\u{2026}" }
+        if !youtube.problem.isEmpty { return youtube.problem }
+        return switch list {
+        case .queue: "Tap + on a video to play it next"
+        case .results: "Nothing found"
+        default: "Nothing here yet"
+        }
+    }
+
+    private func row(_ video: YouTubeVideo, _ index: Int) -> some View {
+        let inQueue = list == .queue
+        return HStack(spacing: 10) {
+            Button {
+                action(.youtube(inQueue ? .playQueued(index) : .play(video)))
+            } label: {
+                HStack(spacing: 10) {
+                    Thumbnail(video: video, corner: 8, badge: 8).frame(width: 84, height: 47)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(video.title).font(HudTheme.mont(12, .black)).foregroundStyle(HudTheme.ink)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                        Text([video.channel, video.meta].filter { !$0.isEmpty }.joined(separator: " \u{00B7} "))
+                            .font(HudTheme.mont(10, .semibold)).foregroundStyle(HudTheme.inkDim).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            let queued = youtube.queue.contains(video)
+            Button {
+                action(.youtube(inQueue ? .dequeue(index) : .enqueue(video)))
+            } label: {
+                Image(systemName: inQueue ? "xmark" : queued ? "checkmark" : "plus")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(queued && !inQueue ? Color.black : HudTheme.ink)
+                    .frame(width: 40, height: 40)
+                    .background(queued && !inQueue ? HudTheme.accent : Color(white: 0.14), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(queued && !inQueue)
+        }
+        .frame(height: 52)
+    }
+}
+
 // MARK: - The app's pad
 
 /// The fullscreen app's controls, by kind.
@@ -769,6 +1000,7 @@ public struct AppPad: View {
             case .clock: TimerControls(timer: snapshot.timer, action: action)
             case .captions: CaptionsControls(captions: snapshot.captions, language: captionsLanguage, action: action)
             case .note: NoteControls(note: snapshot.note, action: action)
+            case .youtube: YouTubeControls(youtube: snapshot.youtube, scrolls: scrolls, action: action)
             default: Color.black
             }
         }

@@ -152,6 +152,7 @@ public enum PhoneAction: Sendable {
     case captionsToggle, captionsSessions
     case captionsLanguage(String)
     case note(NoteAction)
+    case youtube(YouTubeAction)
 }
 
 /// The icon row: the browser's own controls, the keyboard, and the gear.
