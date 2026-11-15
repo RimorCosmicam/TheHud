@@ -31,6 +31,8 @@ public enum YouTubeAppLayout {
     static let cardHeight: CGFloat = 330
     static let rowGap: CGFloat = 34
     public static let nowPlayingTile = CGRect(x: 1240, y: 34, width: 480, height: 84)
+    /// The video in the tile.
+    public static let tileVideo = CGRect(x: 1242, y: 36, width: 142, height: 80)
 
     public static func tabFrame(_ index: Int, of tabs: [HudSnapshot.YouTube.Tab]) -> CGRect {
         var x: CGFloat = 72
@@ -87,20 +89,21 @@ public enum YouTubeAppLayout {
 /// In a slot: the video alone, filling it, with what it is and how far along underneath.
 public struct YouTubeWidget: View {
     public var youtube: HudSnapshot.YouTube
-    public var content: AnyView?
+    /// The live video is drawn underneath, by `YouTubeVideoLayer`; leave its place clear.
+    public var live: Bool
     public var standIn: Bool
 
-    public init(_ youtube: HudSnapshot.YouTube, content: AnyView?, standIn: Bool = false) {
+    public init(_ youtube: HudSnapshot.YouTube, live: Bool = false, standIn: Bool = false) {
         self.youtube = youtube
-        self.content = content
+        self.live = live
         self.standIn = standIn
     }
 
     public var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Color.black
+            live && youtube.hasVideo ? Color.clear : Color.black
             if youtube.hasVideo {
-                PlayerFrame(content: content, standIn: standIn)
+                PlayerFrame(live: live, standIn: standIn)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(youtube.isAd ? "AD" : youtube.title).font(HudTheme.mont(18, .black))
                         .foregroundStyle(youtube.isAd ? HudTheme.accent : HudTheme.ink)
@@ -135,30 +138,62 @@ public struct YouTubeWidget: View {
     }
 }
 
-/// The player's page in a 16:9 box, as large as fits.
+/// Where the video goes in a view: clear when the live video is underneath, a stand-in for
+/// stills.
 struct PlayerFrame: View {
-    var content: AnyView?
+    var live: Bool
     var standIn: Bool
-    static let native = CGSize(width: 1280, height: 720)
 
     var body: some View {
-        GeometryReader { geometry in
-            let size = geometry.size
-            let scale = min(size.width / Self.native.width, size.height / Self.native.height)
-            ZStack {
-                Color.black
-                if let content {
-                    // At its real size, as the browser is: WebKit draws video in a layer of its
-                    // own, and a transform over it is asking for trouble. The page fits itself.
-                    content
-                        .frame(width: Self.native.width * scale, height: Self.native.height * scale)
-                } else if standIn {
-                    StandInFrame()
-                        .frame(width: Self.native.width * scale, height: Self.native.height * scale)
+        if live {
+            Color.clear
+        } else {
+            GeometryReader { geometry in
+                let size = YouTubeVideoLayer.fit(geometry.size)
+                ZStack {
+                    Color.black
+                    if standIn { StandInFrame().frame(width: size.width, height: size.height) }
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
-            .frame(width: size.width, height: size.height)
         }
+    }
+}
+
+/// The one live video on the glasses. It is never moved from view to view, only resized and
+/// placed: WebKit loses the picture of a playing video when its web view is taken out of the
+/// window and put back, so the slot, the tile and the whole canvas are all this same layer,
+/// with the widget and the app drawn over it and clear where it shows.
+public struct YouTubeVideoLayer: View {
+    public var content: AnyView
+    /// The box it is clipped to, in canvas points; nil keeps it off the canvas, still playing.
+    public var box: CGRect?
+    public var corner: CGFloat
+
+    public init(content: AnyView, box: CGRect?, corner: CGFloat) {
+        self.content = content
+        self.box = box
+        self.corner = corner
+    }
+
+    /// 16:9, as large as fits.
+    static func fit(_ size: CGSize) -> CGSize {
+        let scale = min(size.width / 16, size.height / 9)
+        return CGSize(width: 16 * scale, height: 9 * scale)
+    }
+
+    public var body: some View {
+        // Off the canvas it is still in the window, so it keeps its picture for coming back.
+        let box = self.box ?? CGRect(x: -1400, y: 0, width: 1280, height: 720)
+        let video = Self.fit(box.size)
+        ZStack {
+            Color.black
+            content.frame(width: video.width, height: video.height)
+        }
+        .frame(width: box.width, height: box.height)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .offset(x: box.minX, y: box.minY)
+        .allowsHitTesting(false)
     }
 }
 
@@ -168,14 +203,15 @@ struct PlayerFrame: View {
 /// `YouTubeFullscreen`, the video and nothing else.
 public struct YouTubeApp: View {
     public var youtube: HudSnapshot.YouTube
-    public var content: AnyView?
+    /// The live video is drawn underneath, by `YouTubeVideoLayer`; leave its place clear.
+    public var live: Bool
     public var standIn: Bool
     public var hover: CGPoint?
 
-    public init(_ youtube: HudSnapshot.YouTube, content: AnyView?, standIn: Bool = false,
+    public init(_ youtube: HudSnapshot.YouTube, live: Bool = false, standIn: Bool = false,
                 hover: CGPoint? = nil) {
         self.youtube = youtube
-        self.content = content
+        self.live = live
         self.standIn = standIn
         self.hover = hover
     }
@@ -191,6 +227,18 @@ public struct YouTubeApp: View {
         .frame(width: YouTubeAppLayout.size.width, height: YouTubeAppLayout.size.height,
                alignment: .topLeading)
         .appSurface()
+        // The tile's video is the live layer underneath: cut its place out of the surface.
+        .mask {
+            ZStack(alignment: .topLeading) {
+                Rectangle()
+                if live && youtube.hasVideo {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .at(YouTubeAppLayout.tileVideo)
+                        .blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
+        }
     }
 
     // ------------------------------------------------------------------ browse
@@ -250,7 +298,7 @@ public struct YouTubeApp: View {
     private var nowPlaying: some View {
         let lit = target == .nowPlaying
         return HStack(spacing: 16) {
-            PlayerFrame(content: content, standIn: standIn)
+            PlayerFrame(live: live, standIn: standIn)
                 .frame(width: 142, height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
@@ -274,19 +322,20 @@ public struct YouTubeApp: View {
 /// say what this is, and how far along, while it is paused.
 public struct YouTubeFullscreen: View {
     public var youtube: HudSnapshot.YouTube
-    public var content: AnyView?
+    /// The live video is drawn underneath, by `YouTubeVideoLayer`; leave its place clear.
+    public var live: Bool
     public var standIn: Bool
 
-    public init(_ youtube: HudSnapshot.YouTube, content: AnyView?, standIn: Bool = false) {
+    public init(_ youtube: HudSnapshot.YouTube, live: Bool = false, standIn: Bool = false) {
         self.youtube = youtube
-        self.content = content
+        self.live = live
         self.standIn = standIn
     }
 
     public var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Color.black
-            PlayerFrame(content: content, standIn: standIn)
+            live ? Color.clear : Color.black
+            PlayerFrame(live: live, standIn: standIn)
             if !youtube.notice.isEmpty {
                 Text(youtube.notice).font(HudTheme.mont(30, .semibold)).foregroundStyle(HudTheme.inkDim)
                     .multilineTextAlignment(.center).padding(120)

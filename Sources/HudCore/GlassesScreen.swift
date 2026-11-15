@@ -73,6 +73,12 @@ public struct GlassesScreen: View {
         ZStack(alignment: .topLeading) {
             Color.black
 
+            // Always here, whatever else is: see `YouTubeVideoLayer`.
+            if let youtubeContent {
+                let place = youtubeVideo(layout)
+                YouTubeVideoLayer(content: youtubeContent, box: place?.box, corner: place?.corner ?? 0)
+            }
+
             if let solo, !solo.isBig, !layout.fullscreen, !clearView {
                 if solo == .map {
                     // Maps lays its controls out on the whole canvas itself.
@@ -80,7 +86,7 @@ public struct GlassesScreen: View {
                             proceduralGround: placeholders, cursor: snapshot.cursor)
                 } else if solo == .youtube && snapshot.youtube.page == .player {
                     // Watching: the video is the canvas.
-                    YouTubeFullscreen(snapshot.youtube, content: youtubeContent, standIn: placeholders)
+                    YouTubeFullscreen(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders)
                 } else if solo == .sky {
                     // The sky is the whole canvas, edge to edge.
                     SkyApp(snapshot.sky, overhead: snapshot.overhead, view: snapshot.skyView,
@@ -137,6 +143,21 @@ public struct GlassesScreen: View {
         .background(HudTheme.accent, in: Capsule())
     }
 
+    /// Where the live video shows right now: the whole canvas while watching, the tile while
+    /// browsing, its slot as a widget, or nowhere.
+    private func youtubeVideo(_ layout: GlassesLayout) -> (box: CGRect, corner: CGFloat)? {
+        let youtube = snapshot.youtube
+        guard youtube.hasVideo, !clearView, !layout.fullscreen else { return nil }
+        if solo == .youtube {
+            if youtube.page == .player { return (CGRect(origin: .zero, size: HudTheme.glassesSize), 0) }
+            let inset = GlassesLayout.safeFrame.origin
+            return (YouTubeAppLayout.tileVideo.offsetBy(dx: inset.x, dy: inset.y), 12)
+        }
+        guard solo == nil, let slot = layout.widgetFrames.first(where: { $0.kind == .youtube })?.frame
+        else { return nil }
+        return (slot, HudTheme.cornerRadius)
+    }
+
     /// The cursor in a frame's own points, for hover marks.
     private func hover(in frame: CGRect) -> CGPoint? {
         guard let cursor = snapshot.cursor, frame.contains(cursor) else { return nil }
@@ -154,7 +175,7 @@ public struct GlassesScreen: View {
         case .music: MusicWidget(snapshot.music, artwork: artwork, hover: hover(in: frame))
         case .note: NoteWidget(snapshot.note)
         case .captions: CaptionsWidget(snapshot.captions)
-        case .youtube: YouTubeWidget(snapshot.youtube, content: youtubeContent, standIn: placeholders)
+        case .youtube: YouTubeWidget(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders)
         case .browser, .mac: EmptyView()
         }
     }
@@ -170,7 +191,7 @@ public struct GlassesScreen: View {
         case .music: MusicApp(snapshot.music, artwork: artwork, hover: hover)
         case .note: NoteApp(snapshot.note)
         case .captions: CaptionsApp(snapshot.captions)
-        case .youtube: YouTubeApp(snapshot.youtube, content: youtubeContent, standIn: placeholders, hover: hover)
+        case .youtube: YouTubeApp(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders, hover: hover)
         case .map, .sky, .browser, .mac: EmptyView()
         }
     }

@@ -204,6 +204,17 @@ struct Hudshot {
         tube.cursor = nil
         try write(GlassesScreen(snapshot: tube, arrangement: tubeGrid),
                   to: outDir, "glasses-youtube-widget", scale: 1)
+        // The same with a live layer under them, as on the glasses: the video must show
+        // through each one's clear place.
+        let liveVideo = AnyView(LinearGradient(colors: [.teal, .indigo], startPoint: .leading, endPoint: .trailing))
+        try write(GlassesScreen(snapshot: tube, arrangement: tubeGrid, youtubeContent: liveVideo),
+                  to: outDir, "glasses-youtube-widget-live", scale: 1)
+        var liveBrowse = tube
+        liveBrowse.youtube.page = .browse
+        try write(GlassesScreen(snapshot: liveBrowse, arrangement: fullGrid, solo: .youtube, youtubeContent: liveVideo),
+                  to: outDir, "glasses-youtube-browse-live", scale: 1)
+        try write(GlassesScreen(snapshot: paused, arrangement: fullGrid, solo: .youtube, youtubeContent: liveVideo),
+                  to: outDir, "glasses-youtube-paused-live", scale: 1)
         try write(PhoneScreen(surface: plain, solo: .youtube, pad: .app, appSnapshot: tube),
                   to: outDir, "phone-pad-youtube", scale: scale)
         var tubeSearch = tube
