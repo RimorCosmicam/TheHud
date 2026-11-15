@@ -78,7 +78,7 @@ struct GlassesHost: View {
             let scale = min(geometry.size.width / canvas.width,
                             geometry.size.height / canvas.height)
             GlassesScreen(snapshot: controller.snapshot,
-                          visible: controller.visible,
+                          visible: controller.shownPanels,
                           browserContent: AnyView(WebBrowserView(controller.browser)),
                           mapGround: controller.mapGround,
                           placeholders: false,

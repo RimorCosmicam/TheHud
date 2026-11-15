@@ -162,12 +162,12 @@ public struct MinimapPanel: View {
     /// The map raster, heading-up: it turns under the marker as the wearer turns, and slides
     /// under it as they walk, so the marker can stay fixed at the centre pointing up.
     ///
-    /// The raster is a square `groundOversize` times the panel's span, centred where it was
-    /// fetched. Between fetches the offset moves it by the distance walked since.
+    /// The raster is a square `effectiveGroundSpan` metres across, centred where it was fetched,
+    /// drawn at the panel's fixed zoom. Between fetches the offset moves it by the distance
+    /// walked since.
     private func groundLayer(_ ground: Image, size: CGSize) -> some View {
-        let pointsPerMetre = size.width / CGFloat(max(minimap.spanMetres, 1))
-        let side = CGFloat(minimap.spanMetres) * CGFloat(HudSnapshot.Minimap.groundOversize)
-            * pointsPerMetre
+        let pointsPerMetre = CGFloat(minimap.pointsPerMetre)
+        let side = CGFloat(minimap.effectiveGroundSpan) * pointsPerMetre
         return ground
             .resizable()
             .frame(width: side, height: side)
@@ -272,22 +272,23 @@ public struct MinimapPanel: View {
                                                   width: 34, height: 34)),
                            with: .color(HudTheme.accent), lineWidth: 3)
 
-            // Scale bar, bottom left.
+            // Scale bar, bottom left: a true 100 m at the map's zoom.
             let barY = size.height - 30
+            let barLength = CGFloat(100 * minimap.pointsPerMetre)
             var bar = Path()
             bar.move(to: CGPoint(x: 24, y: barY))
-            bar.addLine(to: CGPoint(x: 24 + size.width * 0.22, y: barY))
+            bar.addLine(to: CGPoint(x: 24 + barLength, y: barY))
             context.stroke(bar, with: .color(.white.opacity(0.65)), lineWidth: 3)
-            for x in [CGFloat(24), 24 + size.width * 0.22] {
+            for x in [CGFloat(24), 24 + barLength] {
                 var tick = Path()
                 tick.move(to: CGPoint(x: x, y: barY - 6))
                 tick.addLine(to: CGPoint(x: x, y: barY + 6))
                 context.stroke(tick, with: .color(.white.opacity(0.65)), lineWidth: 3)
             }
-            context.draw(Text("\(minimap.spanMetres) M")
+            context.draw(Text("100 M")
                 .font(HudTheme.mont(15, .black))
                 .foregroundStyle(HudTheme.inkDim),
-                at: CGPoint(x: 24 + size.width * 0.11, y: barY - 20))
+                at: CGPoint(x: 24 + barLength / 2, y: barY - 20))
 
             // North, bottom right, rotated to the heading.
             let northCentre = CGPoint(x: size.width - 48, y: size.height - 48)

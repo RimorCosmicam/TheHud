@@ -64,6 +64,10 @@ struct Hudshot {
         try write(PhoneScreen(surface: touched, railActive: true, cornerPressed: true),
                   to: outDir, "phone-active", scale: scale)
 
+        // The map held up alone: its tile is lit, the others dimmed.
+        try write(PhoneScreen(surface: plain, solo: .map),
+                  to: outDir, "phone-solo", scale: scale)
+
         // The glasses canvas: 1080p, the mode the Air reports over DisplayPort. Rendered at
         // scale 1, because 1920x1080 is what the glasses are actually handed.
         try write(GlassesScreen(), to: outDir, "glasses-browser", scale: 1)
@@ -114,10 +118,23 @@ struct Hudshot {
                       to: outDir, "glasses-home", scale: 1)
         }
 
+        // Each panel alone, as a held tile on the phone shows it.
+        for kind in [HudPanelKind.map, .clock, .weather, .browser] {
+            try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), visible: [kind]),
+                      to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
+        }
+
         if live {
-            let (snapshot, ground) = try liveSnapshot()
+            let (snapshot, ground, soloGround) = try liveSnapshot()
             try write(GlassesScreen(snapshot: snapshot, mapGround: ground),
                       to: outDir, "glasses-live", scale: 1)
+            if let soloGround {
+                var solo = snapshot
+                solo.minimap.groundSpanMetres = soloGround.span
+                try write(GlassesScreen(snapshot: solo, visible: [.map],
+                                        mapGround: soloGround.image),
+                          to: outDir, "glasses-live-solo-map", scale: 1)
+            }
         }
         try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil),
                                 visible: [.clock, .weather, .map]),
@@ -151,13 +168,21 @@ struct Hudshot {
     /// no reasonable way to ask for location permission, and sending a real location to a third
     /// party to make a preview would be a poor trade.
     @MainActor
-    private static func liveSnapshot() throws -> (HudSnapshot, Image?) {
+    private static func liveSnapshot() throws
+        -> (HudSnapshot, Image?, (image: Image, span: Double)?) {
         let lisbon = CLLocationCoordinate2D(latitude: 38.7139, longitude: -9.1334)
         var snapshot = HudSnapshot(cursor: nil)
 
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var weather: HudSnapshot.Weather?
         nonisolated(unsafe) var ground: CGImage?
+        nonisolated(unsafe) var soloGround: CGImage?
+        // The same sizes the phone asks for: the column panel's raster, and the full canvas's
+        // (its diagonal at the fixed zoom, plus walking room).
+        let minimap = snapshot.minimap
+        let ppm = minimap.pointsPerMetre
+        let columnSpan = Double(minimap.spanMetres) * HudSnapshot.Minimap.groundOversize
+        let soloSpan = Double(hypot(1920.0 - 128, 1080.0 - 128)) / ppm + 300
         nonisolated(unsafe) var failure: Error?
 
         Task.detached {
@@ -165,8 +190,12 @@ struct Hudshot {
                 weather = try await OpenMeteoWeatherProvider()
                     .weather(at: lisbon, placeName: "Lisbon")
                 ground = try await MapSnapshotProvider()
-                    .snapshot(centre: lisbon, spanMetres: 600,
-                              size: CGSize(width: 470, height: 492))
+                    .snapshot(centre: lisbon, spanMetres: columnSpan,
+                              size: CGSize(width: columnSpan * ppm, height: columnSpan * ppm))
+                soloGround = try await MapSnapshotProvider()
+                    .snapshot(centre: lisbon, spanMetres: soloSpan,
+                              size: CGSize(width: soloSpan * ppm, height: soloSpan * ppm),
+                              scale: 1)
             } catch {
                 failure = error
             }
@@ -175,11 +204,11 @@ struct Hudshot {
 
         if semaphore.wait(timeout: .now() + 30) == .timedOut {
             print("live: timed out")
-            return (snapshot, nil)
+            return (snapshot, nil, nil)
         }
         if let failure {
             print("live: \(failure)")
-            return (snapshot, nil)
+            return (snapshot, nil, nil)
         }
 
         if let weather {
@@ -187,7 +216,8 @@ struct Hudshot {
             print("live weather: \(weather.temperature)\u{00B0} \(weather.condition)")
         }
         print("live map: \(ground.map { "\($0.width)x\($0.height)" } ?? "none")")
-        return (snapshot, ground.map { Image(decorative: $0, scale: 2) })
+        return (snapshot, ground.map { Image(decorative: $0, scale: 2) },
+                soloGround.map { (Image(decorative: $0, scale: 1), soloSpan) })
     }
 
     /// A video frame's worth of stand-in, for the fullscreen still.

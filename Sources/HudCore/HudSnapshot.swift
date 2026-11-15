@@ -86,6 +86,9 @@ public struct HudSnapshot: Sendable {
         /// so the map moves with every location fix instead of jumping when a new image lands.
         public var groundOffsetEast: Double
         public var groundOffsetNorth: Double
+        /// Metres across the current map raster. Larger when the map has the whole canvas, so
+        /// the zoom stays the same and the extra room shows more of the area.
+        public var groundSpanMetres: Double = 0
 
         public init(place: String, heading: Double, headingLabel: String,
                     speed: String, spanMetres: Int,
@@ -102,6 +105,14 @@ public struct HudSnapshot: Sendable {
         /// The raster covers more ground than the panel shows, so rotating it never exposes a
         /// corner and walking a little way does not run off its edge before the next one comes.
         public static let groundOversize: Double = 1.9
+
+        /// The zoom, fixed: `spanMetres` across a 470pt panel, whatever size the panel is.
+        public var pointsPerMetre: Double { 470 / Double(max(spanMetres, 1)) }
+
+        /// The raster's span, or the default for a column-sized panel before one is known.
+        public var effectiveGroundSpan: Double {
+            groundSpanMetres > 0 ? groundSpanMetres : Double(spanMetres) * Self.groundOversize
+        }
 
         public static let preview = Minimap(place: "ALFAMA", heading: 34, headingLabel: "NE",
                                             speed: "4.2 KM/H", spanMetres: 300)

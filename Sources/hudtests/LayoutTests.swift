@@ -23,6 +23,26 @@ func runLayoutTests() {
         expectEqual(alone.minX, HudTheme.safeInset)
     }
 
+    test("the browser held up alone fills the canvas inside the safe inset, bar and all") {
+        let solo = GlassesLayout(visible: [.browser])
+        let frame = solo.browserFrame!
+        expectEqual(frame.width, HudTheme.glassesSize.width - HudTheme.safeInset * 2)
+        expect(solo.barFrame != nil)
+    }
+
+    test("the map's zoom is fixed: the same metres per point in the column and alone") {
+        var minimap = HudSnapshot(cursor: nil).minimap
+        let column = minimap.pointsPerMetre
+        expectEqual(column, 470 / Double(minimap.spanMetres))
+        // A full-canvas raster only changes how much ground there is, not its scale.
+        minimap.groundSpanMetres = 1600
+        expectEqual(minimap.pointsPerMetre, column)
+        expectEqual(minimap.effectiveGroundSpan, 1600)
+        minimap.groundSpanMetres = 0
+        expectEqual(minimap.effectiveGroundSpan,
+                    Double(minimap.spanMetres) * HudSnapshot.Minimap.groundOversize)
+    }
+
     test("no browser, no hits") {
         let glance = GlassesLayout(visible: [.clock, .map])
         expect(glance.browserFrame == nil)

@@ -15,6 +15,15 @@ final class HudController: ObservableObject {
     @Published private(set) var snapshot = HudSnapshot.blank
     @Published private(set) var contacts: [TouchPoint] = []
     @Published private(set) var visible: Set<HudPanelKind>
+    /// One panel held up on its own, filling the glasses. Not saved: it is a moment's focus,
+    /// and the chosen set is what comes back.
+    @Published private(set) var solo: HudPanelKind? {
+        didSet { if solo != oldValue { soloChanged(from: oldValue) } }
+    }
+    /// What the glasses actually show: the solo panel, or the chosen set.
+    var shownPanels: Set<HudPanelKind> { solo.map { [$0] } ?? visible }
+    /// The map alone, soloed or as the only panel chosen: it gets the whole canvas.
+    private var mapFillsCanvas: Bool { shownPanels == [.map] }
     @Published var config: HalftoneConfig = .miniMateDefault
     @Published var trackpad = TouchpadSettings()
 
@@ -63,6 +72,9 @@ final class HudController: ObservableObject {
     private var groundCentre: CLLocationCoordinate2D?
     private var lastCoordinate: CLLocationCoordinate2D?
     private var mapFetchInFlight = false
+    /// Metres across the raster on screen. Kept here because each location fix replaces the
+    /// snapshot's minimap wholesale.
+    private var groundSpan: Double = 0
 
     private let pointer = PointerState()
     private let momentum = MomentumScroller()
@@ -148,34 +160,79 @@ final class HudController: ObservableObject {
         lastCoordinate = coordinate
         applyGroundOffset()
 
-        // A new raster once the old one is running out under the marker. It covers
-        // `groundOversize` times the panel's span, and turning needs the panel's diagonal of
-        // that, so about a fifth of the span is the walking room either way.
+        // A new raster once the old one is running out under the marker.
         let walked = groundCentre.map { metres(from: $0, to: coordinate) } ?? .infinity
-        let room = Double(minimap.spanMetres) * 0.2
-        if walked > room, !mapFetchInFlight, Date().timeIntervalSince(lastMapFetch) > 3 {
-            lastMapFetch = Date()
-            mapFetchInFlight = true
-            let span = Double(minimap.spanMetres) * HudSnapshot.Minimap.groundOversize
-            // Panel points per metre, times the span, so the raster is drawn at its own size.
-            let side = 470 * HudSnapshot.Minimap.groundOversize
-            Task { [weak self] in
-                guard let self else { return }
-                defer { self.mapFetchInFlight = false }
-                if let ground = try? await self.maps.snapshot(
-                    centre: coordinate, spanMetres: span,
-                    size: CGSize(width: side, height: side)) {
-                    self.mapGround = Image(decorative: ground, scale: 2)
-                    self.groundCentre = coordinate
-                    self.applyGroundOffset()
-                }
+        if walked > groundPlan.room, Date().timeIntervalSince(lastMapFetch) > 3 {
+            fetchGround(at: coordinate)
+        }
+    }
+
+    /// How big a raster the map needs, and how far the wearer can walk before it runs out.
+    ///
+    /// The zoom is fixed, so the raster is sized by the panel: it has to cover the panel's
+    /// diagonal (the map turns) plus some walking room. The column's panel is 470pt; on its own
+    /// the map has the whole canvas, which is about 1300 m of diagonal at the same zoom.
+    private var groundPlan: (span: Double, room: Double, scale: CGFloat) {
+        let spanMetres = Double(snapshot.minimap.spanMetres)
+        if mapFillsCanvas {
+            let ppm = snapshot.minimap.pointsPerMetre
+            let canvas = HudTheme.glassesSize
+            let inset = HudTheme.safeInset * 2
+            let diagonal = Double(hypot(canvas.width - inset, canvas.height - inset)) / ppm
+            let room = 120.0
+            // One point per pixel: the glasses are drawn at 1x, and a 2x raster this size would
+            // be a hundred megabytes for nothing.
+            return (diagonal + room * 2 + 60, room, 1)
+        }
+        // A fifth of the span either way, the same rule as before the solo map existed.
+        return (spanMetres * HudSnapshot.Minimap.groundOversize, spanMetres * 0.2, 2)
+    }
+
+    private func fetchGround(at coordinate: CLLocationCoordinate2D) {
+        guard !mapFetchInFlight else { return }
+        lastMapFetch = Date()
+        mapFetchInFlight = true
+        let plan = groundPlan
+        // Panel points per metre, times the span, so the raster is drawn at its own size.
+        let side = plan.span * snapshot.minimap.pointsPerMetre
+        Task { [weak self] in
+            guard let self else { return }
+            let ground = try? await self.maps.snapshot(
+                centre: coordinate, spanMetres: plan.span,
+                size: CGSize(width: side, height: side), scale: plan.scale)
+            self.mapFetchInFlight = false
+            if let ground {
+                self.mapGround = Image(decorative: ground, scale: plan.scale)
+                self.groundCentre = coordinate
+                self.groundSpan = plan.span
+                self.applyGroundOffset()
             }
+            // The map was soloed or put back while this was in flight: the raster is the
+            // wrong size for what is on screen now.
+            if self.groundPlan.span != plan.span, let here = self.lastCoordinate {
+                self.fetchGround(at: here)
+            }
+        }
+    }
+
+    private func soloChanged(from old: HudPanelKind?) {
+        panelsChanged()
+        // Without the browser on screen there is no bar to type into.
+        if !shownPanels.contains(.browser), keyboardTarget != nil { endTyping() }
+    }
+
+    /// The map's raster is sized for its panel; going to or from the full canvas needs another
+    /// one. The old one stays up, at the same zoom, until it arrives.
+    private func panelsChanged() {
+        if groundSpan > 0, groundPlan.span != groundSpan, let here = lastCoordinate {
+            fetchGround(at: here)
         }
     }
 
     /// The wearer's position relative to the raster's centre, east and north in metres.
     private func applyGroundOffset() {
         guard let centre = groundCentre, let here = lastCoordinate else { return }
+        snapshot.minimap.groundSpanMetres = groundSpan
         let metresPerDegree = 111_320.0
         snapshot.minimap.groundOffsetNorth = (here.latitude - centre.latitude) * metresPerDegree
         snapshot.minimap.groundOffsetEast = (here.longitude - centre.longitude) * metresPerDegree
@@ -289,8 +346,17 @@ final class HudController: ObservableObject {
         case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
         case .settings: showingSettings = true
         case let .toggle(kind):
+            // While one panel is alone, the tiles pick which one: another tile swaps it in, the
+            // same tile puts the whole set back.
+            if let current = solo {
+                solo = current == kind ? nil : kind
+                return
+            }
             if visible.contains(kind) { visible.remove(kind) } else { visible.insert(kind) }
             UserDefaults.standard.set(visible.map(\.rawValue), forKey: Self.visibleKey)
+            panelsChanged()
+        case let .solo(kind):
+            solo = solo == kind ? nil : kind
         }
     }
 
@@ -329,7 +395,7 @@ final class HudController: ObservableObject {
     }
 
     private var layout: GlassesLayout {
-        GlassesLayout(visible: visible, tabCount: tabs.count, activeTab: activeTab,
+        GlassesLayout(visible: shownPanels, tabCount: tabs.count, activeTab: activeTab,
                       fullscreen: snapshot.browser.isFullscreen)
     }
 

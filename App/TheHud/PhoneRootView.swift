@@ -31,6 +31,7 @@ struct PhoneRootView: View {
                 // The slack. The keyboard takes the height it needs from here, because
                 // everything else in the stack is fixed.
                 SettingsArea(visible: controller.visible,
+                             solo: controller.solo,
                              glassesConnected: controller.glassesConnected,
                              tabs: controller.snapshot.browser.tabs,
                              activeTab: controller.snapshot.browser.activeTab,

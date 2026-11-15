@@ -49,6 +49,8 @@ public struct GlassesScreen: View {
                 browserPanel
             } else if visible.contains(.browser) {
                 browserLayout
+            } else if let solo = visible.first, visible.count == 1 {
+                soloLayout(solo)
             } else {
                 glanceLayout
             }
@@ -69,6 +71,32 @@ public struct GlassesScreen: View {
         BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders,
                      hovering: layout.isOverBar(snapshot.cursor),
                      hoveredTab: layout.tab(at: snapshot.cursor), liveGlass: liveGlass)
+    }
+
+    /// One panel on its own, given the room: the map fills the canvas, the clock and the weather
+    /// are drawn large in the middle. (The browser on its own is `browserLayout` without the
+    /// column, which already takes the full width.)
+    @ViewBuilder
+    private func soloLayout(_ kind: HudPanelKind) -> some View {
+        switch kind {
+        case .map:
+            minimap()
+                .padding(HudTheme.safeInset)
+        case .clock:
+            ClockPanel(snapshot.clock)
+                .frame(width: 620)
+                .scaleEffect(1.9)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .weather:
+            if let weather = snapshot.weather {
+                WeatherPanel(weather)
+                    .frame(width: 430)
+                    .scaleEffect(2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .browser:
+            browserLayout
+        }
     }
 
     private var browserLayout: some View {

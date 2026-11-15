@@ -124,6 +124,8 @@ public enum PhoneAction: Sendable {
     case newTab, fullscreen
     case selectTab(Int), closeTab(Int)
     case toggle(HudPanelKind)
+    /// Show one panel alone on the glasses, or put the set back if it already is.
+    case solo(HudPanelKind)
 }
 
 /// The icon row: the browser's own controls, the keyboard, and the gear.
@@ -269,6 +271,7 @@ public struct SystemKeyboardStandIn: View {
 /// right thing to lose.
 public struct SettingsArea: View {
     public var visible: Set<HudPanelKind>
+    public var solo: HudPanelKind?
     public var glassesConnected: Bool
     public var tabs: [String]
     public var activeTab: Int
@@ -276,12 +279,14 @@ public struct SettingsArea: View {
     public var action: (PhoneAction) -> Void
 
     public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
+                solo: HudPanelKind? = nil,
                 glassesConnected: Bool = true,
                 tabs: [String] = ["New Tab"],
                 activeTab: Int = 0,
                 fullscreen: Bool = false,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.visible = visible
+        self.solo = solo
         self.glassesConnected = glassesConnected
         self.tabs = tabs
         self.activeTab = activeTab
@@ -292,7 +297,7 @@ public struct SettingsArea: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("ON THE GLASSES").hudLabel()
+                Text(solo == nil ? "ON THE GLASSES" : "ALONE ON THE GLASSES").hudLabel()
                 Spacer()
                 HStack(spacing: 6) {
                     Circle()
@@ -399,26 +404,37 @@ public struct SettingsArea: View {
         }
     }
 
+    /// Tap to put a panel on the glasses or take it off. Hold to show it alone, filling the
+    /// glasses; while one is alone, a tap on another swaps it in and a tap on the same one puts
+    /// the set back.
     private func tile(_ kind: HudPanelKind) -> some View {
-        let on = visible.contains(kind)
-        return Button { action(.toggle(kind)) } label: {
-            VStack(spacing: 8) {
-                Image(systemName: kind.symbol)
-                    .font(.system(size: 22, weight: .medium))
-                Text(kind.rawValue.uppercased())
-                    .font(HudTheme.mont(9, .black))
-                    .tracking(1.5)
-            }
-            .foregroundStyle(on ? HudTheme.ink : HudTheme.inkFaint)
-            .frame(maxWidth: .infinity)
-            .frame(height: 74)
-            .background(on ? Color.white.opacity(0.07) : HudTheme.surface)
-            .overlay(alignment: .top) {
-                Rectangle().fill(on ? HudTheme.accent : .clear).frame(height: 2)
-            }
-            .contentShape(Rectangle())
+        let alone = solo == kind
+        let on = solo == nil ? visible.contains(kind) : alone
+        return VStack(spacing: 8) {
+            Image(systemName: alone ? "arrow.up.left.and.arrow.down.right" : kind.symbol)
+                .font(.system(size: 22, weight: .medium))
+            Text(kind.rawValue.uppercased())
+                .font(HudTheme.mont(9, .black))
+                .tracking(1.5)
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(alone ? HudTheme.accent : on ? HudTheme.ink : HudTheme.inkFaint)
+        .frame(maxWidth: .infinity)
+        .frame(height: 74)
+        .background(alone ? HudTheme.accent.opacity(0.14)
+                    : on ? Color.white.opacity(0.07) : HudTheme.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(on ? HudTheme.accent : .clear).frame(height: 2)
+        }
+        .overlay {
+            if alone { Rectangle().strokeBorder(HudTheme.accent.opacity(0.6), lineWidth: 1) }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { action(.toggle(kind)) }
+        .onLongPressGesture(minimumDuration: 0.4) { action(.solo(kind)) }
+        .sensoryFeedback(.impact(weight: .medium), trigger: alone)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Hold to show it alone")
+        .accessibilityAction(named: "Show alone") { action(.solo(kind)) }
     }
 }
 
@@ -434,6 +450,7 @@ public struct PhoneScreen: View {
     public var cornerPressed: Bool
     public var keyboardUp: Bool
     public var predictiveBar: Bool
+    public var solo: HudPanelKind?
     public var time: String
 
     public init(surface: CGImage,
@@ -441,12 +458,14 @@ public struct PhoneScreen: View {
                 cornerPressed: Bool = false,
                 keyboardUp: Bool = false,
                 predictiveBar: Bool = false,
+                solo: HudPanelKind? = nil,
                 time: String = "9:41") {
         self.surface = surface
         self.railActive = railActive
         self.cornerPressed = cornerPressed
         self.keyboardUp = keyboardUp
         self.predictiveBar = predictiveBar
+        self.solo = solo
         self.time = time
     }
 
@@ -465,7 +484,7 @@ public struct PhoneScreen: View {
             // collapses rather than leaving a clipped sliver of a heading behind.
             let settings = max(0, PhoneMetrics.settingsHeight(keyboard: keyboardHeight))
             if settings >= 44 {
-                SettingsArea(visible: [.browser, .map, .clock],
+                SettingsArea(visible: [.browser, .map, .clock], solo: solo,
                              tabs: ["YouTube", "Google", "Xreal Air 2 Ultra"], activeTab: 0)
                     .frame(height: settings, alignment: .top).clipped()
             } else {
