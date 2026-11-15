@@ -27,6 +27,8 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
         public var duration: Double = 0
         public var isAd = false
         public var canSkipAd = false
+        /// Why there is no picture, when there is none: YouTube's own message, or ours.
+        public var notice = ""
     }
 
     public let webView: WKWebView
@@ -35,6 +37,7 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
     public var onChange: ((State) -> Void)?
     private var pollTimer: Timer?
     private var loadedId = ""
+    private var loadedAt = Date()
 
     public override init() {
         let configuration = WKWebViewConfiguration()
@@ -55,6 +58,21 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.overrideUserInterfaceStyle = .dark
         webView.isUserInteractionEnabled = false
+        if #available(iOS 16.4, *) {
+            // Safari on a Mac can look inside, when something goes wrong on the glasses.
+            webView.isInspectable = true
+        }
+    }
+
+    /// What to say when the page plays no picture.
+    private static func notice(_ d: [String: Any], loadedFor seconds: TimeInterval) -> String {
+        if let error = d["error"] as? String, !error.isEmpty { return error }
+        let hasVideo = d["video"] as? Bool ?? false
+        if !hasVideo { return seconds > 10 ? "YouTube showed no player" : "" }
+        let width = d["w"] as? Double ?? 0
+        let time = d["t"] as? Double ?? 0
+        if width == 0 && time > 2 { return "Playing without a picture" }
+        return ""
     }
 
     // ------------------------------------------------------------------ playing
@@ -62,6 +80,7 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
     public func play(_ id: String) {
         guard let url = URL(string: "https://www.youtube.com/watch?v=\(id)") else { return }
         loadedId = id
+        loadedAt = Date()
         state = State()
         state.videoId = id
         state.hasVideo = true
@@ -149,6 +168,7 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
                 }
                 if let title = d["title"] as? String, !title.isEmpty, !next.isAd { next.title = title }
                 if let channel = d["channel"] as? String, !channel.isEmpty { next.channel = channel }
+                next.notice = Self.notice(d, loadedFor: Date().timeIntervalSince(self.loadedAt))
                 guard next != self.state else { return }
                 self.state = next
                 self.onChange?(next)
@@ -186,8 +206,13 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
         '#movie_player, #movie_player.html5-video-player { position: fixed !important; left: 0 !important;' +
         ' top: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 2147483646 !important;' +
         ' background: #000 !important; }' +
-        '#movie_player video { width: 100% !important; height: 100% !important; left: 0 !important;' +
-        ' top: 0 !important; object-fit: contain !important; }';
+        // The video's own box has no height of its own (YouTube sizes the video in pixels from
+        // script), so a percentage would be of nothing: the viewport is the measure.
+        '#movie_player .html5-video-container { position: absolute !important; left: 0 !important;' +
+        ' top: 0 !important; width: 100vw !important; height: 100vh !important; }' +
+        '#movie_player video, #movie_player video.html5-main-video { position: absolute !important;' +
+        ' left: 0 !important; top: 0 !important; width: 100vw !important; height: 100vh !important;' +
+        ' object-fit: contain !important; visibility: visible !important; opacity: 1 !important; }';
       function add() {
         if (document.getElementById('__hud_player_only')) return;
         var s = document.createElement('style');
@@ -215,7 +240,10 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
       var id = '';
       try { id = new URL(location.href).searchParams.get('v') || ''; } catch (e) {}
       var d = v && isFinite(v.duration) ? v.duration : 0;
+      var err = document.querySelector('.ytp-error-content-wrap-reason, .ytp-error .ytp-error-content, yt-playability-error-supported-renderers #reason, ytd-enforcement-message-view-model');
+      var errText = err && err.textContent ? err.textContent.trim().replace(/\\s+/g, ' ').slice(0, 120) : '';
       return JSON.stringify({
+        video: !!v, w: v ? v.videoWidth : 0, error: errText,
         playing: !!v && !v.paused && !v.ended,
         ended: !!v && v.ended,
         t: v ? v.currentTime : 0, d: d,

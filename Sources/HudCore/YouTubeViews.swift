@@ -169,8 +169,7 @@ public struct YouTubeWidget: View {
     }
 }
 
-/// The player's page, always laid out at one size and scaled to fit, so YouTube never reflows
-/// its player as the video moves between a slot, a tile and the player page.
+/// The player's page in a 16:9 box, as large as fits.
 struct PlayerFrame: View {
     var content: AnyView?
     var standIn: Bool
@@ -183,9 +182,9 @@ struct PlayerFrame: View {
             ZStack {
                 Color.black
                 if let content {
+                    // At its real size, as the browser is: WebKit draws video in a layer of its
+                    // own, and a transform over it is asking for trouble. The page fits itself.
                     content
-                        .frame(width: Self.native.width, height: Self.native.height)
-                        .scaleEffect(scale)
                         .frame(width: Self.native.width * scale, height: Self.native.height * scale)
                 } else if standIn {
                     StandInFrame()
@@ -326,7 +325,11 @@ public struct YouTubeApp: View {
                     .background(youtube.isAd ? HudTheme.accent : Color(red: 0.9, green: 0.2, blue: 0.2), in: Capsule())
                     .padding(22)
             }
-            if youtube.hasVideo && !youtube.isPlaying {
+            if !youtube.notice.isEmpty {
+                Text(youtube.notice).font(HudTheme.mont(26, .semibold)).foregroundStyle(HudTheme.inkDim)
+                    .multilineTextAlignment(.center).padding(60)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if youtube.hasVideo && !youtube.isPlaying {
                 Image(systemName: "pause.fill").font(.system(size: 90, weight: .bold))
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

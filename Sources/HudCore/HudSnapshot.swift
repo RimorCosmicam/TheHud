@@ -374,6 +374,8 @@ public struct HudSnapshot: Sendable {
         /// An advert is playing in place of the video, and whether it can be skipped yet.
         public var isAd = false
         public var canSkipAd = false
+        /// Why the video shows no picture, when it shows none.
+        public var notice = ""
 
         public var page: Page = .browse
         public var tab: Tab = .home

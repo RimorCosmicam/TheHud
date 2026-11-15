@@ -854,6 +854,10 @@ public struct YouTubeControls: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
+                if !youtube.notice.isEmpty {
+                    Text(youtube.notice).font(HudTheme.mont(11, .semibold)).foregroundStyle(HudTheme.accent)
+                        .lineLimit(1)
+                }
                 Text(youtube.hasVideo ? youtube.title : "Pick something below, or search")
                     .font(HudTheme.mont(15, youtube.hasVideo ? .black : .semibold))
                     .foregroundStyle(youtube.hasVideo ? HudTheme.ink : HudTheme.inkFaint)

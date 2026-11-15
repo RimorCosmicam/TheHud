@@ -1100,6 +1100,7 @@ final class HudController: ObservableObject {
         youtube.isPlaying = state.isPlaying
         youtube.isAd = state.isAd
         youtube.canSkipAd = state.canSkipAd
+        youtube.notice = state.notice
         if !state.isAd {
             youtube.elapsed = state.elapsed
             youtube.duration = state.duration
