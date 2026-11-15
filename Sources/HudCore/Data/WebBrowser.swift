@@ -431,6 +431,21 @@ public final class WebHostController: UIViewController {
         self.view = view
     }
 
+    /// Told when this frame comes onto or leaves the screen.
+    var onWindowChange: (() -> Void)?
+
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onWindowChange?()
+    }
+
+    public override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Let a frame still on screen have it; this one is going.
+        let change = onWindowChange
+        DispatchQueue.main.async { change?() }
+    }
+
     /// The web view is re-parented rather than recreated, so switching tabs or unplugging the
     /// glasses finds each page where it was left.
     func show(_ webView: WKWebView, force: Bool = false) {

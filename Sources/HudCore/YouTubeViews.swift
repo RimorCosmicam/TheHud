@@ -110,7 +110,11 @@ public struct YouTubeWidget: View {
                 .padding(.horizontal, 20).padding(.top, 34).padding(.bottom, 18)
                 .background(LinearGradient(colors: [.black.opacity(0), .black.opacity(0.85)],
                                            startPoint: .top, endPoint: .bottom))
-                if !youtube.isPlaying {
+                if !youtube.notice.isEmpty {
+                    Text(youtube.notice).font(HudTheme.mont(16, .semibold)).foregroundStyle(HudTheme.inkDim)
+                        .multilineTextAlignment(.center).padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !youtube.isPlaying {
                     Image(systemName: "pause.fill").font(.system(size: 44, weight: .bold))
                         .foregroundStyle(.white.opacity(0.9))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

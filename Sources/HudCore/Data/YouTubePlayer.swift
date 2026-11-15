@@ -36,6 +36,10 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
     /// Called whenever the page's state changes.
     public var onChange: ((State) -> Void)?
     private var pollTimer: Timer?
+    /// Every frame the video has been put in, newest last. Only one can hold it; when the one
+    /// holding it leaves the screen, the newest still on screen takes it.
+    private var hosts: [Weak] = []
+    private struct Weak { weak var host: WebHostController? }
     private var loadedId = ""
     private var loadedAt = Date()
 
@@ -141,7 +145,25 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
         }
     }
 
+    /// A frame for the video came onto the canvas.
+    func register(_ host: WebHostController) {
+        hosts.removeAll { $0.host == nil || $0.host === host }
+        hosts.append(Weak(host: host))
+        host.onWindowChange = { [weak self] in self?.settle() }
+    }
+
+    /// Puts the video in the newest frame that is on screen, if the one holding it is not. A
+    /// frame going away as another arrives can otherwise take the video with it, leaving the
+    /// new frame black.
+    func settle() {
+        if webView.window != nil, webView.superview?.window != nil { return }
+        hosts.removeAll { $0.host == nil }
+        guard let host = hosts.last(where: { $0.host?.view.window != nil })?.host else { return }
+        host.show(webView, force: true)
+    }
+
     private func poll() {
+        settle()
         // While a new page loads, the old one would still answer with the old video.
         guard !loadedId.isEmpty, !webView.isLoading else { return }
         webView.evaluateJavaScript(Self.reading) { [weak self] result, _ in
@@ -300,6 +322,7 @@ public struct YouTubePlayerView: UIViewControllerRepresentable {
     public func makeUIViewController(context: Context) -> WebHostController { WebHostController() }
 
     public func updateUIViewController(_ host: WebHostController, context: Context) {
+        player.register(host)
         host.show(player.webView)
     }
 }
