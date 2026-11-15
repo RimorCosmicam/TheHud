@@ -66,20 +66,21 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         configuration.userContentController.addUserScript(
             WKUserScript(source: Self.darkFallback, injectionTime: .atDocumentEnd,
                          forMainFrameOnly: false))
-        configuration.userContentController.addUserScript(
-            WKUserScript(source: Self.fullscreenShim, injectionTime: .atDocumentStart,
-                         forMainFrameOnly: true))
-        configuration.userContentController.addUserScript(
-            WKUserScript(source: PageScripts.bridge(inset: BrowserMetrics.contentTopInset),
-                         injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        let relay = MessageRelay()
-        configuration.userContentController.add(relay, name: "hudFullscreen")
+        // WebKit's own element fullscreen, the one Safari uses: YouTube and every other player
+        // get the real Fullscreen API, `:fullscreen` styles and all. WebKit lifts the web view
+        // into a fullscreen window on the scene it is in, which is the glasses.
+        configuration.preferences.isElementFullscreenEnabled = true
+        if #unavailable(iOS 26.0) {
+            // Before `obscuredContentInsets`, the page's fixed bars have to be moved by hand.
+            configuration.userContentController.addUserScript(
+                WKUserScript(source: PageScripts.bridge(inset: BrowserMetrics.contentTopInset),
+                             injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
 
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1352, height: 821),
                             configuration: configuration)
         super.init()
         home.browser = self
-        relay.browser = self
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -91,11 +92,17 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         // The glasses take no touches; the phone's cursor is the only way in.
         webView.isUserInteractionEnabled = false
 
-        // The page starts below the glass bar and scrolls up underneath it: a plain content
-        // inset, which WebKit honours everywhere. Fixed headers are the page's business, and
-        // `PageScripts.bridge` moves them down to meet the bar.
+        // The glass bar covers the top of the page. Telling WebKit so is what Safari does: the
+        // page starts below the bar, scrolls up under it, and the page's own fixed headers sit
+        // below it with the content running under them.
+        // Safari sets both: a fixed content inset for where the page starts, and the obscured
+        // inset for where WebKit lays out the page's fixed elements.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         applyChromeInset(BrowserMetrics.contentTopInset)
+        if #available(iOS 26.0, *) {
+            webView.obscuredContentInsets = UIEdgeInsets(top: BrowserMetrics.contentTopInset,
+                                                         left: 0, bottom: 0, right: 0)
+        }
 
         observations = [
             webView.observe(\.title) { [weak self] _, _ in self?.refresh() },
@@ -104,6 +111,7 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             webView.observe(\.canGoForward) { [weak self] _, _ in self?.refresh() },
             webView.observe(\.estimatedProgress) { [weak self] _, _ in self?.refresh() },
             webView.observe(\.isLoading) { [weak self] _, _ in self?.refresh() },
+            webView.observe(\.fullscreenState) { [weak self] _, _ in self?.fullscreenStateChanged() },
         ]
     }
 
@@ -133,39 +141,48 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     // ------------------------------------------------------------------ fullscreen
 
-    /// No bar over a fullscreen video, so nothing to keep the page clear of.
-    fileprivate func fullscreenChanged(_ on: Bool) {
-        guard on != state.isFullscreen else { return }
-        state.isFullscreen = on
-        applyChromeInset(on ? 0 : BrowserMetrics.contentTopInset)
+    /// The host the web view lives in when it is not fullscreen. WebKit takes the view out
+    /// for fullscreen and puts it back where it found it, which may be a host SwiftUI has since
+    /// thrown away; this is where it really belongs.
+    weak var host: WebHostController?
+
+    nonisolated private func fullscreenStateChanged() {
+        MainActor.assumeIsolated {
+            let on = webView.fullscreenState != .notInFullscreen
+            if !on, webView.fullscreenState == .notInFullscreen {
+                // Once WebKit has finished putting it back.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.host?.show(self.webView, force: true)
+                }
+            }
+            guard on != state.isFullscreen else { return }
+            state.isFullscreen = on
+        }
     }
 
-    /// How much of the top the bar covers: the scroll view starts the page below it, and the
-    /// page's own fixed bars are told to sit below it too.
+    /// Where the page starts: below the bar, scrolling up under it.
     private func applyChromeInset(_ top: CGFloat) {
         let scrollView = webView.scrollView
-        let atTop = scrollView.contentOffset.y <= -scrollView.contentInset.top + 1
         let insets = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
         scrollView.contentInset = insets
         scrollView.verticalScrollIndicatorInsets = insets
-        if atTop { scrollView.contentOffset = CGPoint(x: scrollView.contentOffset.x, y: -top) }
-        webView.evaluateJavaScript("window.__hudSetTopInset && window.__hudSetTopInset(\(Double(top)));",
-                                   completionHandler: nil)
+        scrollView.contentOffset = CGPoint(x: scrollView.contentOffset.x, y: -top)
     }
 
-    /// From the phone: leave fullscreen, or put the page's video (the player around it, where
-    /// there is one, so its own controls come too) into fullscreen.
+    /// From the phone: leave fullscreen, or put the page's video player into it.
     public func toggleFullscreen() {
         if state.isFullscreen {
-            webView.evaluateJavaScript("window.__hudExitFullscreen && window.__hudExitFullscreen();",
+            webView.evaluateJavaScript("document.exitFullscreen && document.exitFullscreen();",
                                        completionHandler: nil)
+            webView.closeAllMediaPresentations {}
         } else {
             webView.evaluateJavaScript("""
             (function () {
               var v = document.querySelector('video');
               var el = v ? (v.closest('#movie_player, .html5-video-player, [data-player]') || v)
                          : document.documentElement;
-              el.requestFullscreen();
+              (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
             })();
             """, completionHandler: nil)
         }
@@ -303,87 +320,6 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         return nil
     }
 
-    /// Element fullscreen for an iPhone web view that has none of its own.
-    ///
-    /// iOS would either refuse (`requestFullscreen` does not exist on iPhone) or hand a video to
-    /// the system player — on the phone's screen, not the glasses. So the page gets a stand-in:
-    /// the element is pinned over the whole viewport, the document reports it as the fullscreen
-    /// element and fires the usual events, so players such as YouTube's switch to their own
-    /// fullscreen layout, and the app is told so it can give the browser the whole canvas.
-    private static let fullscreenShim = """
-    (function () {
-      if (window.__hudFullscreen) return;
-      window.__hudFullscreen = true;
-      var current = null, saved = null, savedRoot = '';
-      function post(on) {
-        try { window.webkit.messageHandlers.hudFullscreen.postMessage(on); } catch (e) {}
-      }
-      function fire(el) {
-        ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (t) {
-          var target = (el && el.isConnected) ? el : document;
-          target.dispatchEvent(new Event(t, {bubbles: true}));
-        });
-      }
-      function enter(el) {
-        if (current === el) return Promise.resolve();
-        if (current) exit();
-        current = el;
-        saved = el.getAttribute('style');
-        el.style.cssText += ';position:fixed!important;left:0!important;top:0!important;' +
-          'width:100vw!important;height:100vh!important;max-width:none!important;' +
-          'max-height:none!important;margin:0!important;transform:none!important;' +
-          'z-index:2147483647!important;background:#000!important';
-        savedRoot = document.documentElement.style.overflow;
-        document.documentElement.style.overflow = 'hidden';
-        post(true);
-        fire(el);
-        setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 60);
-        return Promise.resolve();
-      }
-      function exit() {
-        if (!current) return Promise.resolve();
-        var el = current;
-        current = null;
-        if (saved === null) el.removeAttribute('style'); else el.setAttribute('style', saved);
-        el.removeAttribute('data-hud-top');
-        document.documentElement.style.overflow = savedRoot;
-        post(false);
-        fire(el);
-        setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 60);
-        return Promise.resolve();
-      }
-      function getter(name, fn) {
-        try { Object.defineProperty(document, name, {get: fn, configurable: true}); } catch (e) {}
-      }
-      getter('fullscreenElement', function () { return current; });
-      getter('webkitFullscreenElement', function () { return current; });
-      getter('webkitCurrentFullScreenElement', function () { return current; });
-      getter('fullscreenEnabled', function () { return true; });
-      getter('webkitFullscreenEnabled', function () { return true; });
-      getter('webkitFullScreenKeyboardInputAllowed', function () { return true; });
-      getter('fullscreen', function () { return !!current; });
-      getter('webkitIsFullScreen', function () { return !!current; });
-      Element.prototype.requestFullscreen = function () { return enter(this); };
-      Element.prototype.webkitRequestFullscreen = Element.prototype.requestFullscreen;
-      Element.prototype.webkitRequestFullScreen = Element.prototype.requestFullscreen;
-      if (window.HTMLVideoElement) {
-        HTMLVideoElement.prototype.webkitEnterFullscreen = function () { enter(this); };
-        HTMLVideoElement.prototype.webkitEnterFullScreen = HTMLVideoElement.prototype.webkitEnterFullscreen;
-        HTMLVideoElement.prototype.webkitExitFullscreen = function () { exit(); };
-        try {
-          Object.defineProperty(HTMLVideoElement.prototype, 'webkitSupportsFullscreen',
-                                {get: function () { return true; }, configurable: true});
-        } catch (e) {}
-      }
-      document.exitFullscreen = exit;
-      document.webkitExitFullscreen = exit;
-      document.webkitCancelFullScreen = exit;
-      window.__hudExitFullscreen = exit;
-      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') exit(); }, true);
-      window.addEventListener('pagehide', function () { if (current) post(false); });
-    })();
-    """
-
     // ------------------------------------------------------------------ keyboard
 
     /// Text typed on the phone, into whatever the page has focused.
@@ -451,17 +387,6 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     """
 }
 
-/// Relays the page's fullscreen messages without the content controller holding the browser.
-private final class MessageRelay: NSObject, WKScriptMessageHandler {
-    weak var browser: WebBrowser?
-
-    func userContentController(_ controller: WKUserContentController,
-                               didReceive message: WKScriptMessage) {
-        let on = (message.body as? Bool) ?? ((message.body as? NSNumber)?.boolValue ?? false)
-        MainActor.assumeIsolated { browser?.fullscreenChanged(on) }
-    }
-}
-
 /// Serves `thehud://home`.
 private final class HomeSchemeHandler: NSObject, WKURLSchemeHandler {
     weak var browser: WebBrowser?
@@ -493,6 +418,7 @@ public struct WebBrowserView: UIViewControllerRepresentable {
     }
 
     public func updateUIViewController(_ host: WebHostController, context: Context) {
+        browser.host = host
         host.show(browser.webView)
     }
 }
@@ -507,8 +433,11 @@ public final class WebHostController: UIViewController {
 
     /// The web view is re-parented rather than recreated, so switching tabs or unplugging the
     /// glasses finds each page where it was left.
-    func show(_ webView: WKWebView) {
+    func show(_ webView: WKWebView, force: Bool = false) {
         guard webView.superview !== view else { return }
+        // While WebKit has it in its fullscreen window, taking it back would tear the video
+        // out of fullscreen and leave that window black.
+        guard force || webView.fullscreenState == .notInFullscreen else { return }
         view.subviews.forEach { $0.removeFromSuperview() }
         webView.removeFromSuperview()
         webView.frame = view.bounds
