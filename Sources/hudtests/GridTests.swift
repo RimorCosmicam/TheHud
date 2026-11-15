@@ -22,9 +22,58 @@ func runGridTests() {
         // DESK: the Mac over the right, so those widgets are covered.
         let desk = GlassesLayout(arrangement: HudScene.presets[0].arrangement)
         expectEqual(Set(desk.widgetFrames.map(\.kind)), [.clock, .weather, .note])
-        // STREET: the middle is empty, to see the street.
-        expect(GlassesLayout(arrangement: HudScene.presets[1].arrangement).bigFrames.isEmpty,
-               "nothing in the middle out walking")
+        // STREET: one row along the top, one app under it, no columns.
+        let street = GlassesLayout(arrangement: HudScene.presets[1].arrangement)
+        expectEqual(street.widgetFrames.map(\.kind), [.clock, .weather, .map, .music])
+        expect(Set(street.widgetFrames.map(\.frame.minY)).count == 1, "all in one row")
+        expectEqual(street.bigFrames.map(\.kind), [.browser])
+        expectEqual(street.bigFrames.first?.frame.width, GlassesLayout.safeFrame.width)
+    }
+
+    test("row layout: four along an edge, one app in the rest, columns kept for coming back") {
+        var a = HudScene.presets[0].arrangement   // DESK: browser, and the Mac over the right
+        let columns = a
+        a.setStrip(.bottom)
+        let row = GlassesLayout(arrangement: a)
+        expectEqual(row.widgetFrames.count, 4)
+        let main = GlassesLayout.rowMain(along: .bottom)
+        for (_, frame) in row.widgetFrames {
+            expect(!frame.intersects(main), "widgets clear of the app")
+            expectEqual(frame.maxY, GlassesLayout.safeFrame.maxY)
+        }
+        expectEqual(row.bigFrames.map(\.kind), [.browser])
+        expectEqual(row.bigFrames.first?.frame, main)
+        // The Mac waits behind the browser; dropping it brings it to the front.
+        expect(!a.isPlaced(.mac), "only one app in the row layout")
+        a.place(.mac, at: .middle)
+        expectEqual(GlassesLayout(arrangement: a).bigFrames.map(\.kind), [.mac])
+        // Widgets swap along the row; one from the drawer replaces what was there.
+        let first = a.row[0]
+        a.place(.captions, at: .row(0))
+        expectEqual(a.row[0], .captions)
+        expect(first.map { !a.isPlaced($0) } ?? true, "replaced one goes back to the icons")
+        // A click lands on what is drawn there.
+        let hit = GlassesLayout(arrangement: a).hitTest(CGPoint(x: GlassesLayout.rowFrame(0, along: .bottom).midX,
+                                                                  y: GlassesLayout.rowFrame(0, along: .bottom).midY))
+        if case let .widget(kind, _, _) = hit { expectEqual(kind, .captions) } else { expect(false, "\(hit)") }
+        // Back to columns: as they were, the Mac back over the right.
+        a.setStrip(nil)
+        expectEqual(a.left, columns.left)
+        expectEqual(a.right, columns.right)
+        expect(a.bigs.contains { $0.kind == .mac && $0.side == .right }, "Mac keeps its side")
+        // Older saves have no row: they read as columns.
+        let old = try! JSONSerialization.data(withJSONObject: ["left": ["clock"], "right": [], "bigs": [], "hidden": []])
+        let decoded = try? JSONDecoder().decode(HudArrangement.self, from: old)
+        expectEqual(decoded?.strip, nil)
+        expectEqual(decoded?.row.count, HudArrangement.rowSlots)
+    }
+
+    test("the miniature's row: drops by column, the rest is the app") {
+        let mini = MiniLayout(size: CGSize(width: 360, height: 104), strip: .top)
+        expectEqual(mini.spot(at: CGPoint(x: 10, y: 5)), .row(0))
+        expectEqual(mini.spot(at: CGPoint(x: 350, y: 5)), .row(3))
+        expectEqual(mini.spot(at: CGPoint(x: 180, y: 90)), .middle)
+        expect(!mini.rowSlot(0).intersects(mini.middle), "row clear of the app")
     }
 
     test("the browser dropped on a side in the miniature takes it over, and back") {

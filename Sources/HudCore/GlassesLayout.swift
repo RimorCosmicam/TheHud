@@ -157,6 +157,26 @@ public struct GlassesLayout: Sendable {
                       height: HudTheme.glassesSize.height - inset * 2)
     }
 
+    /// The row layout's band of widgets: shorter than a column slot, so the app under or over
+    /// it keeps most of the view.
+    public static let rowHeight: CGFloat = 270
+
+    public static func rowFrame(_ index: Int, along edge: HudEdge) -> CGRect {
+        let safe = safeFrame
+        let count = CGFloat(HudArrangement.rowSlots)
+        let width = (safe.width - gap * (count - 1)) / count
+        return CGRect(x: safe.minX + CGFloat(index) * (width + gap),
+                      y: edge == .top ? safe.minY : safe.maxY - rowHeight,
+                      width: width, height: rowHeight)
+    }
+
+    /// Everything the row leaves: the one big panel's place.
+    public static func rowMain(along edge: HudEdge) -> CGRect {
+        let safe = safeFrame
+        return CGRect(x: safe.minX, y: edge == .top ? safe.minY + rowHeight + gap : safe.minY,
+                      width: safe.width, height: safe.height - rowHeight - gap)
+    }
+
     public static func slotFrame(_ side: HudSide, _ index: Int) -> CGRect {
         let safe = safeFrame
         let x = side == .left ? safe.minX : safe.maxX - slotWidth
@@ -177,6 +197,9 @@ public struct GlassesLayout: Sendable {
     /// The widgets on the canvas and where: not hidden, not under a big panel's side.
     public var widgetFrames: [(kind: HudPanelKind, frame: CGRect)] {
         guard drawsArrangement else { return [] }
+        if let edge = arrangement.strip {
+            return arrangement.shownRow.map { ($0.kind, Self.rowFrame($0.index, along: edge)) }
+        }
         return arrangement.shownWidgets.map { ($0.kind, Self.slotFrame($0.side, $0.index)) }
     }
 
@@ -189,6 +212,7 @@ public struct GlassesLayout: Sendable {
         }
         let bigs = arrangement.orderedBigs
         guard !bigs.isEmpty else { return [] }
+        if let edge = arrangement.strip { return [(bigs[0].kind, Self.rowMain(along: edge))] }
         let span = Self.bigSpan(taking: arrangement.takenSides)
         let width = (span.width - Self.gap * CGFloat(bigs.count - 1)) / CGFloat(bigs.count)
         return bigs.enumerated().map { index, big in

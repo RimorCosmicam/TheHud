@@ -135,6 +135,8 @@ public enum PhoneAction: Sendable {
     case place(HudPanelKind, HudSpot)
     /// Switch to one of the three scenes, or put one back as it was preset.
     case scene(Int), resetScene(Int)
+    /// Columns (nil), or a row of widgets along the top or bottom with one app in the rest.
+    case layout(HudEdge?)
     /// Stream one of the Mac's windows, by its place in the list; nil for the whole screen.
     case selectWindow(Int?)
     /// With the browser and the desktop both on: list the Mac's windows instead of the tabs.
@@ -465,19 +467,29 @@ public struct SettingsArea: View {
 
     private var miniature: some View {
         GeometryReader { geometry in
-            let mini = MiniLayout(size: geometry.size)
+            let mini = MiniLayout(size: geometry.size, strip: arrangement.strip)
             let target = dropTarget(mini)
             ZStack(alignment: .topLeading) {
-                ForEach(HudSide.allCases, id: \.self) { side in
-                    ForEach(0..<HudArrangement.slotsPerSide, id: \.self) { index in
-                        let frame = mini.slot(side, index)
-                        slot(arrangement.slots(side)[index],
-                             highlighted: target == .slot(side, index) && drag?.kind.isBig == false)
+                if arrangement.isRow {
+                    ForEach(0..<HudArrangement.rowSlots, id: \.self) { index in
+                        let frame = mini.rowSlot(index)
+                        slot(arrangement.row[index],
+                             highlighted: target == .row(index) && drag?.kind.isBig == false)
                             .frame(width: frame.width, height: frame.height)
                             .offset(x: frame.minX, y: frame.minY)
                     }
+                } else {
+                    ForEach(HudSide.allCases, id: \.self) { side in
+                        ForEach(0..<HudArrangement.slotsPerSide, id: \.self) { index in
+                            let frame = mini.slot(side, index)
+                            slot(arrangement.slots(side)[index],
+                                 highlighted: target == .slot(side, index) && drag?.kind.isBig == false)
+                                .frame(width: frame.width, height: frame.height)
+                                .offset(x: frame.minX, y: frame.minY)
+                        }
+                    }
                 }
-                if arrangement.bigs.isEmpty {
+                if mini.bigFrames(arrangement).isEmpty {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Color.white.opacity(editing ? 0.18 : 0.07),
                                       style: StrokeStyle(lineWidth: 1, dash: editing ? [4, 4] : []))
@@ -487,7 +499,7 @@ public struct SettingsArea: View {
                                 .foregroundStyle(HudTheme.inkFaint)
                         }
                         .frame(width: mini.middle.width, height: mini.middle.height)
-                        .offset(x: mini.middle.minX)
+                        .offset(x: mini.middle.minX, y: mini.middle.minY)
                 }
                 ForEach(mini.bigFrames(arrangement), id: \.kind) { kind, frame in
                     chip(kind, big: true)
@@ -511,7 +523,7 @@ public struct SettingsArea: View {
 
     private func bigTargetMark(_ target: HudSpot, _ mini: MiniLayout) -> some View {
         var frame = mini.middle
-        if case let .slot(side, _) = target {
+        if case let .slot(side, _) = target, mini.strip == nil {
             frame = side == .left
                 ? CGRect(x: 0, y: 0, width: mini.middle.maxX, height: mini.size.height)
                 : CGRect(x: mini.middle.minX, y: 0, width: mini.size.width - mini.middle.minX,
@@ -615,7 +627,7 @@ public struct SettingsArea: View {
 
     private func drop(_ kind: HudPanelKind, at location: CGPoint, removing: Bool = true) {
         if miniFrame.contains(location) {
-            let mini = MiniLayout(size: miniFrame.size)
+            let mini = MiniLayout(size: miniFrame.size, strip: arrangement.strip)
             let spot = mini.spot(at: CGPoint(x: location.x - miniFrame.minX,
                                              y: location.y - miniFrame.minY))
             if !kind.isBig, spot == .middle { return }
@@ -631,9 +643,9 @@ public struct SettingsArea: View {
     /// Everything not on the glasses, to drag on.
     private var tray: some View {
         VStack(alignment: .leading, spacing: 12) {
+            layoutChooser.padding(.top, 8)
             Text("DRAG ONTO THE GLASSES").font(HudTheme.mont(11, .black)).tracking(2)
                 .foregroundStyle(HudTheme.inkFaint)
-                .padding(.top, 8)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
                       spacing: 10) {
                 ForEach(arrangement.unplaced) { kind in
@@ -643,13 +655,39 @@ public struct SettingsArea: View {
                         .gesture(dragGesture(kind))
                 }
             }
-            Text("Drop on a slot to add or replace. Drag one off to remove it. Drop Browser or Mac on a side to take that side over.")
+            Text(arrangement.isRow
+                 ? "Drop on the row to add or replace. Drag one off to remove it. One app fills the rest: drop Browser or Mac there."
+                 : "Drop on a slot to add or replace. Drag one off to remove it. Drop Browser or Mac on a side to take that side over.")
                 .font(HudTheme.mont(11, .semibold))
                 .foregroundStyle(HudTheme.inkFaint)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
             Spacer(minLength: 0)
         }
+    }
+
+    /// Columns down both sides, or one row of widgets along the top or the bottom.
+    private var layoutChooser: some View {
+        HStack(spacing: 6) {
+            ForEach([HudEdge?.none, .top, .bottom], id: \.self) { edge in
+                let chosen = arrangement.strip == edge
+                Button { action(.layout(edge)) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: edge == nil ? "rectangle.split.3x1"
+                              : edge == .top ? "rectangle.tophalf.inset.filled" : "rectangle.bottomhalf.inset.filled")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(edge == nil ? "COLUMNS" : edge == .top ? "TOP ROW" : "BOTTOM ROW")
+                            .font(HudTheme.mont(10, .black)).tracking(1.2)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                    }
+                    .foregroundStyle(chosen ? Color.black : HudTheme.inkDim)
+                    .frame(maxWidth: .infinity).frame(height: 32)
+                    .background(chosen ? HudTheme.accent : Color.white.opacity(0.07), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sensoryFeedback(.selection, trigger: arrangement.strip)
     }
 
     @ViewBuilder

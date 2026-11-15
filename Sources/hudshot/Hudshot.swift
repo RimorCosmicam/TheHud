@@ -161,6 +161,18 @@ struct Hudshot {
         try write(GlassesScreen(snapshot: lookingUp, arrangement: fullGrid, solo: .sky),
                   to: outDir, "glasses-sky-wide", scale: 1)
 
+        // STREET: a row of widgets along the top, one app under it; and along the bottom.
+        let street = HudScene.presets[1].arrangement
+        try write(GlassesScreen(snapshot: skyStill, arrangement: street), to: outDir, "glasses-street", scale: 1)
+        var streetBottom = street
+        streetBottom.setStrip(.bottom)
+        streetBottom.toggleHidden(.browser)
+        try write(GlassesScreen(snapshot: skyStill, arrangement: streetBottom),
+                  to: outDir, "glasses-street-bottom", scale: 1)
+        try write(PhoneScreen(surface: plain, arrangement: street), to: outDir, "phone-street", scale: scale)
+        try write(PhoneScreen(surface: plain, arrangement: street, editing: true),
+                  to: outDir, "phone-street-arranging", scale: scale)
+
         // The phone's lower half: pointing it as a remote, and the fullscreen apps' own pads.
         try write(PhoneScreen(surface: touched, pad: .remote), to: outDir, "phone-remote", scale: scale)
         var phoneSky = skyStill

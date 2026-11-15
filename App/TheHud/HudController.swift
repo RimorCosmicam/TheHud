@@ -227,10 +227,17 @@ final class HudController: ObservableObject {
         let defaults = UserDefaults.standard
         let index = min(max(defaults.integer(forKey: sceneIndexKey), 0), HudScene.count - 1)
         if let data = defaults.data(forKey: scenesKey),
-           let stored = try? JSONDecoder().decode([HudScene].self, from: data),
+           var stored = try? JSONDecoder().decode([HudScene].self, from: data),
            stored.count == HudScene.count {
+            // STREET became a row of widgets: the saved one is brought up to it, once.
+            if defaults.integer(forKey: "scenesVersion") < 2 {
+                stored[1] = HudScene.presets[1]
+                defaults.set(2, forKey: "scenesVersion")
+                if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: scenesKey) }
+            }
             return (stored, index)
         }
+        defaults.set(2, forKey: "scenesVersion")
         var scenes = HudScene.presets
         if let data = defaults.data(forKey: "arrangement"),
            let old = try? JSONDecoder().decode(HudArrangement.self, from: data) {
@@ -651,6 +658,8 @@ final class HudController: ObservableObject {
             switchScene(to: index)
         case let .resetScene(index):
             resetScene(index)
+        case let .layout(edge):
+            arrangement.setStrip(edge)
         case let .pad(choice):
             switch choice {
             case .app:
