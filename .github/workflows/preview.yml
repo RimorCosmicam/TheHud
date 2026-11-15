@@ -85,6 +85,12 @@ jobs:
           done
           test -f "Payload/TheHud.app/$(plutil -extract CFBundleExecutable raw -o - "$PLIST")" \
             || { echo "::error::the executable named by CFBundleExecutable is not there"; exit 1; }
+          # The icon: actool must have merged CFBundleIcons in and compiled Assets.car.
+          plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw -o - "$PLIST" \
+            || { echo "::error::no app icon in Info.plist"; plutil -p "$PLIST"; exit 1; }
+          test -f Payload/TheHud.app/Assets.car \
+            || { echo "::error::Assets.car missing"; exit 1; }
+          echo "ok  icon"
 
       - uses: actions/upload-artifact@v4
         with:
