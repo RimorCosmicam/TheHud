@@ -148,7 +148,8 @@ class LocationProvider(private val context: Context, private val onUpdate: (HudS
 }
 
 /**
- * The minimap's ground: CARTO's dark map tiles, stitched into one square raster around a point.
+ * The minimap's ground: OpenStreetMap's own tiles, free and keyless, stitched into one square raster
+ * around a point and turned dark as they are drawn.
  * Dark because black is transparent on the glasses. Only the raster comes from here; the route,
  * the cone and the marks are drawn over it, so a slow or failed fetch loses none of them.
  */
@@ -175,14 +176,22 @@ object MapGround {
         val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawColor(android.graphics.Color.BLACK)
-        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        // OSM's map is light; on the glasses black is see-through and white glares. Inverted and
+        // dimmed, roads are pale lines on black and the map reads like a night map.
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+            val dim = 0.62f
+            colorFilter = android.graphics.ColorMatrixColorFilter(floatArrayOf(
+                -dim, 0f, 0f, 0f, 255f * dim,
+                0f, -dim, 0f, 0f, 255f * dim,
+                0f, 0f, -dim, 0f, 255f * dim,
+                0f, 0f, 0f, 1f, 0f))
+        }
         val tiles = coroutineScope {
             (tx0..tx1).flatMap { tx -> (ty0..ty1).map { ty -> tx to ty } }.map { (tx, ty) ->
                 async {
                     if (ty < 0 || ty >= n) return@async null
                     val x = ((tx % n) + n) % n
-                    val host = "abcd"[(x + ty) % 4]
-                    tile("https://$host.basemaps.cartocdn.com/dark_all/$z/$x/$ty@2x.png")?.let { Triple(tx, ty, it) }
+                    tile("https://tile.openstreetmap.org/$z/$x/$ty.png")?.let { Triple(tx, ty, it) }
                 }
             }.awaitAll()
         }
@@ -200,7 +209,9 @@ object MapGround {
 
     private fun tile(url: String): Bitmap? = runCatching {
         val c = URL(url).openConnection() as HttpURLConnection
-        c.setRequestProperty("User-Agent", "TheHud")
+        // OSM's tile policy asks for an app's own name, and tiles are cached as it also asks.
+        c.setRequestProperty("User-Agent", "TheHud/1.0 (Android)")
+        c.useCaches = true
         c.connectTimeout = 10_000; c.readTimeout = 10_000
         if (c.responseCode != 200) null else c.inputStream.use { BitmapFactory.decodeStream(it) }
     }.getOrNull()

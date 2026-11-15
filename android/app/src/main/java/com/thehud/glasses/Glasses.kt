@@ -126,6 +126,7 @@ private class GlassesPresentation(context: Context, display: Display) : Presenta
         }
         owner.resume()
         setContentView(ComposeView(context).apply { setContent { GlassesRoot() } })
+        window?.let(::immersive)
     }
 
     override fun onStop() {
@@ -141,6 +142,7 @@ private class GlassesPresentation(context: Context, display: Display) : Presenta
 object GlassesPresenter {
     private const val TAG = "Glasses"
     private var presentation: Presentation? = null
+    private var overlay: GlassesOverlay? = null
     private var shownOn: Int? = null
     private lateinit var app: Context
     private var phoneDisplays: () -> Set<Int> = { emptySet() }
@@ -174,7 +176,7 @@ object GlassesPresenter {
 
     /** Our window back over whatever app was started on the glasses. */
     fun raise() {
-        if (presentation != null) return
+        if (presentation != null || overlay != null) return
         val id = shownOn ?: return
         runCatching {
             val options = ActivityOptions.makeBasic().setLaunchDisplayId(id)
@@ -183,14 +185,31 @@ object GlassesPresenter {
         }
     }
 
+    /** The accessibility service came or went: the glasses move between the overlay and the presentation. */
+    fun serviceChanged() {
+        if (!::app.isInitialized) return
+        Handler(Looper.getMainLooper()).post { shownOn = null; refresh() }
+    }
+
     fun refresh() {
         val display = glassesDisplay()
-        if (display?.displayId == shownOn && presentation?.isShowing == true) return
+        val service = com.thehud.apps.HudAccessibility.instance
+        val upToDate = if (service != null) overlay != null else presentation?.isShowing == true
+        if (display?.displayId == shownOn && upToDate) return
         presentation?.dismiss()
         presentation = null
+        overlay?.remove()
+        overlay = null
         shownOn = null
         if (display == null) return
         Log.i(TAG, "Glasses on display ${display.displayId} (${display.name})")
+        // With TheHud's accessibility service on, an accessibility overlay: the one kind of window
+        // that sits above DeX's taskbar, so the glasses show only the HUD.
+        if (service != null) {
+            val shown = runCatching { GlassesOverlay(service, display) }
+                .onFailure { Log.w(TAG, "No overlay on ${display.displayId}", it) }.getOrNull()
+            if (shown != null) { overlay = shown; shownOn = display.displayId; return }
+        }
         // From the application rather than an activity: a window of its own, which stays up
         // whatever the cover screen does.
         val shown = runCatching { GlassesPresentation(app, display).also { it.show() } }
@@ -211,11 +230,63 @@ object GlassesPresenter {
     }
 }
 
+/** The glasses as an accessibility overlay: above everything on the display, DeX's taskbar included. */
+private class GlassesOverlay(service: android.accessibilityservice.AccessibilityService, display: Display) {
+    private val owner = AlwaysOn()
+    private val context = service.createDisplayContext(display)
+        .createWindowContext(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, null)
+    private val manager = context.getSystemService(WindowManager::class.java)
+    private val view = ComposeView(context).apply {
+        setViewTreeLifecycleOwner(owner)
+        setViewTreeSavedStateRegistryOwner(owner)
+        setContent { GlassesRoot() }
+    }
+
+    init {
+        owner.resume()
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            android.graphics.PixelFormat.TRANSLUCENT).apply {
+            fitInsetsTypes = 0
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            title = "TheHud glasses"
+        }
+        manager.addView(view, params)
+    }
+
+    fun remove() {
+        runCatching { manager.removeView(view) }
+        owner.destroy()
+    }
+}
+
+/** Over everything on the display: DeX's taskbar and bars are asked to go while our window is up. */
+internal fun immersive(window: android.view.Window) {
+    window.setDecorFitsSystemWindows(false)
+    window.attributes = window.attributes.apply {
+        layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+    }
+    window.insetsController?.let {
+        it.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        it.hide(android.view.WindowInsets.Type.systemBars())
+    }
+}
+
 /** The glasses as an activity, for displays that are desktops. */
 class GlassesActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent { GlassesRoot() }
+        immersive(window)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        immersive(window)
     }
 }

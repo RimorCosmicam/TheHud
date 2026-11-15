@@ -86,9 +86,15 @@ class AppsProvider(private val context: Context) {
 
 /** The hands on the glasses' apps: taps, swipes and text, on one display only. */
 class HudAccessibility : AccessibilityService() {
-    override fun onServiceConnected() { instance = this }
-    override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
-    override fun onUnbind(intent: Intent?): Boolean { if (instance === this) instance = null; return super.onUnbind(intent) }
+    // With the service on, the glasses go on an overlay above DeX's taskbar: tell the presenter.
+    override fun onServiceConnected() { instance = this; com.thehud.glasses.GlassesPresenter.serviceChanged() }
+    override fun onDestroy() { gone(); super.onDestroy() }
+    override fun onUnbind(intent: Intent?): Boolean { gone(); return super.onUnbind(intent) }
+    private fun gone() {
+        if (instance !== this) return
+        instance = null
+        com.thehud.glasses.GlassesPresenter.serviceChanged()
+    }
     override fun onInterrupt() {}
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) onWindowsChanged?.invoke()

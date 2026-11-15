@@ -291,6 +291,8 @@ object HudController {
         if (::app.isInitialized) return
         app = context.applicationContext
         prefs = app.getSharedPreferences("hud", Context.MODE_PRIVATE)
+        // Map tiles are cached on the phone, as OpenStreetMap's tile policy asks.
+        runCatching { android.net.http.HttpResponseCache.install(java.io.File(app.cacheDir, "http"), 64L * 1024 * 1024) }
         loadScenes()
         prefs.getString("favorites", null)?.let {
             runCatching { json.decodeFromString(ListSerializer(HomePage.Favorite.serializer()), it) }.getOrNull()
