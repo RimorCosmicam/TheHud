@@ -80,6 +80,7 @@ struct GlassesHost: View {
             GlassesScreen(snapshot: controller.snapshot,
                           visible: controller.shownPanels,
                           browserContent: AnyView(WebBrowserView(controller.browser)),
+                          desktopContent: AnyView(DesktopVideoView(layer: controller.desktopLink.displayLayer)),
                           mapGround: controller.mapGround,
                           placeholders: false,
                           liveGlass: true)

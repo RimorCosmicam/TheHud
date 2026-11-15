@@ -13,6 +13,8 @@ public struct GlassesScreen: View {
     /// where the world is.
     public var visible: Set<HudPanelKind>
     public var browserContent: AnyView?
+    /// The Mac's picture. Nil draws a stand-in desktop when `placeholders` is on.
+    public var desktopContent: AnyView?
     /// The map raster, when one has arrived.
     public var mapGround: Image?
     /// Stand-in page and procedural streets. True for stills; the device passes false, because a
@@ -22,8 +24,9 @@ public struct GlassesScreen: View {
     public var liveGlass: Bool
 
     public init(snapshot: HudSnapshot = HudSnapshot(),
-                visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
+                visible: Set<HudPanelKind> = HudPanelKind.standard,
                 browserContent: AnyView? = nil,
+                desktopContent: AnyView? = nil,
                 mapGround: Image? = nil,
                 placeholders: Bool = true,
                 liveGlass: Bool = false) {
@@ -31,6 +34,7 @@ public struct GlassesScreen: View {
         self.snapshot = snapshot
         self.visible = visible
         self.browserContent = browserContent
+        self.desktopContent = desktopContent
         self.mapGround = mapGround
         self.placeholders = placeholders
     }
@@ -38,7 +42,8 @@ public struct GlassesScreen: View {
     private var layout: GlassesLayout {
         GlassesLayout(visible: visible, tabCount: snapshot.browser.tabs.count,
                       activeTab: snapshot.browser.activeTab,
-                      fullscreen: snapshot.browser.isFullscreen)
+                      fullscreen: snapshot.browser.isFullscreen,
+                      desktopAspect: snapshot.desktop.aspect)
     }
 
     public var body: some View {
@@ -47,8 +52,8 @@ public struct GlassesScreen: View {
 
             if layout.fullscreen {
                 browserPanel
-            } else if visible.contains(.browser) {
-                browserLayout
+            } else if layout.mainArea != nil {
+                mainLayout
             } else if let solo = visible.first, visible.count == 1 {
                 soloLayout(solo)
             } else {
@@ -74,8 +79,8 @@ public struct GlassesScreen: View {
     }
 
     /// One panel on its own, as an app: Maps with search and directions, the forecast, the
-    /// clock with the day. (The browser on its own is `browserLayout` without the column, which
-    /// already takes the full width.)
+    /// clock with the day. (The browser on its own is `mainLayout` without the column, which
+    /// already takes the full width, and so is the desktop.)
     @ViewBuilder
     private func soloLayout(_ kind: HudPanelKind) -> some View {
         switch kind {
@@ -86,12 +91,18 @@ public struct GlassesScreen: View {
             ClockApp(snapshot.clock).padding(HudTheme.safeInset)
         case .weather:
             WeatherApp(snapshot.weather).padding(HudTheme.safeInset)
-        case .browser:
-            browserLayout
+        case .browser, .desktop:
+            mainLayout
         }
     }
 
-    private var browserLayout: some View {
+    private var desktopPanel: DesktopPanel {
+        DesktopPanel(snapshot.desktop, content: desktopContent, standIn: placeholders)
+    }
+
+    /// The column, then the browser and the desktop: each alone takes everything right of the
+    /// column; both on, they split it in two halves, the browser on the left.
+    private var mainLayout: some View {
         HStack(alignment: .top, spacing: GlassesLayout.gap) {
             if layout.hasColumn {
                 VStack(spacing: GlassesLayout.gap) {
@@ -108,7 +119,8 @@ public struct GlassesScreen: View {
                 .frame(width: GlassesLayout.columnWidth)
             }
 
-            browserPanel
+            if visible.contains(.browser) { browserPanel }
+            if visible.contains(.desktop) { desktopPanel }
         }
         .padding(HudTheme.safeInset)
     }

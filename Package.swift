@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "HudCore", targets: ["HudCore"]),
         .executable(name: "hudshot", targets: ["hudshot"]),
+        .executable(name: "hudcast", targets: ["hudcast"]),
     ],
     targets: [
         // Shared by the iOS app and the macOS preview tool. No platform-specific code here
@@ -22,5 +23,10 @@ let package = Package(
         // Xcode, and this machine has only the Command Line Tools. A plain binary that exits
         // non-zero runs identically here and on a GitHub runner, with nothing installed.
         .executableTarget(name: "hudtests", dependencies: ["HudCore"]),
+
+        // macOS: HudCast, the Mac side of the desktop panel. It streams the screen, or one
+        // window, to the phone over the local network and plays the phone's cursor and keys
+        // back as real input. `scripts/build-hudcast.sh` wraps it as an app.
+        .executableTarget(name: "hudcast", dependencies: ["HudCore"]),
     ]
 )

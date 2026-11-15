@@ -124,6 +124,22 @@ struct Hudshot {
                       to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
         }
 
+        // The Mac beside the browser, then alone; and the waiting card before HudCast answers.
+        var mac = HudSnapshot(cursor: nil)
+        mac.desktop = .preview
+        try write(GlassesScreen(snapshot: mac, visible: [.browser, .desktop, .clock, .weather, .map]),
+                  to: outDir, "glasses-desktop-split", scale: 1)
+        try write(GlassesScreen(snapshot: mac, visible: [.desktop]),
+                  to: outDir, "glasses-solo-desktop", scale: 1)
+        try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), visible: [.desktop, .clock],
+                                placeholders: false),
+                  to: outDir, "glasses-desktop-waiting", scale: 1)
+        var macWindow = HudSnapshot.Desktop.preview
+        macWindow.source?.window = 12
+        try write(PhoneScreen(surface: plain, visible: [.browser, .desktop, .map],
+                              desktop: macWindow, showsWindows: true),
+                  to: outDir, "phone-windows", scale: scale)
+
         // Maps: searching, with the cursor on the second result; then following a route.
         var searching = HudSnapshot(cursor: nil)
         searching.maps = .previewSearch

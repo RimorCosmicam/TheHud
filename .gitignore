@@ -5,3 +5,4 @@ out/
 *.xcodeproj
 *.xcworkspace
 ipa/
+dist/

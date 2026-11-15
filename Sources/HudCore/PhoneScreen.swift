@@ -126,6 +126,10 @@ public enum PhoneAction: Sendable {
     case toggle(HudPanelKind)
     /// Show one panel alone on the glasses, or put the set back if it already is.
     case solo(HudPanelKind)
+    /// Stream one of the Mac's windows, by its place in the list; nil for the whole screen.
+    case selectWindow(Int?)
+    /// With the browser and the desktop both on: list the Mac's windows instead of the tabs.
+    case showWindows(Bool)
 }
 
 /// The icon row: the browser's own controls, the keyboard, and the gear.
@@ -275,20 +279,37 @@ public struct SettingsArea: View {
     public var glassesConnected: Bool
     public var tabs: [String]
     public var activeTab: Int
+    public var desktop: HudSnapshot.Desktop
+    /// Both lists are possible: whether the Mac's windows are the one showing.
+    public var showsWindows: Bool
     public var action: (PhoneAction) -> Void
 
-    public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
+    public init(visible: Set<HudPanelKind> = HudPanelKind.standard,
                 solo: HudPanelKind? = nil,
                 glassesConnected: Bool = true,
                 tabs: [String] = ["New Tab"],
                 activeTab: Int = 0,
+                desktop: HudSnapshot.Desktop = HudSnapshot.Desktop(),
+                showsWindows: Bool = false,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.visible = visible
         self.solo = solo
         self.glassesConnected = glassesConnected
         self.tabs = tabs
         self.activeTab = activeTab
+        self.desktop = desktop
+        self.showsWindows = showsWindows
         self.action = action
+    }
+
+    private func shown(_ kind: HudPanelKind) -> Bool {
+        solo.map { $0 == kind } ?? visible.contains(kind)
+    }
+
+    /// The strip lists the Mac's windows when the desktop is on and the browser is not, or
+    /// when both are and WINDOWS was picked.
+    private var listsWindows: Bool {
+        shown(.desktop) && (!shown(.browser) || showsWindows)
     }
 
     public var body: some View {
@@ -312,15 +333,95 @@ public struct SettingsArea: View {
                 }
             }
 
-            Text("TABS").hudLabel()
+            stripHeader
                 .padding(.top, 10)
 
-            tabStrip
+            if listsWindows { windowStrip } else { tabStrip }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .top)
         .background(.black)
+    }
+
+    @ViewBuilder
+    private var stripHeader: some View {
+        if shown(.desktop) && shown(.browser) {
+            HStack(spacing: 18) {
+                stripChoice("TABS", chosen: !listsWindows) { action(.showWindows(false)) }
+                stripChoice("WINDOWS", chosen: listsWindows) { action(.showWindows(true)) }
+            }
+        } else {
+            Text(listsWindows ? "WINDOWS" : "TABS").hudLabel()
+        }
+    }
+
+    private func stripChoice(_ title: String, chosen: Bool, tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            Text(title)
+                .font(HudTheme.mont(16, .black)).tracking(3)
+                .foregroundStyle(chosen ? HudTheme.accent : HudTheme.inkFaint)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// What the Mac can stream: the whole screen first, then each window HudCast found.
+    private var windowStrip: some View {
+        let active = desktop.source == nil ? -2 : (desktop.activeWindow ?? -1)
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if desktop.connected {
+                        windowChip("Full desktop", symbol: "display", active: active == -1) {
+                            action(.selectWindow(nil))
+                        }
+                        .id(-1)
+                        ForEach(Array(desktop.windows.enumerated()), id: \.element.id) { index, window in
+                            windowChip(window.label, symbol: nil, active: active == index) {
+                                action(.selectWindow(index))
+                            }
+                            .id(index)
+                        }
+                    } else {
+                        Text(desktop.status)
+                            .font(HudTheme.mont(10, .black)).tracking(1.5)
+                            .foregroundStyle(HudTheme.inkFaint)
+                            .padding(.horizontal, 12)
+                            .frame(height: 44)
+                            .background(HudTheme.surface)
+                    }
+                }
+            }
+            .onChange(of: active) { _, index in
+                withAnimation { proxy.scrollTo(index, anchor: .center) }
+            }
+        }
+    }
+
+    private func windowChip(_ title: String, symbol: String?, active: Bool,
+                            tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            HStack(spacing: 8) {
+                if let symbol {
+                    Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+                }
+                Text(title)
+                    .font(HudTheme.mont(12, .semibold))
+                    .lineLimit(1)
+                    .frame(maxWidth: 170, alignment: .leading)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(active ? HudTheme.ink : HudTheme.inkDim)
+        .background(active ? Color.white.opacity(0.10) : HudTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(active ? HudTheme.accent : .clear).frame(height: 2)
+        }
     }
 
     /// The glasses' tabs, as chips: tap to switch, the cross to close, the last chip for a new
@@ -436,6 +537,9 @@ public struct PhoneScreen: View {
     public var predictiveBar: Bool
     public var solo: HudPanelKind?
     public var time: String
+    public var visible: Set<HudPanelKind>
+    public var desktop: HudSnapshot.Desktop
+    public var showsWindows: Bool
 
     public init(surface: CGImage,
                 railActive: Bool = false,
@@ -443,7 +547,13 @@ public struct PhoneScreen: View {
                 keyboardUp: Bool = false,
                 predictiveBar: Bool = false,
                 solo: HudPanelKind? = nil,
-                time: String = "9:41") {
+                time: String = "9:41",
+                visible: Set<HudPanelKind> = [.browser, .map, .clock],
+                desktop: HudSnapshot.Desktop = HudSnapshot.Desktop(),
+                showsWindows: Bool = false) {
+        self.visible = visible
+        self.desktop = desktop
+        self.showsWindows = showsWindows
         self.surface = surface
         self.railActive = railActive
         self.cornerPressed = cornerPressed
@@ -468,8 +578,9 @@ public struct PhoneScreen: View {
             // collapses rather than leaving a clipped sliver of a heading behind.
             let settings = max(0, PhoneMetrics.settingsHeight(keyboard: keyboardHeight))
             if settings >= 44 {
-                SettingsArea(visible: [.browser, .map, .clock], solo: solo,
-                             tabs: ["YouTube", "Google", "Xreal Air 2 Ultra"], activeTab: 0)
+                SettingsArea(visible: visible, solo: solo,
+                             tabs: ["YouTube", "Google", "Xreal Air 2 Ultra"], activeTab: 0,
+                             desktop: desktop, showsWindows: showsWindows)
                     .frame(height: settings, alignment: .top).clipped()
             } else {
                 Color.black.frame(height: settings)

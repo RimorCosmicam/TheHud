@@ -13,6 +13,8 @@ public struct HudSnapshot: Sendable {
     public var minimap: Minimap
     /// The Maps app: search, results, and the route being followed.
     public var maps: Maps = Maps()
+    /// The Mac streamed by HudCast.
+    public var desktop: Desktop = Desktop()
     public var browser: Browser
     /// Where the trackpad has put the pointer, in canvas points. Nil hides it.
     public var cursor: CGPoint?
@@ -241,6 +243,47 @@ public struct HudSnapshot: Sendable {
 
         public static let preview = Minimap(place: "ALFAMA", heading: 34, headingLabel: "NE",
                                             speed: "4.2 KM/H", spanMetres: 300)
+    }
+
+    /// The desktop panel: whether a Mac is there, what it offers and what it is showing.
+    public struct Desktop: Sendable, Equatable {
+        /// "LOOKING FOR YOUR MAC", "CONNECTING TO STUDIO": said when there is no picture.
+        public var status: String = "LOOKING FOR YOUR MAC"
+        public var connected: Bool = false
+        /// Frames are arriving.
+        public var hasPicture: Bool = false
+        public var host: String = ""
+        public var windows: [DesktopWindow] = []
+        public var source: DesktopSource?
+
+        public init() {}
+
+        /// Width over height of what is streaming.
+        public var aspect: CGFloat {
+            guard let source, source.height > 0 else { return 16 / 10 }
+            return CGFloat(source.width) / CGFloat(source.height)
+        }
+
+        /// A Mac with a few windows open, streaming the whole screen.
+        public static var preview: Desktop {
+            var desktop = Desktop()
+            desktop.connected = true
+            desktop.hasPicture = true
+            desktop.host = "Studio"
+            desktop.status = ""
+            desktop.windows = [
+                DesktopWindow(id: 11, app: "Xcode", title: "TheHud — HudController.swift"),
+                DesktopWindow(id: 12, app: "Terminal", title: "zsh"),
+                DesktopWindow(id: 13, app: "Safari", title: "Apple Developer"),
+            ]
+            desktop.source = DesktopSource(window: nil, width: 1920, height: 1200, host: "Studio")
+            return desktop
+        }
+
+        /// Which of `windows` is streaming, or nil for the whole screen.
+        public var activeWindow: Int? {
+            source?.window.flatMap { id in windows.firstIndex { $0.id == id } }
+        }
     }
 
     /// The Maps app's own state: what is being searched, what was found, where it is going.

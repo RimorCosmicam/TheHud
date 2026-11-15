@@ -35,6 +35,8 @@ struct PhoneRootView: View {
                              glassesConnected: controller.glassesConnected,
                              tabs: controller.snapshot.browser.tabs,
                              activeTab: controller.snapshot.browser.activeTab,
+                             desktop: controller.snapshot.desktop,
+                             showsWindows: controller.stripShowsWindows,
                              action: controller.perform)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .clipped()
@@ -58,7 +60,12 @@ struct PhoneRootView: View {
         .onAppear { controller.start() }
         .onChange(of: controller.keyboardTarget) { _, target in typing = target != nil }
         .onChange(of: typing) { _, isTyping in
-            if !isTyping, controller.keyboardTarget != nil { controller.endTyping() }
+            guard !isTyping else { return }
+            // A tick later: Return on the Mac takes the focus back straight after the field
+            // gives it up, and that should not count as putting the keyboard away.
+            DispatchQueue.main.async {
+                if !typing, controller.keyboardTarget != nil { controller.endTyping() }
+            }
         }
     }
 
@@ -69,12 +76,16 @@ struct PhoneRootView: View {
         TextField("", text: Binding(get: { controller.draft },
                                     set: { controller.draftChanged($0) }))
             .focused($typing)
-            .keyboardType(controller.keyboardTarget == .page ? .default : .webSearch)
+            .keyboardType(controller.keyboardTarget == .page || controller.keyboardTarget == .desktop
+                          ? .default : .webSearch)
             .textInputAutocapitalization(controller.keyboardTarget == .address ? .never : .sentences)
             .autocorrectionDisabled(controller.keyboardTarget == .address)
             .submitLabel(controller.keyboardTarget == .address ? .go
                          : controller.keyboardTarget == .mapSearch ? .search : .return)
-            .onSubmit { controller.submitTyping() }
+            .onSubmit {
+                controller.submitTyping()
+                if controller.keyboardTarget == .desktop { typing = true }
+            }
             .frame(width: 1, height: 1)
             .opacity(0.01)
             .allowsHitTesting(false)

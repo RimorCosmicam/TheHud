@@ -58,6 +58,12 @@
 
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Shows your next event on the glasses.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>The desktop panel finds HudCast on your Mac over the local network to show its screen.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_thehud._tcp</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Draws the minimap and fetches the weather where you are.</string>
 	<key>UISupportedInterfaceOrientations</key>

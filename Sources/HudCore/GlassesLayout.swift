@@ -3,13 +3,18 @@ import CoreGraphics
 
 /// The four things the glasses can show.
 public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable {
-    case browser, map, weather, clock
+    case browser, desktop, map, weather, clock
 
     public var id: String { rawValue }
+
+    /// What a new install starts with. The desktop waits to be asked for: turning it on is
+    /// what starts looking for a Mac on the network.
+    public static let standard: Set<HudPanelKind> = [.browser, .map, .weather, .clock]
 
     public var symbol: String {
         switch self {
         case .browser: return "globe"
+        case .desktop: return "desktopcomputer"
         case .map: return "map"
         case .weather: return "cloud.sun"
         case .clock: return "clock"
@@ -69,6 +74,8 @@ public enum GlassesHitTarget: Equatable, Sendable {
     case closeTab(Int)
     /// A point inside the page, in the web view's own coordinates.
     case page(CGPoint)
+    /// A point on the Mac's picture, as fractions of it (0...1 each way).
+    case desktop(CGPoint)
     case none
 }
 
@@ -88,27 +95,61 @@ public struct GlassesLayout: Sendable {
     /// A video (or any page element) has asked for fullscreen: the browser is the whole canvas,
     /// with no bar and no panels.
     public var fullscreen: Bool
+    /// The Mac picture's width over its height, to fit it in its panel.
+    public var desktopAspect: CGFloat
 
-    public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
-                tabCount: Int = 1, activeTab: Int = 0, fullscreen: Bool = false) {
+    public init(visible: Set<HudPanelKind> = HudPanelKind.standard,
+                tabCount: Int = 1, activeTab: Int = 0, fullscreen: Bool = false,
+                desktopAspect: CGFloat = 16 / 10) {
         self.visible = visible
         self.fullscreen = fullscreen && visible.contains(.browser)
         self.tabCount = max(tabCount, 1)
         self.activeTab = activeTab
+        self.desktopAspect = desktopAspect > 0 ? desktopAspect : 16 / 10
     }
 
     /// The clock, weather and map share one column beside the browser.
     public var hasColumn: Bool { !visible.isDisjoint(with: [.clock, .weather, .map]) }
 
-    public var browserFrame: CGRect? {
-        guard visible.contains(.browser) else { return nil }
-        if fullscreen { return CGRect(origin: .zero, size: HudTheme.glassesSize) }
+    /// Right of the column: the browser's, the desktop's, or both side by side.
+    public var mainArea: CGRect? {
+        guard visible.contains(.browser) || visible.contains(.desktop) else { return nil }
         let inset = HudTheme.safeInset
         let canvas = HudTheme.glassesSize
         let x = inset + (hasColumn ? Self.columnWidth + Self.gap : 0)
         return CGRect(x: x, y: inset,
                       width: canvas.width - inset - x,
                       height: canvas.height - inset * 2)
+    }
+
+    /// Both on: the browser takes the left half, the desktop the right.
+    private var splits: Bool { visible.contains(.browser) && visible.contains(.desktop) }
+
+    private func half(_ area: CGRect, right: Bool) -> CGRect {
+        let width = (area.width - Self.gap) / 2
+        return CGRect(x: right ? area.maxX - width : area.minX, y: area.minY,
+                      width: width, height: area.height)
+    }
+
+    public var browserFrame: CGRect? {
+        guard visible.contains(.browser), let area = mainArea else { return nil }
+        if fullscreen { return CGRect(origin: .zero, size: HudTheme.glassesSize) }
+        return splits ? half(area, right: false) : area
+    }
+
+    /// The desktop panel. Not while a video has the browser fullscreen.
+    public var desktopFrame: CGRect? {
+        guard visible.contains(.desktop), !fullscreen, let area = mainArea else { return nil }
+        return splits ? half(area, right: true) : area
+    }
+
+    /// The Mac's picture inside its panel, fitted without cropping.
+    public var desktopPicture: CGRect? {
+        guard let frame = desktopFrame else { return nil }
+        let width = min(frame.width, frame.height * desktopAspect)
+        let height = width / desktopAspect
+        return CGRect(x: frame.midX - width / 2, y: frame.midY - height / 2,
+                      width: width, height: height)
     }
 
     /// The page: the whole panel, because the bar floats over it.
@@ -138,6 +179,10 @@ public struct GlassesLayout: Sendable {
     }
 
     public func hitTest(_ point: CGPoint) -> GlassesHitTarget {
+        if let picture = desktopPicture, picture.contains(point) {
+            return .desktop(CGPoint(x: (point.x - picture.minX) / picture.width,
+                                    y: (point.y - picture.minY) / picture.height))
+        }
         guard let frame = browserFrame, frame.contains(point) else { return .none }
 
         if let bar = barFrame, bar.contains(point) {

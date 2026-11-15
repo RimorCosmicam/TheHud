@@ -39,7 +39,7 @@ final class HudController: ObservableObject {
     @Published var cornerPressed = false
 
     /// Where keystrokes go while the keyboard is up.
-    enum KeyboardTarget { case address, page, mapSearch }
+    enum KeyboardTarget { case address, page, mapSearch, desktop }
     @Published private(set) var keyboardTarget: KeyboardTarget?
     /// The invisible text field's contents. For the address bar it is the draft itself; for the
     /// page it is a proxy that is diffed into insertions and deletions.
@@ -62,6 +62,16 @@ final class HudController: ObservableObject {
     private let weatherProvider: WeatherProviding = OpenMeteoWeatherProvider()
     private let maps = MapSnapshotProvider()
     private let mapsService = MapsService()
+    /// HudCast on the Mac. Looks for it only while the desktop panel is on.
+    let desktopLink = DesktopLink()
+    /// The last click went to the Mac, so the keyboard button types there.
+    private var desktopFocused = false
+    /// A double-tap drag that started on the Mac's picture holds its mouse button down.
+    private var desktopDragging = false
+    private var lastDesktopMove: Date = .distantPast
+    /// Both the browser and the desktop are on: whether the phone's strip lists the Mac's
+    /// windows instead of the tabs.
+    @Published private(set) var stripShowsWindows = false
 
     /// The Maps app's zoom: metres across a 470pt panel. Shared with the small map.
     private var mapSpan: Int = UserDefaults.standard.object(forKey: "mapSpan") as? Int ?? 300
@@ -104,7 +114,7 @@ final class HudController: ObservableObject {
     private init() {
         let stored = UserDefaults.standard.stringArray(forKey: Self.visibleKey)
         visible = stored.map { Set($0.compactMap(HudPanelKind.init(rawValue:))) }
-            ?? Set(HudPanelKind.allCases)
+            ?? HudPanelKind.standard
         if let data = UserDefaults.standard.data(forKey: Self.favoritesKey),
            let stored = try? JSONDecoder().decode([Favorite].self, from: data) {
             favorites = stored
@@ -141,6 +151,9 @@ final class HudController: ObservableObject {
             MainActor.assumeIsolated { self?.locationChanged(minimap, coordinate) }
         }
         location.start()
+
+        desktopLink.onChange = { [weak self] desktop in self?.snapshot.desktop = desktop }
+        panelsChanged()
 
         browser.goHome()
     }
@@ -258,6 +271,7 @@ final class HudController: ObservableObject {
         switch keyboardTarget {
         case .address, .page: if !shownPanels.contains(.browser) { endTyping() }
         case .mapSearch: if !mapFillsCanvas { endTyping() }
+        case .desktop: if !shownPanels.contains(.desktop) { endTyping() }
         case nil: break
         }
     }
@@ -265,6 +279,13 @@ final class HudController: ObservableObject {
     /// The map's raster is sized for its panel; going to or from the full canvas needs another
     /// one. The old one stays up, at the same zoom, until it arrives.
     private func panelsChanged() {
+        if shownPanels.contains(.desktop) {
+            desktopLink.start()
+        } else {
+            desktopLink.stop()
+            desktopFocused = false
+            if keyboardTarget == .desktop { endTyping() }
+        }
         if groundSpan > 0, groundPlan.span != groundSpan, let here = lastCoordinate {
             fetchGround(at: here)
         }
@@ -407,7 +428,20 @@ final class HudController: ObservableObject {
             } else {
                 keyboardTarget == .address ? endTyping() : beginAddressEditing()
             }
-        case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
+        case .keyboard:
+            if keyboardTarget != nil {
+                endTyping()
+            } else if typesOnDesktop {
+                beginDesktopTyping()
+            } else {
+                beginPageTyping()
+            }
+        case let .selectWindow(index):
+            let windows = snapshot.desktop.windows
+            let id = index.flatMap { windows.indices.contains($0) ? windows[$0].id : nil }
+            desktopLink.send(.select(window: id))
+        case let .showWindows(show):
+            stripShowsWindows = show
         case .settings: showingSettings = true
         case let .toggle(kind):
             // Fullscreen, whether a held tile or a video, and a tap on any tile ends it.
@@ -463,7 +497,15 @@ final class HudController: ObservableObject {
 
     private var layout: GlassesLayout {
         GlassesLayout(visible: shownPanels, tabCount: tabs.count, activeTab: activeTab,
-                      fullscreen: snapshot.browser.isFullscreen)
+                      fullscreen: snapshot.browser.isFullscreen,
+                      desktopAspect: snapshot.desktop.aspect)
+    }
+
+    /// The keyboard button types on the Mac when it is the only thing to type on, or when the
+    /// last click went to it.
+    private var typesOnDesktop: Bool {
+        guard shownPanels.contains(.desktop) else { return false }
+        return desktopFocused || !shownPanels.contains(.browser)
     }
 
     /// A left click wherever the cursor is. The glasses take no touches, so this is arithmetic
@@ -478,9 +520,17 @@ final class HudController: ObservableObject {
         case .newTab: openTab()
         case let .selectTab(index): selectTab(index)
         case let .closeTab(index): closeTab(index)
-        case .address: beginAddressEditing()
+        case .address:
+            desktopFocused = false
+            beginAddressEditing()
+        case let .desktop(point):
+            // Typing on the page stops; typing on the Mac carries on into what was clicked.
+            if keyboardTarget != nil && keyboardTarget != .desktop { endTyping() }
+            desktopFocused = true
+            desktopLink.send(.click(x: point.x, y: point.y, button: 0))
         case let .page(point):
-            if keyboardTarget == .address { endTyping() }
+            desktopFocused = false
+            if keyboardTarget == .address || keyboardTarget == .desktop { endTyping() }
             Task {
                 if await browser.click(at: point) { beginPageTyping() }
             }
@@ -494,6 +544,11 @@ final class HudController: ObservableObject {
         guard ticks != 0 else { return }
         // In the Maps app, scrolling zooms: down to see more, up to see closer.
         if mapFillsCanvas { return zoomMap(pow(1.1, Double(ticks))) }
+        if case let .desktop(p) = layout.hitTest(pointer.position) {
+            // A Mac wheel's positive is up; a tick's is down the page.
+            desktopLink.send(.scroll(x: p.x, y: p.y, dx: 0, dy: Double(-ticks * 48)))
+            return
+        }
         guard let content = layout.contentFrame else { return }
         let point: CGPoint
         if case let .page(p) = layout.hitTest(pointer.position) {
@@ -530,6 +585,12 @@ final class HudController: ObservableObject {
         snapshot.maps.isEditing = true
     }
 
+    func beginDesktopTyping() {
+        if keyboardTarget == .address { snapshot.browser.isEditingAddress = false }
+        keyboardTarget = .desktop
+        draft = Self.sentinel
+    }
+
     func endTyping() {
         if keyboardTarget == .mapSearch { snapshot.maps.isEditing = false }
         if keyboardTarget == .address {
@@ -554,7 +615,7 @@ final class HudController: ObservableObject {
             searchDebounce = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
                 MainActor.assumeIsolated { self.runMapSearch() }
             }
-        case .page:
+        case .page, .desktop:
             let sentinel = Self.sentinel
             let old = draft.hasPrefix(sentinel) ? String(draft.dropFirst()) : draft
             if new.hasPrefix(sentinel) {
@@ -563,7 +624,7 @@ final class HudController: ObservableObject {
             } else {
                 // The sentinel went: one backspace past everything typed here.
                 send(from: old, to: new)
-                browser.deleteBackward(1)
+                deleteBackward(1)
                 draft = sentinel + new
             }
         case nil:
@@ -573,8 +634,22 @@ final class HudController: ObservableObject {
 
     private func send(from old: String, to new: String) {
         let edit = TextEdit.between(old, new)
-        browser.deleteBackward(edit.deletes)
-        if !edit.insert.isEmpty { browser.insert(edit.insert) }
+        deleteBackward(edit.deletes)
+        guard !edit.insert.isEmpty else { return }
+        if keyboardTarget == .desktop {
+            desktopLink.send(.text(edit.insert))
+        } else {
+            browser.insert(edit.insert)
+        }
+    }
+
+    private func deleteBackward(_ count: Int) {
+        guard count > 0 else { return }
+        if keyboardTarget == .desktop {
+            for _ in 0..<count { desktopLink.send(.key("delete")) }
+        } else {
+            browser.deleteBackward(count)
+        }
     }
 
     func submitTyping() {
@@ -585,6 +660,10 @@ final class HudController: ObservableObject {
         case .page:
             browser.submit()
             endTyping()
+        case .desktop:
+            // Return on a Mac is a line, not the end of typing: the keyboard stays up.
+            desktopLink.send(.key("return"))
+            draft = Self.sentinel
         case .mapSearch:
             searchDebounce?.invalidate()
             if searchResults.isEmpty {
@@ -744,6 +823,22 @@ final class HudController: ObservableObject {
             momentum.stop()
             pointerMoved()
         case .tapClick: click()
+        case .rightClick:
+            if case let .desktop(p) = layout.hitTest(pointer.position) {
+                desktopFocused = true
+                desktopLink.send(.click(x: p.x, y: p.y, button: 1))
+            }
+        case .doubleTapDragStart:
+            if case let .desktop(p) = layout.hitTest(pointer.position) {
+                desktopDragging = true
+                desktopLink.send(.press(x: p.x, y: p.y))
+            }
+        case .dragEnd:
+            if desktopDragging {
+                desktopDragging = false
+                let p = desktopPoint(clamped: pointer.position)
+                desktopLink.send(.release(x: p.x, y: p.y))
+            }
         default: break
         }
 
@@ -755,6 +850,20 @@ final class HudController: ObservableObject {
     /// Mouse movement reaches the page, a few dozen times a second rather than on every
     /// sample: enough for hover menus and for video controls to wake, without flooding WebKit.
     private func pointerMoved() {
+        if shownPanels.contains(.desktop), Date().timeIntervalSince(lastDesktopMove) > 0.033 {
+            if desktopDragging {
+                // A drag keeps going past the picture's edge, pinned to it.
+                let p = desktopPoint(clamped: pointer.position)
+                lastDesktopMove = Date()
+                desktopLink.send(.move(x: p.x, y: p.y))
+                return
+            }
+            if case let .desktop(p) = layout.hitTest(pointer.position) {
+                lastDesktopMove = Date()
+                desktopLink.send(.move(x: p.x, y: p.y))
+                return
+            }
+        }
         guard Date().timeIntervalSince(lastHover) > 0.05,
               case let .page(point) = layout.hitTest(pointer.position) else { return }
         lastHover = Date()
@@ -817,5 +926,12 @@ final class HudController: ObservableObject {
         railActive = false
     }
 
-    func cornerTapped() { pointer.apply(.rightClick) }
+    func cornerTapped() { handle(.rightClick) }
+
+    /// A canvas point as a fraction of the Mac's picture, held to its edges.
+    private func desktopPoint(clamped point: CGPoint) -> CGPoint {
+        guard let picture = layout.desktopPicture else { return CGPoint(x: 0.5, y: 0.5) }
+        return CGPoint(x: min(max((point.x - picture.minX) / picture.width, 0), 1),
+                       y: min(max((point.y - picture.minY) / picture.height, 0), 1))
+    }
 }
