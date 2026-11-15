@@ -29,12 +29,43 @@ final class HudController: ObservableObject {
     /// One panel held up on its own, filling the glasses. Not saved: it is a moment's focus,
     /// and the arrangement is what comes back.
     @Published private(set) var solo: HudPanelKind? {
-        didSet { if solo != oldValue { panelsChanged() } }
+        didSet {
+            guard solo != oldValue else { return }
+            appPadSetAside = false
+            panelsChanged()
+            padChanged()
+        }
     }
     /// Everything hidden, to see straight through the glasses.
     @Published private(set) var clearView = false {
-        didSet { if clearView != oldValue { panelsChanged() } }
+        didSet {
+            guard clearView != oldValue else { return }
+            panelsChanged()
+            padChanged()
+        }
     }
+
+    /// TOUCHPAD or REMOTE, as last picked. Saved.
+    @Published private(set) var pointerMode: PointerMode =
+        PointerMode(rawValue: UserDefaults.standard.string(forKey: "pointerMode") ?? "") ?? .touchpad
+    /// The fullscreen app's own controls were swapped for the pointer, until the app changes.
+    @Published private(set) var appPadSetAside = false
+    /// What the phone's lower half is right now.
+    var pad: PhonePad {
+        if let solo, solo.hasPhoneControls, !clearView, !appPadSetAside { return .app }
+        return pointerMode == .touchpad ? .touchpad : .remote
+    }
+    @Published var showingCaptionSessions = false
+    /// Pointing the phone, for REMOTE.
+    let remote = RemoteMotion()
+    private var remoteTouches: [RemoteZone: TouchPoint] = [:]
+    /// Zones whose touch only woke the cursor, so letting go of them does nothing either.
+    private var remoteWakers: Set<RemoteZone> = []
+    private var remoteDragTimer: Timer?
+    private var remoteDragging = false
+    private let remoteRail = ScrollRail()
+    /// Aircraft and the space station, for the sky app.
+    private let overheadProvider = OverheadProvider()
     /// The phone's GLASSES section is being arranged.
     @Published private(set) var editingGlasses = false
 
@@ -181,6 +212,7 @@ final class HudController: ObservableObject {
         snapshot.clock = .now()
         snapshot.note.text = UserDefaults.standard.string(forKey: "note") ?? ""
         snapshot.timer = timer.reading(at: Date())
+        snapshot.skyView = Self.loadSkyView()
         loadSettings()
 
         tabs = [makeTab()]
@@ -240,12 +272,33 @@ final class HudController: ObservableObject {
     /// Called once the phone scene is on screen.
     func start() {
         captions.language = captionsLanguage
-        // Locked, the phone is in a pocket: nothing to point at.
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.putCursorAway() }
+        // Locked, the phone is in a pocket: nothing to point at. With the glasses plugged in
+        // the app never goes to the background (their scene stays on), so it is the phone's
+        // own scene that is watched, and the lock itself where a passcode makes it known.
+        let center = NotificationCenter.default
+        for name in [UIScene.willDeactivateNotification, UIScene.didEnterBackgroundNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard (note.object as? UIScene)?.session.role == .windowApplication else { return }
+                    self?.phoneWentAway()
+                }
+            }
+        }
+        for name in [UIApplication.protectedDataWillBecomeUnavailableNotification,
+                     UIApplication.didEnterBackgroundNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.phoneWentAway() }
+            }
+        }
+        center.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard (note.object as? UIScene)?.session.role == .windowApplication else { return }
+                self?.phoneCameBack()
+            }
         }
         scheduleCursorHide()
+        remote.onMove = { [weak self] dx, dy, deliberate in self?.remoteMoved(dx, dy, deliberate) }
+        padChanged()
         tickClock()
         // Every second, for the clock app's seconds hand; the other layouts only take the
         // update when the minute changes.
@@ -598,7 +651,203 @@ final class HudController: ObservableObject {
             switchScene(to: index)
         case let .resetScene(index):
             resetScene(index)
+        case let .pad(choice):
+            switch choice {
+            case .app:
+                appPadSetAside = false
+            case .touchpad, .remote:
+                if solo?.hasPhoneControls == true { appPadSetAside = true }
+                pointerMode = choice == .touchpad ? .touchpad : .remote
+                UserDefaults.standard.set(pointerMode.rawValue, forKey: "pointerMode")
+            }
+            padChanged()
+        case let .remote(zone, phase, point):
+            remoteTouch(zone, phase, point)
+        case let .sky(action):
+            skyAction(action)
+        case let .music(control):
+            switch control {
+            case .previous: music.previous()
+            case .playPause: music.playPause()
+            case .next: music.next()
+            }
+        case let .timer(action):
+            switch action {
+            case .toggle: timer.toggle(at: Date())
+            case .reset: timer.reset()
+            case let .set(minutes): timer.set(minutes: minutes)
+            case let .add(minutes): timer.add(minutes: minutes)
+            }
+            UserDefaults.standard.set(timer.setSeconds, forKey: "timerSeconds")
+            timerChanged()
+        case .captionsToggle:
+            captions.toggle()
+        case .captionsSessions:
+            showingCaptionSessions = true
+        case let .captionsLanguage(id):
+            captionsLanguage = id
+        case let .note(action):
+            switch action {
+            case .write:
+                keyboardTarget == .note ? endTyping() : beginNoteEditing()
+            case .clear:
+                snapshot.note.text = ""
+                snapshot.note.scroll = 0
+                if keyboardTarget == .note { draft = "" }
+                UserDefaults.standard.set("", forKey: "note")
+            case let .scroll(dy):
+                snapshot.note.scroll = dy.isFinite ? max(snapshot.note.scroll + dy, 0) : 0
+            }
         }
+    }
+
+    // ------------------------------------------------------------------ the phone's pads
+
+    /// The pad changed: the gyro runs only for REMOTE, and an app with its own controls needs
+    /// no cursor over it.
+    private func padChanged() {
+        let pad = self.pad
+        if pad == .remote, UIApplication.shared.applicationState != .background {
+            remote.start()
+        } else {
+            remote.stop()
+        }
+        remoteTouches.removeAll()
+        remoteWakers.removeAll()
+        contacts = []
+        remoteDragTimer?.invalidate()
+        if remoteDragging {
+            remoteDragging = false
+            handle(.dragEnd)
+        }
+        if pad == .app { putCursorAway() }
+    }
+
+    private func remoteMoved(_ dx: Int, _ dy: Int, _ deliberate: Bool) {
+        // Put away, the cursor waits for a thumb: a phone swinging in a hand or a pocket
+        // should not bring it back.
+        guard !cursorAsleep, pad == .remote else { return }
+        pointer.apply(.move(dx: dx, dy: dy, isDragging: remoteDragging))
+        pointerMoved()
+        snapshot.cursor = pointer.position
+        if deliberate { scheduleCursorHide() }
+    }
+
+    private func remoteTouch(_ zone: RemoteZone, _ phase: RemoteTouchPhase, _ point: CGPoint) {
+        // The halftone ripples under the thumb, as it does on the trackpad.
+        switch phase {
+        case .began: remoteTouches[zone] = TouchPoint(x: point.x, y: point.y, id: 900 + zone.rawValue)
+        case .moved:
+            remoteTouches[zone]?.x = point.x
+            remoteTouches[zone]?.y = point.y
+        case .ended: remoteTouches[zone] = nil
+        }
+        contacts = Array(remoteTouches.values)
+
+        if cursorAsleep, phase == .began {
+            cursorAsleep = false
+            snapshot.cursor = pointer.position
+            remoteWakers.insert(zone)
+            scheduleCursorHide()
+            return
+        }
+        if remoteWakers.contains(zone) {
+            if phase == .ended { remoteWakers.remove(zone) }
+            return
+        }
+
+        switch (zone, phase) {
+        case (.click, .began):
+            // Pressing shakes the phone: the cursor holds still so the click lands where aimed.
+            remote.hold(for: 0.18)
+            remoteDragTimer?.invalidate()
+            remoteDragTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.remoteDragging = true
+                    self.remote.release()
+                    self.handle(.doubleTapDragStart)
+                }
+            }
+        case (.click, .ended):
+            remoteDragTimer?.invalidate()
+            if remoteDragging {
+                remoteDragging = false
+                handle(.dragEnd)
+            } else {
+                handle(.tapClick)
+            }
+        case (.rightClick, .began):
+            remote.hold(for: 0.18)
+        case (.rightClick, .ended):
+            handle(.rightClick)
+        case (.scroll, .began):
+            // Still while scrolling: the page moves, not the cursor.
+            remote.hold(for: 600)
+            momentum.stop()
+            remoteRail.scrollSpeed = trackpad.scrollSpeed
+            remoteRail.naturalScrolling = trackpad.naturalScrolling
+            remoteRail.begin(at: point.y)
+        case (.scroll, .moved):
+            if let ticks = remoteRail.move(to: point.y) {
+                pointer.apply(.scroll(v: ticks, h: 0))
+                scrollPage(pointer.drainScroll())
+            }
+        case (.scroll, .ended):
+            remoteRail.end()
+            remote.release()
+        case (.centre, .ended):
+            pointer.place(at: CGPoint(x: HudTheme.glassesSize.width / 2, y: HudTheme.glassesSize.height / 2))
+            snapshot.cursor = pointer.position
+            pointerMoved()
+        default:
+            break
+        }
+        scheduleCursorHide()
+    }
+
+    // ------------------------------------------------------------------ sky
+
+    private func skyAction(_ action: SkyAction) {
+        switch action {
+        case let .look(pan, tilt): snapshot.skyView.look(pan: pan, tilt: tilt)
+        case let .zoom(factor): snapshot.skyView.zoom(by: factor)
+        case .recentre: snapshot.skyView.recentre()
+        case let .toggle(layer):
+            snapshot.skyView.toggle(layer)
+            if let selected = snapshot.skyView.selected, !selected.hasPrefix("body:"), !selected.hasPrefix("star:") {
+                snapshot.skyView.selected = nil
+            }
+            updateOverhead(force: true)
+        case let .select(id): snapshot.skyView.selected = id
+        }
+        saveSkyView()
+    }
+
+    private static func loadSkyView() -> SkyView {
+        let defaults = UserDefaults.standard
+        var view = SkyView()
+        if let layers = defaults.stringArray(forKey: "skyLayers") {
+            view.layers = Set(layers.compactMap(SkyLayer.init(rawValue:)))
+        }
+        if let fov = defaults.object(forKey: "skyFOV") as? Double { view.zoom(by: fov / view.fov) }
+        return view
+    }
+
+    private func saveSkyView() {
+        let defaults = UserDefaults.standard
+        defaults.set(snapshot.skyView.layers.map(\.rawValue).sorted(), forKey: "skyLayers")
+        defaults.set(snapshot.skyView.fov, forKey: "skyFOV")
+    }
+
+    /// Planes and the station, while the sky fills the glasses: fetched every so often, moved
+    /// along their tracks every second in between.
+    private func updateOverhead(force: Bool = false, now: Date = Date()) {
+        guard solo == .sky, !clearView, let here = lastCoordinate else { return }
+        let layers = snapshot.skyView.layers
+        overheadProvider.refresh(latitude: here.latitude, longitude: here.longitude,
+                                 planes: layers.contains(.planes), station: layers.contains(.iss), now: now)
+        snapshot.overhead = overheadProvider.overhead(latitude: here.latitude, longitude: here.longitude, now: now)
     }
 
     /// Star the current site, or unstar it.
@@ -714,6 +963,11 @@ final class HudController: ObservableObject {
         guard ticks != 0 else { return }
         // In the Maps app, scrolling zooms: down to see more, up to see closer.
         if mapFillsCanvas { return zoomMap(pow(1.1, Double(ticks))) }
+        if solo == .sky && !clearView {
+            snapshot.skyView.zoom(notches: ticks)
+            saveSkyView()
+            return
+        }
         switch layout.hitTest(pointer.position) {
         case let .mac(p):
             // A Mac wheel's positive is up; a tick's is down the page.
@@ -994,6 +1248,7 @@ final class HudController: ObservableObject {
         activityProvider.tick(now: now)
         captions.tick(now: now)
         updateSky()
+        updateOverhead(now: now)
     }
 
     private func timerChanged(now: Date = Date()) {
@@ -1042,6 +1297,7 @@ final class HudController: ObservableObject {
         recognizer.settings = trackpad
         rail.scrollSpeed = trackpad.scrollSpeed
         rail.naturalScrolling = trackpad.naturalScrolling
+        remote.air.speed = Double(trackpad.trackingSpeed)
         let defaults = UserDefaults.standard
         defaults.set(trackpad.trackingSpeed, forKey: "trackingSpeed")
         defaults.set(trackpad.scrollSpeed, forKey: "scrollSpeed")
@@ -1101,6 +1357,10 @@ final class HudController: ObservableObject {
             momentum.stop()
             pointerMoved()
         case .tapClick: click()
+        case .rightClick where solo == .sky && !clearView:
+            // The sky's wheel zooms; the other button puts the view back.
+            snapshot.skyView.recentre()
+            saveSkyView()
         case .rightClick:
             switch layout.hitTest(pointer.position) {
             case let .mac(p):
@@ -1171,6 +1431,18 @@ final class HudController: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The phone was locked or left: the cursor goes, and so does pointing with the phone.
+    private func phoneWentAway() {
+        putCursorAway()
+        remote.stop()
+        remoteTouches.removeAll()
+        contacts = []
+    }
+
+    private func phoneCameBack() {
+        if pad == .remote { remote.start() }
     }
 
     /// Off the glasses until the trackpad is next touched.

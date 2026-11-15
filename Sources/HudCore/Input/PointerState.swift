@@ -53,6 +53,11 @@ public final class PointerState {
         }
     }
 
+    /// Straight to a point, as the remote's CENTRE does.
+    public func place(at point: CGPoint) {
+        position = CGPoint(x: min(max(point.x, 0), bounds.width - 1), y: min(max(point.y, 0), bounds.height - 1))
+    }
+
     public func drainScroll() -> Int {
         defer { scrollTicks = 0 }
         return scrollTicks

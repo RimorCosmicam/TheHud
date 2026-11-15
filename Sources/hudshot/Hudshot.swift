@@ -39,7 +39,7 @@ struct Hudshot {
         // for — aspect correction and dot pitch both follow the surface, not the screen.
         let scale = PhoneMetrics.scale
         let surfaceW = Int((PhoneMetrics.size.width - PhoneMetrics.surfaceMargin * 2) * scale)
-        let surfaceH = Int(PhoneMetrics.trackpad * scale)
+        let surfaceH = Int((PhoneMetrics.trackpad - PhoneMetrics.padHeader) * scale)
         let surfaceSize = SIMD2<Float>(Float(surfaceW), Float(surfaceH))
 
         let plain = try renderer.render(width: surfaceW, height: surfaceH)
@@ -135,6 +135,43 @@ struct Hudshot {
             try write(GlassesScreen(snapshot: still, arrangement: fullGrid, solo: kind),
                       to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
         }
+        // The sky with planes and the station up, Saturn picked; then south with the zodiac,
+        // and zoomed in on a plane.
+        var skyStill = still
+        skyStill.overhead = .preview
+        skyStill.skyView.selected = "body:SATURN"
+        try write(GlassesScreen(snapshot: skyStill, arrangement: fullGrid, solo: .sky),
+                  to: outDir, "glasses-solo-sky", scale: 1)
+        var south = skyStill
+        south.minimap.heading = 175
+        south.skyView.selected = "sign:\(Zodiac.pisces.rawValue)"
+        try write(GlassesScreen(snapshot: south, arrangement: fullGrid, solo: .sky),
+                  to: outDir, "glasses-sky-south", scale: 1)
+        var close = skyStill
+        close.skyView.fov = 64
+        close.skyView.tilt = 6
+        close.skyView.selected = "plane:4951d6"
+        try write(GlassesScreen(snapshot: close, arrangement: fullGrid, solo: .sky),
+                  to: outDir, "glasses-sky-close", scale: 1)
+        var lookingUp = skyStill
+        lookingUp.skyView.fov = 160
+        lookingUp.skyView.tilt = 40
+        lookingUp.skyView.layers.insert(.grid)
+        lookingUp.skyView.selected = "iss"
+        try write(GlassesScreen(snapshot: lookingUp, arrangement: fullGrid, solo: .sky),
+                  to: outDir, "glasses-sky-wide", scale: 1)
+
+        // The phone's lower half: pointing it as a remote, and the fullscreen apps' own pads.
+        try write(PhoneScreen(surface: touched, pad: .remote), to: outDir, "phone-remote", scale: scale)
+        var phoneSky = skyStill
+        phoneSky.skyView.selected = "plane:4951d6"
+        try write(PhoneScreen(surface: plain, solo: .sky, pad: .app, appSnapshot: phoneSky),
+                  to: outDir, "phone-pad-sky", scale: scale)
+        for kind in [HudPanelKind.music, .clock, .captions, .note] {
+            try write(PhoneScreen(surface: plain, solo: kind, pad: .app, appSnapshot: skyStill),
+                      to: outDir, "phone-pad-\(kind.rawValue)", scale: scale)
+        }
+
         // A running timer in the clock app, the cursor on it.
         var timing = still
         var timer = HudTimer(setSeconds: 25 * 60)

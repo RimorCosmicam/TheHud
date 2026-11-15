@@ -20,6 +20,10 @@ public struct HudSnapshot: Sendable {
     /// Steps today. Nil where the phone cannot count them, or before it has.
     public var activity: Activity? = .preview
     public var sky: Sky = Sky()
+    /// Aircraft and the space station over the wearer, for the sky app.
+    public var overhead: Overhead = Overhead()
+    /// What the sky app shows and how far in it is zoomed.
+    public var skyView: SkyView = SkyView()
     /// What the Music app is playing. Nil when nothing is queued.
     public var music: NowPlaying? = .preview
     public var note: Note = .preview
@@ -396,11 +400,20 @@ public struct HudSnapshot: Sendable {
         /// Stars above the horizon, as azimuth and altitude in degrees.
         public var stars: [Star] = []
         /// Constellation figures; points below the horizon are kept so lines can be cut there.
-        public var lines: [[Point]] = []
+        public var lines: [Figure] = []
         public var constellations: [Label] = []
         public var starNames: [Label] = []
         /// The sun, the moon and the planets.
         public var bodies: [Body] = []
+        /// The Milky Way's outline, in five nested levels of brightness.
+        public var milkyWay: [Band] = []
+        /// The sun's yearly path, all the way round, every two degrees.
+        public var ecliptic: [Point] = []
+        /// The twelve signs, each at the middle of its thirty degrees of the ecliptic.
+        public var signs: [Sign] = []
+        /// The signs the sun and the moon are in now (tropical, as horoscopes count them).
+        public var sunSign: Zodiac?
+        public var moonSign: Zodiac?
 
         public init() {}
 
@@ -412,8 +425,18 @@ public struct HudSnapshot: Sendable {
                 self.az = az; self.alt = alt; self.mag = mag; self.bv = bv } }
         public struct Label: Sendable { public var az: Float; public var alt: Float
             public var name: String
-            public init(az: Float, alt: Float, name: String) {
-                self.az = az; self.alt = alt; self.name = name } }
+            /// One of the twelve constellations the ecliptic runs through.
+            public var zodiac: Bool
+            public init(az: Float, alt: Float, name: String, zodiac: Bool = false) {
+                self.az = az; self.alt = alt; self.name = name; self.zodiac = zodiac } }
+        public struct Figure: Sendable { public var points: [Point]; public var zodiac: Bool
+            public init(points: [Point], zodiac: Bool = false) {
+                self.points = points; self.zodiac = zodiac } }
+        public struct Band: Sendable { public var level: Int; public var points: [Point]
+            public init(level: Int, points: [Point]) { self.level = level; self.points = points } }
+        public struct Sign: Sendable { public var sign: Zodiac; public var az: Float; public var alt: Float
+            public init(sign: Zodiac, az: Float, alt: Float) {
+                self.sign = sign; self.az = az; self.alt = alt } }
         public struct Body: Sendable {
             public enum Kind: Sendable { case sun, moon, planet }
             public var kind: Kind

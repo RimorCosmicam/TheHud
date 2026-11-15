@@ -44,6 +44,18 @@ public struct HudTimer: Sendable, Equatable {
         banked = 0
     }
 
+    /// A new time to count down from, starting over; zero for the stopwatch.
+    public mutating func set(minutes: Int) {
+        reset()
+        setSeconds = min(max(minutes, 0), 180) * 60
+    }
+
+    /// More time on a countdown, running or not.
+    public mutating func add(minutes: Int) {
+        guard setSeconds > 0 else { return }
+        setSeconds = min(setSeconds + minutes * 60, 180 * 60)
+    }
+
     /// The wheel over an idle timer: a minute a notch under ten minutes, five above.
     public mutating func adjust(notches: Int) {
         guard isIdle, notches != 0 else { return }

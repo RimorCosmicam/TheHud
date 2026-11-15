@@ -74,6 +74,10 @@ public struct GlassesScreen: View {
                     // Maps lays its controls out on the whole canvas itself.
                     MapsApp(minimap: snapshot.minimap, maps: snapshot.maps, ground: mapGround,
                             proceduralGround: placeholders, cursor: snapshot.cursor)
+                } else if solo == .sky {
+                    // The sky is the whole canvas, edge to edge.
+                    SkyApp(snapshot.sky, overhead: snapshot.overhead, view: snapshot.skyView,
+                           heading: snapshot.minimap.heading)
                 } else {
                     soloApp(solo).at(GlassesLayout.safeFrame)
                 }
@@ -155,11 +159,10 @@ public struct GlassesScreen: View {
         case .clock: ClockApp(snapshot.clock, timer: snapshot.timer, hover: hover)
         case .weather: WeatherApp(snapshot.weather)
         case .activity: ActivityApp(snapshot.activity)
-        case .sky: SkyApp(snapshot.sky, heading: snapshot.minimap.heading)
         case .music: MusicApp(snapshot.music, artwork: artwork, hover: hover)
         case .note: NoteApp(snapshot.note)
         case .captions: CaptionsApp(snapshot.captions)
-        case .map, .browser, .mac: EmptyView()
+        case .map, .sky, .browser, .mac: EmptyView()
         }
     }
 

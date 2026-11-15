@@ -139,6 +139,17 @@ public enum PhoneAction: Sendable {
     case selectWindow(Int?)
     /// With the browser and the desktop both on: list the Mac's windows instead of the tabs.
     case showWindows(Bool)
+    /// What the lower half of the phone is: see `PhonePad`.
+    case pad(PhonePad)
+    /// A thumb on one of the remote's zones, in the pad's own points.
+    case remote(RemoteZone, RemoteTouchPhase, CGPoint)
+    /// The fullscreen apps' own controls.
+    case sky(SkyAction)
+    case music(MusicLayout.Control)
+    case timer(TimerAction)
+    case captionsToggle, captionsSessions
+    case captionsLanguage(String)
+    case note(NoteAction)
 }
 
 /// The icon row: the browser's own controls, the keyboard, and the gear.
@@ -866,6 +877,9 @@ public struct PhoneScreen: View {
     public var editing: Bool
     public var desktop: HudSnapshot.Desktop
     public var showsWindows: Bool
+    public var pad: PhonePad
+    /// What the fullscreen app's controls show, for `.app`.
+    public var appSnapshot: HudSnapshot?
 
     public init(surface: CGImage,
                 railActive: Bool = false,
@@ -878,7 +892,11 @@ public struct PhoneScreen: View {
                 clearView: Bool = false,
                 editing: Bool = false,
                 desktop: HudSnapshot.Desktop = HudSnapshot.Desktop(),
-                showsWindows: Bool = false) {
+                showsWindows: Bool = false,
+                pad: PhonePad = .touchpad,
+                appSnapshot: HudSnapshot? = nil) {
+        self.pad = pad
+        self.appSnapshot = appSnapshot
         self.arrangement = arrangement
         self.clearView = clearView
         self.editing = editing
@@ -922,12 +940,25 @@ public struct PhoneScreen: View {
             }
 
             if !editing {
-                TrackpadSurface(surface: surface,
-                                railActive: railActive,
-                                cornerPressed: cornerPressed,
-                                keyboardUp: keyboardUp)
-                    .frame(height: PhoneMetrics.trackpad)
-                    .padding(.horizontal, PhoneMetrics.surfaceMargin)
+                VStack(spacing: 0) {
+                    PadHeader(current: pad, app: solo)
+                    Group {
+                        switch pad {
+                        case .touchpad:
+                            TrackpadSurface(surface: surface, railActive: railActive,
+                                            cornerPressed: cornerPressed, keyboardUp: keyboardUp)
+                        case .remote:
+                            Image(decorative: surface, scale: PhoneMetrics.scale).resizable()
+                                .overlay(RemotePad())
+                        case .app:
+                            AppPad(kind: solo ?? .sky, snapshot: appSnapshot ?? .blank, scrolls: false)
+                        }
+                    }
+                    .frame(height: PhoneMetrics.trackpad - PhoneMetrics.padHeader)
+                    .clipShape(PhoneMetrics.surfaceShape(keyboardUp: keyboardUp))
+                }
+                .frame(height: PhoneMetrics.trackpad)
+                .padding(.horizontal, PhoneMetrics.surfaceMargin)
             }
 
             Color.black.frame(height: PhoneMetrics.bottomGap(keyboard: keyboardHeight))

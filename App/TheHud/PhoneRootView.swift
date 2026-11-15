@@ -66,6 +66,10 @@ struct PhoneRootView: View {
             SettingsSheet(controller: controller)
                 .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $controller.showingCaptionSessions) {
+            NavigationStack { CaptionsSessionsView() }
+                .presentationDetents([.medium, .large])
+        }
         .preferredColorScheme(.dark)
         .onAppear { controller.start() }
         .onChange(of: controller.keyboardTarget) { _, target in typing = target != nil }
@@ -118,7 +122,29 @@ struct PhoneRootView: View {
             .allowsHitTesting(false)
     }
 
+    /// The header that switches it, then the pad: the trackpad, the remote, or the fullscreen
+    /// app's own controls.
     private func surface(_ size: CGSize, keyboardUp: Bool) -> some View {
+        let padSize = CGSize(width: size.width, height: max(size.height - PhoneMetrics.padHeader, 0))
+        return VStack(spacing: 0) {
+            PadHeader(current: controller.pad, app: controller.solo, action: controller.perform)
+            Group {
+                switch controller.pad {
+                case .touchpad: touchpad(padSize)
+                case .remote: remote(padSize)
+                case .app:
+                    AppPad(kind: controller.solo ?? .sky, snapshot: controller.snapshot,
+                           captionsLanguage: controller.captionsLanguage, action: controller.perform)
+                }
+            }
+            .frame(height: padSize.height)
+            .clipShape(PhoneMetrics.surfaceShape(keyboardUp: keyboardUp))
+            .animation(.easeOut(duration: 0.2), value: keyboardUp)
+        }
+        .frame(height: size.height)
+    }
+
+    private func touchpad(_ size: CGSize) -> some View {
         ZStack {
             HalftoneSurfaceView(config: controller.config,
                                 contacts: controller.contacts,
@@ -133,9 +159,19 @@ struct PhoneRootView: View {
             // pad, rail or corner in UIKit.
             TrackpadTouchHost(controller: controller)
         }
-        .frame(height: size.height)
-        .clipShape(PhoneMetrics.surfaceShape(keyboardUp: keyboardUp))
-        .animation(.easeOut(duration: 0.2), value: keyboardUp)
+    }
+
+    /// Pointing the phone moves the cursor; the halftone shows through the zones.
+    private func remote(_ size: CGSize) -> some View {
+        ZStack {
+            HalftoneSurfaceView(config: controller.config,
+                                contacts: controller.contacts,
+                                surfaceSize: size)
+                .allowsHitTesting(false)
+            RemotePad { zone, phase, point in
+                controller.perform(.remote(zone, phase, point))
+            }
+        }
     }
 }
 
