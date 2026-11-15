@@ -52,6 +52,30 @@ brew install xcodegen && xcodegen
 This machine has no Xcode, so CI is the first place the app is compiled at all. See the note in
 `Scenes.swift` about the scene-accessory registration iOS 27 may require.
 
+## Getting it on a phone
+
+CI builds an unsigned `.ipa` on every push, attached to the run as `TheHud-unsigned-ipa`:
+
+```
+gh run download --name TheHud-unsigned-ipa
+```
+
+Unsigned means it will not install until it is signed with an identity. Sideloadly or AltStore
+will do that with a free Apple ID, which gives a seven-day install that has to be refreshed; a
+paid account gives a year. Cydia Impactor no longer signs — Apple changed their auth endpoints in
+2019 and it was never updated.
+
+With Xcode installed, running to a device directly is simpler than any of this:
+
+```
+brew install xcodegen && xcodegen
+```
+
+then open `TheHud.xcodeproj`, set a team, and run.
+
+Two things the app needs that signing does not provide: an iPhone 15 or later with a USB-C port
+that carries DisplayPort, and a cable that carries video.
+
 ## Where the data comes from
 
 | Panel | Source | Needs |
