@@ -84,7 +84,10 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
     public func load(_ url: URL) { webView.load(URLRequest(url: url)) }
     public func back() { webView.goBack() }
     public func forward() { webView.goForward() }
-    public func reload() { webView.isLoading ? webView.stopLoading() : webView.reload() }
+
+    public func reload() {
+        if webView.isLoading { webView.stopLoading() } else { webView.reload() }
+    }
 
     // ------------------------------------------------------------------ pointer
 
