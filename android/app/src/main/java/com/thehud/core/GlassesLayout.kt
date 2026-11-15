@@ -38,6 +38,10 @@ sealed interface GlassesHit {
     data class CloseTab(val index: Int) : GlassesHit
     /** A point in the page, in the web view's own canvas points. */
     data class Page(val point: Offset) : GlassesHit
+    /** A point on the Mac's picture, 0 to 1 across it. */
+    data class Mac(val point: Offset) : GlassesHit
+    /** The Android apps panel: its bar's buttons, or a point in its content, in panel points. */
+    data class Apps(val target: AppsLayout.Target, val point: Offset) : GlassesHit
     data class Widget(val kind: HudPanelKind, val point: Offset, val size: Size) : GlassesHit
     data object None : GlassesHit
 }
@@ -53,7 +57,9 @@ class GlassesLayout(
     tabCount: Int = 1,
     val activeTab: Int = 0,
     fullscreen: Boolean = false,
+    desktopAspect: Float = 16f / 10f,
 ) {
+    val desktopAspect = if (desktopAspect > 0) desktopAspect else 16f / 10f
     val tabCount = maxOf(tabCount, 1)
     val fullscreen: Boolean = fullscreen && !clearView &&
         (solo?.let { it == HudPanelKind.browser } ?: arrangement.isShown(HudPanelKind.browser))
@@ -127,6 +133,17 @@ class GlassesLayout(
     }
 
     val browserFrame get() = frameOf(HudPanelKind.browser)
+    val desktopFrame get() = frameOf(HudPanelKind.mac)
+    val appsFrame get() = frameOf(HudPanelKind.apps)
+
+    /** The Mac's picture inside its panel, fitted without cropping. */
+    val desktopPicture: Rect?
+        get() {
+            val f = desktopFrame ?: return null
+            val w = minOf(f.width, f.height * desktopAspect)
+            val h = w / desktopAspect
+            return Rect(Offset(f.center.x - w / 2, f.center.y - h / 2), Size(w, h))
+        }
 
     val barFrame: Rect?
         get() {
@@ -149,6 +166,12 @@ class GlassesLayout(
     fun hitTest(p: Offset): GlassesHit {
         if (clearView) return GlassesHit.None
         soloWidgetFrame?.let { f -> solo?.let { return GlassesHit.Widget(it, p - f.topLeft, f.size) } }
+        desktopPicture?.let { pic ->
+            if (pic.contains(p)) return GlassesHit.Mac(Offset((p.x - pic.left) / pic.width, (p.y - pic.top) / pic.height))
+        }
+        appsFrame?.let { f ->
+            if (f.contains(p)) return GlassesHit.Apps(AppsLayout.target(p - f.topLeft, f.size), p - f.topLeft)
+        }
         for ((kind, f) in widgetFrames) if (f.contains(p)) return GlassesHit.Widget(kind, p - f.topLeft, f.size)
         val frame = browserFrame
         if (frame == null || !frame.contains(p)) return GlassesHit.None
@@ -169,4 +192,184 @@ class GlassesLayout(
         }
         return GlassesHit.Page(p - frame.topLeft)
     }
+}
+
+/** The Android apps panel: a bar like the browser's, and the app (or the grid of apps) under it. */
+object AppsLayout {
+    enum class Target { home, back, close, content }
+
+    val contentTop get() = BrowserMetrics.contentTopInset
+    const val TILE_WIDTH = 200f
+    const val TILE_HEIGHT = 190f
+    const val GRID_INSET = 40f
+
+    fun bar(size: Size) = Rect(Offset(BrowserMetrics.BAR_INSET, BrowserMetrics.BAR_INSET),
+        Size(size.width - BrowserMetrics.BAR_INSET * 2, BrowserMetrics.BAR_HEIGHT))
+
+    /** Where the app's own window goes, in panel points. */
+    fun content(size: Size) = Rect(0f, contentTop, size.width, size.height)
+
+    fun target(p: Offset, size: Size): Target {
+        val bar = bar(size)
+        if (!bar.contains(p)) return Target.content
+        val x = p.x - bar.left
+        val b = BrowserMetrics.BUTTON_WIDTH
+        return when {
+            x < b -> Target.home
+            x < b * 2 -> Target.back
+            x >= bar.width - b -> Target.close
+            else -> Target.content
+        }
+    }
+
+    fun columns(size: Size) = maxOf(1, ((size.width - GRID_INSET * 2) / TILE_WIDTH).toInt())
+    fun rows(size: Size) = maxOf(1, ((size.height - contentTop - GRID_INSET) / TILE_HEIGHT).toInt())
+
+    fun tile(slot: Int, size: Size): Rect {
+        val cols = columns(size)
+        val used = cols * TILE_WIDTH
+        val x0 = (size.width - used) / 2
+        return Rect(Offset(x0 + slot % cols * TILE_WIDTH, contentTop + GRID_INSET / 2 + slot / cols * TILE_HEIGHT),
+            Size(TILE_WIDTH, TILE_HEIGHT))
+    }
+
+    /** The app under a point of the grid, as an index into the list. */
+    fun app(at: Offset, size: Size, scrollRow: Int, count: Int): Int? {
+        val cols = columns(size)
+        for (slot in 0 until cols * rows(size)) {
+            if (tile(slot, size).contains(at)) {
+                val i = scrollRow * cols + slot
+                return i.takeIf { it < count }
+            }
+        }
+        return null
+    }
+
+    fun maxRow(count: Int, size: Size): Int {
+        val cols = columns(size)
+        return maxOf(0, (count + cols - 1) / cols - rows(size))
+    }
+}
+
+/** The Maps app's floating controls, for drawing and for hit testing. */
+class MapsLayout(val resultCount: Int = 0, val navigating: Boolean = false) {
+    enum class Target { none, search, endRoute, transport, zoomIn, zoomOut, result }
+    data class Hit(val target: Target, val index: Int = 0)
+
+    companion object {
+        const val MARGIN = 28f
+        const val CARD_WIDTH = 640f
+        const val SEARCH_HEIGHT = 72f
+        const val ROW_HEIGHT = 88f
+        const val BUTTON_SIZE = 76f
+        const val TRIP_HEIGHT = 104f
+        const val TRIP_BUTTON_WIDTH = 132f
+    }
+
+    val panel get() = GlassesLayout.safeFrame
+    val searchFrame get() = Rect(Offset(panel.left + MARGIN, panel.top + MARGIN), Size(CARD_WIDTH, SEARCH_HEIGHT))
+    fun resultFrame(i: Int) = Rect(Offset(searchFrame.left, searchFrame.bottom + 12 + i * ROW_HEIGHT), Size(CARD_WIDTH, ROW_HEIGHT))
+    val turnFrame get() = Rect(searchFrame.topLeft, Size(CARD_WIDTH, 200f))
+    val tripFrame get() = Rect(Offset(panel.left + MARGIN, panel.bottom - MARGIN - TRIP_HEIGHT), Size(CARD_WIDTH + 260, TRIP_HEIGHT))
+    val endFrame get() = Rect(Offset(tripFrame.right - 12 - TRIP_BUTTON_WIDTH, tripFrame.top + 14), Size(TRIP_BUTTON_WIDTH, tripFrame.height - 28))
+    val transportFrame get() = endFrame.translate(-(TRIP_BUTTON_WIDTH + 10), 0f)
+    val zoomInFrame get() = Rect(Offset(panel.right - MARGIN - BUTTON_SIZE, panel.center.y - BUTTON_SIZE - 6), Size(BUTTON_SIZE, BUTTON_SIZE))
+    val zoomOutFrame get() = zoomInFrame.translate(0f, BUTTON_SIZE + 12)
+
+    fun hitTest(p: Offset): Hit {
+        if (zoomInFrame.contains(p)) return Hit(Target.zoomIn)
+        if (zoomOutFrame.contains(p)) return Hit(Target.zoomOut)
+        if (navigating) {
+            if (endFrame.contains(p)) return Hit(Target.endRoute)
+            if (transportFrame.contains(p)) return Hit(Target.transport)
+            return Hit(Target.none)
+        }
+        if (searchFrame.contains(p)) return Hit(Target.search)
+        for (i in 0 until resultCount) if (resultFrame(i).contains(p)) return Hit(Target.result, i)
+        return Hit(Target.none)
+    }
+}
+
+/** The clock app's timer card, in the app's own points: scroll to set, click to start, right-click to reset. */
+object ClockAppLayout {
+    val timerCard = Rect(Offset(824f, 330f), Size(440f, 320f))
+}
+
+/** Where Now Playing's buttons are, for drawing and for clicks. */
+object MusicLayout {
+    enum class Control { previous, playPause, next }
+
+    fun buttons(size: Size, large: Boolean): List<Pair<Control, Rect>> {
+        val width = if (large) 150f else 76f
+        val height = if (large) 110f else 56f
+        val spacing = if (large) 28f else 12f
+        val total = width * 3 + spacing * 2
+        val x0 = if (large) 700f else (size.width - total) / 2
+        val y = if (large) 640f else size.height - 26 - height
+        return Control.entries.mapIndexed { i, c -> c to Rect(Offset(x0 + i * (width + spacing), y), Size(width, height)) }
+    }
+
+    fun control(at: Offset, size: Size, large: Boolean) = buttons(size, large).firstOrNull { it.second.contains(at) }?.first
+}
+
+/** Where everything sits in the YouTube app held up alone, in the safe frame's points (1792 by 952). */
+object YouTubeAppLayout {
+    sealed interface Target {
+        data class Tab(val tab: HudSnapshot.YouTube.Tab) : Target
+        data object NowPlaying : Target
+        data class Card(val index: Int) : Target
+        data object Video : Target
+    }
+
+    val size = Size(1792f, 952f)
+    const val COLUMNS = 4
+    const val VISIBLE_ROWS = 2
+    private const val GRID_X = 72f
+    private const val GRID_Y = 150f
+    const val CARD_WIDTH = 388f
+    private const val CARD_GAP = 32f
+    const val THUMB_HEIGHT = 218f
+    private const val CARD_HEIGHT = 330f
+    private const val ROW_GAP = 34f
+    val nowPlayingTile = Rect(Offset(1240f, 34f), Size(480f, 84f))
+    val tileVideo = Rect(Offset(1242f, 36f), Size(142f, 80f))
+
+    private fun tabWidth(tab: HudSnapshot.YouTube.Tab) = when (tab) {
+        HudSnapshot.YouTube.Tab.home -> 150f
+        HudSnapshot.YouTube.Tab.subscriptions -> 290f
+        HudSnapshot.YouTube.Tab.search -> 180f
+    }
+
+    fun tabFrame(index: Int, tabs: List<HudSnapshot.YouTube.Tab>): Rect {
+        var x = 72f
+        tabs.forEachIndexed { i, tab ->
+            val w = tabWidth(tab)
+            if (i == index) return Rect(Offset(x, 44f), Size(w, 60f))
+            x += w + 14
+        }
+        return Rect.Zero
+    }
+
+    fun cardFrame(slot: Int): Rect {
+        val column = slot % COLUMNS
+        val row = slot / COLUMNS
+        return Rect(Offset(GRID_X + column * (CARD_WIDTH + CARD_GAP), GRID_Y + row * (CARD_HEIGHT + ROW_GAP)),
+            Size(CARD_WIDTH, CARD_HEIGHT))
+    }
+
+    fun target(p: Offset, youtube: HudSnapshot.YouTube): Target? {
+        if (youtube.page == HudSnapshot.YouTube.Page.player) return Target.Video
+        youtube.tabs.forEachIndexed { i, tab -> if (tabFrame(i, youtube.tabs).contains(p)) return Target.Tab(tab) }
+        if (youtube.hasVideo && nowPlayingTile.contains(p)) return Target.NowPlaying
+        val list = youtube.list(youtube.tab)
+        for (slot in 0 until COLUMNS * VISIBLE_ROWS) {
+            if (cardFrame(slot).contains(p)) {
+                val index = youtube.scrollRow * COLUMNS + slot
+                return if (index < list.size) Target.Card(index) else null
+            }
+        }
+        return null
+    }
+
+    fun maxRow(count: Int) = maxOf(0, (count + COLUMNS - 1) / COLUMNS - VISIBLE_ROWS)
 }

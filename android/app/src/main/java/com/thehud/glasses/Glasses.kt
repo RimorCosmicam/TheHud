@@ -50,12 +50,20 @@ import kotlin.math.min
  */
 @Composable
 fun GlassesRoot() {
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxSize()
+        .background(if (HudController.snapshot.apps.running != null) Color.Transparent else Color.Black), contentAlignment = Alignment.Center) {
         val scale = min(constraints.maxWidth / HudTheme.CANVAS_WIDTH, constraints.maxHeight / HudTheme.CANVAS_HEIGHT)
             .takeIf { it > 0f } ?: 1f
         CompositionLocalProvider(LocalDensity provides Density(scale, 1f)) {
             Box(Modifier.requiredSize(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-                GlassesScreen(HudController.snapshot, HudController.layout, page = { LivePage() })
+                GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
+                    page = { LivePage() },
+                    youtube = HudController.youtube?.let { player -> { LiveVideo(player) } },
+                    mac = { LiveMac() },
+                    mapGround = HudController.mapGround,
+                    artwork = HudController.artwork,
+                    appIcon = HudController::appIcon,
+                    standIn = false))
             }
         }
     }
@@ -73,6 +81,18 @@ private fun LivePage() {
     key(tab) {
         AndroidView(factory = { tab.detach(); tab.view }, modifier = Modifier.fillMaxSize(), onRelease = { tab.detach() })
     }
+}
+
+/** The YouTube player's web view: one view, made once, placed by the layer and never moved between views. */
+@Composable
+private fun LiveVideo(player: com.thehud.youtube.YouTubePlayer) {
+    AndroidView(factory = { player.detach(); player.view }, modifier = Modifier.fillMaxSize(), onRelease = { player.detach() })
+}
+
+/** The Mac's picture, decoded straight onto this view's surface. */
+@Composable
+private fun LiveMac() {
+    AndroidView(factory = { c -> android.view.TextureView(c).also { HudController.attachMac(it) } }, modifier = Modifier.fillMaxSize())
 }
 
 /**
@@ -95,7 +115,11 @@ private class GlassesPresentation(context: Context, display: Display) : Presenta
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        // See-through where the picture is cleared: an Android app running under the Apps panel shows there.
+        window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        window?.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
         window?.decorView?.let {
             it.setViewTreeLifecycleOwner(owner)
             it.setViewTreeSavedStateRegistryOwner(owner)
@@ -146,6 +170,17 @@ object GlassesPresenter {
         // DeX reports its display to apps as off, so the state is no guide.
         val candidates = manager.displays.filter { it.displayId >= 2 && it.displayId !in phone }
         return candidates.firstOrNull { it.flags and Display.FLAG_PRESENTATION != 0 } ?: candidates.maxByOrNull { it.displayId }
+    }
+
+    /** Our window back over whatever app was started on the glasses. */
+    fun raise() {
+        if (presentation != null) return
+        val id = shownOn ?: return
+        runCatching {
+            val options = ActivityOptions.makeBasic().setLaunchDisplayId(id)
+            app.startActivity(Intent(app, GlassesActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT), options.toBundle())
+        }
     }
 
     fun refresh() {

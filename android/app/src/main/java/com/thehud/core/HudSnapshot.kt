@@ -1,6 +1,7 @@
 package com.thehud.core
 
 import androidx.compose.ui.geometry.Offset
+import kotlinx.serialization.Serializable
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -8,9 +9,23 @@ import kotlin.math.min
 /** Everything the glasses draw, in one value: the glasses are a picture of this. */
 data class HudSnapshot(
     val clock: Clock = Clock.preview,
+    /** Null until a reading has actually arrived; the panel says so rather than faking one. */
     val weather: Weather? = Weather.preview,
-    val note: Note = Note(),
+    val minimap: Minimap = Minimap.preview,
+    val maps: Maps = Maps(),
+    val desktop: Desktop = Desktop(),
     val timer: TimerReading = TimerReading(),
+    /** Steps today. Null where the phone cannot count them, or before it has. */
+    val activity: Activity? = Activity.preview,
+    val sky: Sky = Sky(),
+    val overhead: Overhead = Overhead(),
+    val skyView: SkyView = SkyView(),
+    /** What is playing. Null when nothing is. */
+    val music: NowPlaying? = NowPlaying.preview,
+    val note: Note = Note(),
+    val captions: Captions = Captions.preview,
+    val youtube: YouTube = YouTube.preview,
+    val apps: Apps = Apps(),
     val browser: Browser = Browser(),
     /** Where the pointer is, in canvas points. Null hides it. */
     val cursor: Offset? = null,
@@ -22,13 +37,36 @@ data class HudSnapshot(
         val date: String,
         val nextEvent: String? = null,
         val nextEventTime: String? = null,
+        /** "07", for the clock app's seconds. */
+        val seconds: String = "00",
+        /** Hours (0 until 12), minutes and seconds as fractions, for the dial's hands. */
+        val hourHand: Double = 0.0,
+        val minuteHand: Double = 0.0,
+        val secondHand: Double = 0.0,
+        /** The rest of today's calendar, earliest first. */
+        val agenda: List<Event> = emptyList(),
+        val worldClocks: List<WorldClock> = emptyList(),
     ) {
+        data class Event(val title: String, val time: String, val end: String? = null, val isNow: Boolean = false)
+        data class WorldClock(val city: String, val time: String, val offset: String, val isDay: Boolean)
+
         companion object {
-            val preview = Clock("9:41", null, "WEDNESDAY", "15 NOVEMBER", "Design review", "10:30")
+            val preview = Clock("9:41", null, "WEDNESDAY", "15 NOVEMBER", "Design review", "10:30",
+                seconds = "07", hourHand = 9 + 41 / 60.0, minuteHand = 41 + 7 / 60.0, secondHand = 7.0,
+                agenda = listOf(
+                    Event("Stand-up", "9:30", "9:45", isNow = true),
+                    Event("Design review", "10:30", "11:30"),
+                    Event("Lunch with Ana", "13:00", "14:00"),
+                    Event("Ship the HUD", "17:00", "18:00")),
+                worldClocks = listOf(
+                    WorldClock("NEW YORK", "7:41", "−2H", true),
+                    WorldClock("LONDON", "12:41", "+3H", true),
+                    WorldClock("TOKYO", "21:41", "+12H", false)))
         }
     }
 
-    data class Hour(val label: String, val icon: WeatherIcon, val temperature: Int)
+    data class Hour(val label: String, val icon: WeatherIcon, val temperature: Int, val precipitation: Int = 0)
+    data class Day(val label: String, val icon: WeatherIcon, val high: Int, val low: Int, val precipitation: Int)
 
     data class Weather(
         val temperature: Int,
@@ -37,16 +75,269 @@ data class HudSnapshot(
         val high: Int,
         val low: Int,
         val place: String,
+        /** The next twelve hours, now first. */
         val hours: List<Hour> = emptyList(),
+        val days: List<Day> = emptyList(),
+        val feelsLike: Int? = null,
+        val humidity: Int? = null,
+        val windKmh: Int? = null,
+        val sunrise: String? = null,
+        val sunset: String? = null,
+        val air: Air? = null,
     ) {
+        /** Air quality, UV and pollen. */
+        data class Air(val index: Int, val label: String, val uv: Double, val uvLabel: String,
+                       val pm25: Double? = null, val pollen: String? = null)
+
         companion object {
-            val preview = Weather(12, "LIGHT RAIN", WeatherIcon.rain, 14, 7, "LISBON", listOf(
-                Hour("11", WeatherIcon.rain, 12), Hour("12", WeatherIcon.rain, 13),
-                Hour("13", WeatherIcon.cloud, 14), Hour("14", WeatherIcon.partly, 14)))
+            val preview: Weather = run {
+                val temps = listOf(12, 12, 13, 14, 14, 13, 12, 11, 10, 10, 9, 9)
+                val icons = listOf(WeatherIcon.drizzle, WeatherIcon.drizzle, WeatherIcon.rain, WeatherIcon.cloud,
+                    WeatherIcon.partly, WeatherIcon.partly, WeatherIcon.cloud, WeatherIcon.cloud, WeatherIcon.moon,
+                    WeatherIcon.moon, WeatherIcon.moon, WeatherIcon.moon)
+                val rain = listOf(70, 60, 55, 30, 10, 5, 10, 10, 15, 5, 0, 0)
+                Weather(12, "LIGHT RAIN", WeatherIcon.drizzle, 14, 7, "LISBON",
+                    hours = (0 until 12).map { Hour(if (it == 0) "NOW" else "${10 + it}", icons[it], temps[it], rain[it]) },
+                    days = listOf(
+                        Day("TODAY", WeatherIcon.drizzle, 14, 7, 70), Day("THU", WeatherIcon.partly, 16, 8, 10),
+                        Day("FRI", WeatherIcon.sun, 19, 10, 0), Day("SAT", WeatherIcon.sun, 20, 11, 0),
+                        Day("SUN", WeatherIcon.cloud, 17, 11, 20), Day("MON", WeatherIcon.rain, 13, 9, 90),
+                        Day("TUE", WeatherIcon.rain, 12, 6, 60)),
+                    feelsLike = 10, humidity = 82, windKmh = 18, sunrise = "7:24", sunset = "17:21",
+                    air = Air(24, "FAIR", 2.1, "LOW", 8.2, "GRASS · LOW"))
+            }
+        }
+    }
+
+    /** A moving map. */
+    data class Minimap(
+        val place: String,
+        /** Degrees clockwise from north. */
+        val heading: Double,
+        val headingLabel: String,
+        val speed: String,
+        /** Metres across a 470-point panel: the zoom. */
+        val spanMetres: Int,
+        /** Where the wearer is from the centre of the map raster, metres east and north. */
+        val groundOffsetEast: Double = 0.0,
+        val groundOffsetNorth: Double = 0.0,
+        /** Metres across the current raster. */
+        val groundSpanMetres: Double = 0.0,
+        /** The route, metres east and north of the raster's centre. */
+        val route: List<Offset> = emptyList(),
+    ) {
+        val pointsPerMetre: Double get() = 470.0 / max(spanMetres, 1)
+        val effectiveGroundSpan: Double get() = if (groundSpanMetres > 0) groundSpanMetres else spanMetres * GROUND_OVERSIZE
+
+        companion object {
+            /** The raster covers more than the panel shows, so turning it never shows a corner. */
+            const val GROUND_OVERSIZE = 1.9
+            val preview = Minimap("ALFAMA", 34.0, "NE", "4.2 KM/H", 300)
+            val locating = Minimap("LOCATING", 0.0, "", "", 300)
+        }
+    }
+
+    /** The Maps app: what is searched, what was found, where it is going. */
+    data class Maps(
+        val query: String = "",
+        val isEditing: Boolean = false,
+        val results: List<Place> = emptyList(),
+        val status: String? = null,
+        val navigation: Navigation? = null,
+        val driving: Boolean = false,
+    ) {
+        data class Place(val name: String, val detail: String, val distance: String)
+        data class Navigation(
+            val destination: String,
+            val instruction: String,
+            val maneuver: Maneuver,
+            val stepDistance: String,
+            val remainingTime: String,
+            val remainingDistance: String,
+            val arrival: String,
+            val arrived: Boolean = false,
+        )
+    }
+
+    enum class Maneuver { straight, left, right, slightLeft, slightRight, uturn, roundabout, arrive }
+
+    enum class TimerState { idle, running, paused, done }
+
+    data class TimerReading(
+        val text: String = "5:00",
+        val progress: Float? = 0f,
+        val state: TimerState = TimerState.idle,
+        val isStopwatch: Boolean = false,
+    )
+
+    data class Activity(
+        val steps: Int,
+        val goal: Int = 8000,
+        val distanceKm: Double? = null,
+        val floors: Int? = null,
+        /** Steps in each hour of today so far, midnight first. */
+        val hourly: List<Int> = emptyList(),
+    ) {
+        val fraction: Double get() = min(steps.toDouble() / max(goal, 1), 1.0)
+
+        companion object {
+            val preview = Activity(6412, 8000, 4.7, 6, listOf(0, 0, 0, 0, 0, 0, 0, 120, 880, 1240, 310, 460, 920, 1330, 640, 512))
+        }
+    }
+
+    data class NowPlaying(
+        val title: String,
+        val artist: String,
+        val album: String = "",
+        val isPlaying: Boolean,
+        val elapsed: Double = 0.0,
+        val duration: Double = 0.0,
+        /** Which app is playing it, for the phone to say. */
+        val app: String = "",
+    ) {
+        val progress: Float get() = if (duration > 0) min(elapsed / duration, 1.0).toFloat() else 0f
+
+        companion object {
+            fun time(seconds: Double): String {
+                val s = max(seconds.toInt(), 0)
+                return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+            }
+            val preview = NowPlaying("Midnight City", "M83", "Hurry Up, We're Dreaming", true, 97.0, 243.0)
         }
     }
 
     data class Note(val text: String = "", val isEditing: Boolean = false, val scroll: Float = 0f)
+
+    data class Captions(
+        val isListening: Boolean = false,
+        /** Finished sentences, oldest first; only the last few are kept here. */
+        val lines: List<String> = emptyList(),
+        /** What is being said right now, still changing. */
+        val partial: String = "",
+        val status: String = "OFF",
+        val elapsed: String = "",
+    ) {
+        companion object {
+            val preview = Captions(true, listOf("So the plan is to ship the HUD on Friday.",
+                "We still need the icons for the editor,", "and someone should test it on the train."),
+                "I can do that tomorrow morning", "LISTENING · PT-BR", "3:12")
+        }
+    }
+
+    data class YouTube(
+        val hasVideo: Boolean = false,
+        val videoId: String = "",
+        val title: String = "",
+        val channel: String = "",
+        val isPlaying: Boolean = false,
+        val isLive: Boolean = false,
+        val elapsed: Double = 0.0,
+        val duration: Double = 0.0,
+        val isAd: Boolean = false,
+        val canSkipAd: Boolean = false,
+        /** Why the video shows no picture, when it shows none. */
+        val notice: String = "",
+        val page: Page = Page.browse,
+        val tab: Tab = Tab.home,
+        val showsSubscriptions: Boolean = false,
+        val query: String = "",
+        val isEditingQuery: Boolean = false,
+        val home: List<YouTubeVideo> = emptyList(),
+        val subscriptions: List<YouTubeVideo> = emptyList(),
+        val results: List<YouTubeVideo> = emptyList(),
+        val upNext: List<YouTubeVideo> = emptyList(),
+        val queue: List<YouTubeVideo> = emptyList(),
+        val scrollRow: Int = 0,
+        val loading: Boolean = false,
+        val problem: String = "",
+    ) {
+        enum class Tab(val title: String) { home("HOME"), subscriptions("SUBSCRIPTIONS"), search("SEARCH") }
+        enum class Page { browse, player }
+
+        val progress: Float get() = if (duration > 0) min(elapsed / duration, 1.0).toFloat() else 0f
+        val tabs: List<Tab> get() = if (showsSubscriptions) Tab.entries else listOf(Tab.home, Tab.search)
+        fun list(tab: Tab) = when (tab) { Tab.home -> home; Tab.subscriptions -> subscriptions; Tab.search -> results }
+        val sideList: List<YouTubeVideo> get() = queue + upNext.filter { it.id != videoId }
+
+        companion object {
+            val preview = YouTube(hasVideo = true, videoId = "preview", title = "Building a heads-up display from scratch",
+                channel = "Tech Explained", isPlaying = true, elapsed = 412.0, duration = 1140.0,
+                home = YouTubeVideo.samples, results = YouTubeVideo.samples.reversed(),
+                upNext = YouTubeVideo.samples.drop(3), queue = YouTubeVideo.samples.take(2))
+        }
+    }
+
+    /** The sky over the wearer: the day's sun and moon for the widget, the stars for the app. */
+    data class Sky(
+        val hasLocation: Boolean = false,
+        val sunrise: String? = null,
+        val sunset: String? = null,
+        val goldenHour: String? = null,
+        /** 0 at sunrise and 1 at sunset; null at night. */
+        val dayProgress: Double? = null,
+        val sunAltitude: Double = 0.0,
+        val moonPhase: String = "",
+        val moonPhaseIndex: Int = 0,
+        val moonIllumination: Int = 0,
+        val moonrise: String? = null,
+        val moonset: String? = null,
+        val stars: List<Star> = emptyList(),
+        val lines: List<Figure> = emptyList(),
+        val constellations: List<Label> = emptyList(),
+        val starNames: List<Label> = emptyList(),
+        val bodies: List<Body> = emptyList(),
+        val milkyWay: List<Band> = emptyList(),
+        val ecliptic: List<Point> = emptyList(),
+        val signs: List<Sign> = emptyList(),
+        val sunSign: Zodiac? = null,
+        val moonSign: Zodiac? = null,
+    ) {
+        data class Point(val az: Float, val alt: Float)
+        data class Star(val az: Float, val alt: Float, val mag: Float, val bv: Float)
+        data class Label(val az: Float, val alt: Float, val name: String, val zodiac: Boolean = false)
+        data class Figure(val points: List<Point>, val zodiac: Boolean = false)
+        data class Band(val level: Int, val points: List<Point>)
+        data class Sign(val sign: Zodiac, val az: Float, val alt: Float)
+        data class Body(val kind: Kind, val name: String, val az: Double, val alt: Double, val mag: Double) {
+            enum class Kind { sun, moon, planet }
+        }
+    }
+
+    /** Aircraft and the space station over the wearer. */
+    data class Overhead(val planes: List<Plane> = emptyList(), val station: Station? = null, val status: String = "") {
+        data class Point(val az: Double, val alt: Double)
+        data class Plane(
+            val id: String, val callsign: String, val airline: String?, val model: String?,
+            val altitude: Double, val speed: Double, val distance: Double, val track: Double,
+            val position: Point, val ahead: Point, val trail: List<Point>,
+        )
+        data class Station(val position: Point, val altitude: Double, val speed: Double, val distance: Double,
+                           val sunlit: Boolean, val path: List<Point>)
+    }
+
+    /** The Mac streamed by HudCast. */
+    data class Desktop(
+        val status: String = "LOOKING FOR YOUR MAC",
+        val connected: Boolean = false,
+        val hasPicture: Boolean = false,
+        val host: String = "",
+        val windows: List<DesktopWindow> = emptyList(),
+        val source: DesktopSource? = null,
+    ) {
+        val aspect: Float get() = source?.takeIf { it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 10f)
+        val activeWindow: Int? get() = source?.window?.let { id -> windows.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
+    }
+
+    /** Android apps on the glasses: the one running in the panel, or the grid to pick from. */
+    data class Apps(
+        val running: AppEntry? = null,
+        val list: List<AppEntry> = emptyList(),
+        val scrollRow: Int = 0,
+        /** Why apps cannot be worked, when they cannot. */
+        val notice: String = "",
+    )
+
+    data class AppEntry(val packageName: String, val label: String)
 
     data class Browser(
         val url: String = "",
@@ -62,17 +353,53 @@ data class HudSnapshot(
         val isFavorite: Boolean = false,
     )
 
-    enum class TimerState { idle, running, paused, done }
-
-    data class TimerReading(
-        val text: String = "5:00",
-        val progress: Float? = 0f,
-        val state: TimerState = TimerState.idle,
-        val isStopwatch: Boolean = false,
-    )
+    companion object {
+        /** What the device starts from: the time, and nothing it has not been told. */
+        val blank = HudSnapshot(weather = null, minimap = Minimap.locating, activity = null, music = null,
+            captions = Captions(), youtube = YouTube())
+    }
 }
 
-enum class WeatherIcon { sun, moon, partly, cloud, fog, drizzle, rain, snow, storm }
+enum class WeatherIcon { sun, moon, partly, partlyNight, cloud, fog, drizzle, rain, heavyRain, snow, storm }
+
+/** One video, as a list shows it. */
+@Serializable
+data class YouTubeVideo(
+    val id: String,
+    val title: String,
+    val channel: String = "",
+    /** "11:07", "LIVE", or empty. */
+    val duration: String = "",
+    /** "2.2K views · 3 days ago", as YouTube words it. */
+    val meta: String = "",
+) {
+    val isLive get() = duration.uppercase() == "LIVE"
+    val thumbnail get() = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
+
+    companion object {
+        val samples = listOf(
+            YouTubeVideo("s1", "Night drive through Tokyo, no talking", "City Walks", "1:12:40", "2.1M views · 3 weeks ago"),
+            YouTubeVideo("s2", "How birdbath optics work", "Optics Lab", "14:22", "380K views · 5 days ago"),
+            YouTubeVideo("s3", "Lisbon trams, a whole day", "Slow TV", "LIVE", "1.2K watching"),
+            YouTubeVideo("s4", "Making bread with one bowl", "Kitchen Notes", "9:05", "90K views · 1 day ago"),
+            YouTubeVideo("s5", "The quietest place on Earth", "Field Recordings", "22:31", "4.4M views · 2 years ago"),
+            YouTubeVideo("s6", "Jazz for a rainy afternoon", "Hygge Café", "3:38:14", "728 views · 12 hours ago"),
+            YouTubeVideo("s7", "Fixing a 1970s synthesizer", "Bench Repairs", "41:10", "212K views · 1 month ago"),
+            YouTubeVideo("s8", "Starship catch, every angle", "Launch Pad", "11:07", "657K views · 19 hours ago"),
+            YouTubeVideo("s9", "A walk in the Alfama at dawn", "City Walks", "58:02", "41K views · 6 days ago"),
+        )
+    }
+}
+
+/** A window on the Mac that can be streamed on its own. */
+@Serializable
+data class DesktopWindow(val id: Long, val app: String, val title: String) {
+    val label get() = if (title.isEmpty() || title == app) app else "$app — $title"
+}
+
+/** What the Mac is streaming. */
+@Serializable
+data class DesktopSource(val window: Long? = null, val width: Int, val height: Int, val host: String)
 
 /**
  * The clock app's timer: counts down from a set time, or up as a stopwatch. Kept as a start time
@@ -98,6 +425,12 @@ data class HudTimer(
     fun reset() = copy(startedAt = null, banked = 0)
     fun set(minutes: Int) = HudTimer(setSeconds = minutes.coerceIn(0, 180) * 60)
     fun add(minutes: Int) = if (setSeconds == 0) this else copy(setSeconds = min(setSeconds + minutes * 60, 180 * 60))
+
+    /** The wheel over the idle timer: a minute a notch, up for more. */
+    fun adjust(notches: Int): HudTimer {
+        if (!isIdle) return this
+        return HudTimer(setSeconds = (setSeconds + notches * 60).coerceIn(0, 180 * 60))
+    }
 
     fun reading(now: Long): HudSnapshot.TimerReading {
         val elapsed = elapsedMs(now) / 1000.0

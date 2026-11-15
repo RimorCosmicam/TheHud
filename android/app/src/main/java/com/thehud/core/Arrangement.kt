@@ -22,8 +22,8 @@ enum class HudPanelKind {
     companion object {
         val bigs = listOf(browser, mac, apps)
         val widgets = listOf(clock, weather, map, activity, sky, music, note, captions, youtube)
-        /** What this phone can show today; the rest arrive as they are ported. */
-        val available = setOf(browser, clock, weather, note)
+        /** Everything: the iPhone's panels, and Android's own apps. */
+        val available: Set<HudPanelKind> = entries.toSet()
     }
 }
 
@@ -208,6 +208,7 @@ data class HudArrangement(
         ) = HudArrangement(padded(left), padded(right), bigs, emptySet(), padded(row, ROW), strip)
 
         val standard = of(left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.note),
+                          right = listOf(HudPanelKind.music, HudPanelKind.activity, HudPanelKind.captions),
                           bigs = listOf(Big(HudPanelKind.browser)))
     }
 }
@@ -216,18 +217,26 @@ data class HudArrangement(
 @Serializable
 data class HudScene(val name: String, val arrangement: HudArrangement) {
     companion object {
+        /** Bumped when a preset changes enough that saved scenes should take it. */
+        const val VERSION = 2
+
         val presets = listOf(
+            // At a desk: the browser in the middle, the Mac over the right.
             HudScene("DESK", HudArrangement.of(
                 left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.note),
-                bigs = listOf(Big(HudPanelKind.browser)))),
+                right = listOf(HudPanelKind.music, HudPanelKind.activity, HudPanelKind.captions),
+                bigs = listOf(Big(HudPanelKind.browser), Big(HudPanelKind.mac, HudSide.right)))),
+            // Walking: one row of widgets along the top and a single app under it.
             HudScene("STREET", HudArrangement.of(
-                left = listOf(HudPanelKind.weather, HudPanelKind.clock),
+                left = listOf(HudPanelKind.map, HudPanelKind.weather, HudPanelKind.clock),
+                right = listOf(HudPanelKind.music, HudPanelKind.activity, HudPanelKind.captions),
                 bigs = listOf(Big(HudPanelKind.browser)),
-                row = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.note),
+                row = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.map, HudPanelKind.music),
                 strip = HudEdge.top)),
+            // Evening: something to read, and the sky.
             HudScene("NIGHT", HudArrangement.of(
-                left = listOf(HudPanelKind.clock, HudPanelKind.weather),
-                right = listOf(HudPanelKind.note),
+                left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.sky),
+                right = listOf(HudPanelKind.music, HudPanelKind.note, HudPanelKind.activity),
                 bigs = listOf(Big(HudPanelKind.browser)))),
         )
     }

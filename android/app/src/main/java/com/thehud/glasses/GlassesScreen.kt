@@ -55,7 +55,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import com.thehud.core.AppsLayout
 import com.thehud.core.BrowserMetrics
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import com.thehud.core.GlassesLayout
 import com.thehud.core.HudPanelKind
 import com.thehud.core.HudSnapshot
@@ -68,32 +75,81 @@ import com.thehud.core.WeatherIcon
 /** Puts something at a canvas rectangle. */
 fun Modifier.at(r: Rect) = this.offset(r.left.dp, r.top.dp).size(r.width.dp, r.height.dp)
 
-private val panelShape = RoundedCornerShape(HudTheme.CORNER.dp)
+internal val panelShape = RoundedCornerShape(HudTheme.CORNER.dp)
+
+/**
+ * What only the device has: the live views and pictures. The stills leave them null and draw
+ * stand-ins.
+ */
+class GlassesContent(
+    val page: (@Composable () -> Unit)? = null,
+    val youtube: (@Composable () -> Unit)? = null,
+    val mac: (@Composable () -> Unit)? = null,
+    val mapGround: ImageBitmap? = null,
+    val artwork: ImageBitmap? = null,
+    val appIcon: (String) -> ImageBitmap? = { null },
+    val standIn: Boolean = true,
+) {
+    /** Set per widget while composing, for hover in the widget's own points. */
+    var origin: Offset = Offset.Zero
+    fun local(p: Offset?) = p?.let { it - origin }
+
+    companion object { val stills = GlassesContent() }
+}
 
 /** Everything on the glasses: black, which the glasses show as nothing, and what is placed on it. */
 @Composable
-fun GlassesScreen(
-    snapshot: HudSnapshot,
-    layout: GlassesLayout,
-    /** The live page for the browser; null draws a stand-in (stills). */
-    page: (@Composable () -> Unit)? = null,
-) {
-    Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp).background(Color.Black)) {
+fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesContent = GlassesContent.stills) {
+    val cursor = snapshot.cursor
+    // The Android app's window shows through a hole while one runs; black is drawn everywhere else.
+    val appsHole = if (snapshot.apps.running != null) layout.appsFrame?.let { f ->
+        AppsLayout.content(f.size).translate(f.topLeft) } else null
+    Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)
+        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+        .drawWithContent {
+            drawContent()
+            appsHole?.let { drawRect(Color.Black, it.topLeft, it.size, blendMode = BlendMode.Clear) }
+        }) {
+        // The one video: under everything, placed, never moved between views.
+        val video = youtubeVideoBox(snapshot, layout)
+        Box(Modifier.fillMaxSize().background(Color.Black))
+        live.youtube?.let { v -> YouTubeVideoLayer(video?.first, video?.second ?: 0f) { v() } }
+        val solo = layout.solo
+        if (!layout.clearView && !layout.fullscreen && solo != null && !solo.isBig) {
+            val safe = GlassesLayout.safeFrame
+            when {
+                solo == HudPanelKind.map -> MapsApp(snapshot.minimap, snapshot.maps, live.mapGround, live.standIn, cursor)
+                solo == HudPanelKind.sky -> SkyApp(snapshot.sky, snapshot.overhead, snapshot.skyView, snapshot.minimap.heading)
+                solo == HudPanelKind.youtube && snapshot.youtube.page == HudSnapshot.YouTube.Page.player ->
+                    YouTubeFullscreen(snapshot.youtube, live.youtube != null, live.standIn)
+                else -> Box(Modifier.at(safe)) { SoloApp(solo, snapshot, live, cursor?.let { it - safe.topLeft }) }
+            }
+        }
         for ((kind, frame) in layout.bigFrames) {
             Box(Modifier.at(frame)) {
                 when (kind) {
-                    HudPanelKind.browser -> BrowserPanel(snapshot.browser, layout, snapshot.cursor, page)
+                    HudPanelKind.browser -> BrowserPanel(snapshot.browser, layout, cursor, live.page)
+                    HudPanelKind.mac -> MacPanel(snapshot.desktop, live.standIn && live.mac == null, live.mac)
+                    HudPanelKind.apps -> AppsPanel(snapshot.apps, frame.size, cursor?.let { it - frame.topLeft }, live.appIcon)
                     else -> Placeholder(kind)
                 }
             }
         }
         for ((kind, frame) in layout.widgetFrames) {
-            Box(Modifier.at(frame)) { Widget(kind, snapshot) }
+            live.origin = frame.topLeft
+            Box(Modifier.at(frame)) { Widget(kind, snapshot, live, frame.size) }
         }
-        layout.soloWidgetFrame?.let { frame ->
-            layout.solo?.let { kind -> Box(Modifier.at(frame)) { SoloApp(kind, snapshot) } }
+        if (snapshot.timer.state == HudSnapshot.TimerState.done && solo != HudPanelKind.clock && !layout.clearView) {
+            Box(Modifier.fillMaxSize().padding(top = 96.dp), contentAlignment = Alignment.TopCenter) {
+                Row(Modifier.background(HudTheme.accent, RoundedCornerShape(50)).padding(horizontal = 34.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    BasicText("TIME'S UP", style = HudTheme.mont(26f, tracking = 4f, color = Color.Black))
+                }
+            }
         }
-        snapshot.cursor?.let { CursorArrow(it) }
+        // Over the Mac's own picture its own cursor shows; ours would be a second one.
+        val overMac = snapshot.desktop.hasPicture && cursor != null && layout.desktopPicture?.contains(cursor) == true
+        if (cursor != null && !overMac) CursorArrow(cursor)
     }
 }
 
@@ -112,7 +168,7 @@ fun Modifier.surface(padding: Float = 26f) = this.fillMaxSize()
     .padding(padding.dp)
 
 @Composable
-private fun Icon(vector: ImageVector, size: Float, color: Color = HudTheme.ink) {
+internal fun HudIcon(vector: ImageVector, size: Float, color: Color = HudTheme.ink) {
     Image(vector, null, Modifier.size(size.dp), colorFilter = ColorFilter.tint(color))
 }
 
@@ -120,6 +176,8 @@ fun WeatherIcon.vector(): ImageVector = when (this) {
     WeatherIcon.sun -> Icons.Outlined.WbSunny
     WeatherIcon.moon -> Icons.Outlined.NightsStay
     WeatherIcon.partly -> Icons.Outlined.WbCloudy
+    WeatherIcon.partlyNight -> Icons.Outlined.NightsStay
+    WeatherIcon.heavyRain -> Icons.Outlined.Thunderstorm
     WeatherIcon.cloud -> Icons.Outlined.Cloud
     WeatherIcon.fog -> Icons.Outlined.Dehaze
     WeatherIcon.drizzle -> Icons.Outlined.Grain
@@ -129,11 +187,32 @@ fun WeatherIcon.vector(): ImageVector = when (this) {
 }
 
 @Composable
-fun Widget(kind: HudPanelKind, snapshot: HudSnapshot) {
+fun Widget(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, size: Size) {
     when (kind) {
         HudPanelKind.clock -> ClockWidget(snapshot.clock, snapshot.timer)
         HudPanelKind.weather -> WeatherWidget(snapshot.weather)
         HudPanelKind.note -> NoteWidget(snapshot.note)
+        HudPanelKind.map -> MapWidget(snapshot.minimap, live.mapGround, live.standIn)
+        HudPanelKind.activity -> ActivityWidget(snapshot.activity)
+        HudPanelKind.sky -> SkyWidget(snapshot.sky)
+        HudPanelKind.music -> MusicWidget(snapshot.music, live.artwork, live.local(snapshot.cursor), size)
+        HudPanelKind.captions -> CaptionsWidget(snapshot.captions)
+        HudPanelKind.youtube -> YouTubeWidget(snapshot.youtube, live.youtube != null, live.standIn)
+        else -> Placeholder(kind)
+    }
+}
+
+/** A widget held up alone, at the safe frame. */
+@Composable
+fun SoloApp(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, hover: Offset?) {
+    when (kind) {
+        HudPanelKind.clock -> ClockApp(snapshot.clock, snapshot.timer, hover)
+        HudPanelKind.weather -> WeatherApp(snapshot.weather)
+        HudPanelKind.note -> NoteApp(snapshot.note)
+        HudPanelKind.activity -> ActivityApp(snapshot.activity)
+        HudPanelKind.music -> MusicApp(snapshot.music, live.artwork, hover)
+        HudPanelKind.captions -> CaptionsApp(snapshot.captions)
+        HudPanelKind.youtube -> YouTubeApp(snapshot.youtube, live.youtube != null, live.standIn, hover)
         else -> Placeholder(kind)
     }
 }
@@ -199,7 +278,7 @@ fun WeatherWidget(weather: HudSnapshot.Weather?) {
                 BasicText("°", style = HudTheme.mont(50f))
             }
             Spacer(Modifier.weight(1f))
-            Icon(weather.icon.vector(), 54f)
+            HudIcon(weather.icon.vector(), 54f)
         }
         BasicText(weather.condition, style = HudTheme.mont(20f, tracking = 3f), maxLines = 1)
         BasicText("H ${weather.high}°  L ${weather.low}°  ·  ${weather.place}",
@@ -212,7 +291,7 @@ fun WeatherWidget(weather: HudSnapshot.Weather?) {
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     BasicText(hour.label, style = HudTheme.mont(14f, tracking = 1f, color = HudTheme.inkDim))
-                    Icon(hour.icon.vector(), 24f)
+                    HudIcon(hour.icon.vector(), 24f)
                     BasicText("${hour.temperature}°", style = HudTheme.mont(20f))
                 }
             }
@@ -237,93 +316,6 @@ fun NoteWidget(note: HudSnapshot.Note, lines: Int = 6, size: Float = 24f) {
             }, style = HudTheme.mont(size, FontWeight.SemiBold).copy(lineHeight = HudTheme.mont(size).lineHeight * 1.12f),
                 maxLines = lines, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.offset(y = (if (note.isEditing) 0f else -note.scroll).dp))
-        }
-    }
-}
-
-// ------------------------------------------------------------------ solo apps
-
-/** A widget held up alone, at the size of the whole glasses. */
-@Composable
-fun SoloApp(kind: HudPanelKind, snapshot: HudSnapshot) {
-    when (kind) {
-        HudPanelKind.clock -> ClockApp(snapshot)
-        HudPanelKind.weather -> WeatherApp(snapshot.weather)
-        HudPanelKind.note -> NoteWidget(snapshot.note, lines = 16, size = 34f)
-        else -> Placeholder(kind)
-    }
-}
-
-@Composable
-private fun ClockApp(snapshot: HudSnapshot) {
-    val clock = snapshot.clock
-    val timer = snapshot.timer
-    Column(Modifier.surface(56f)) {
-        Label("CLOCK")
-        Spacer(Modifier.weight(1f))
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            BasicText(clock.time, style = HudTheme.mont(300f, tracking = -12f), maxLines = 1)
-            clock.meridiem?.let { BasicText(it, style = HudTheme.mont(70f), modifier = Modifier.padding(bottom = 64.dp)) }
-        }
-        BasicText("${clock.weekday}  ·  ${clock.date}", style = HudTheme.mont(36f, tracking = 5f, color = HudTheme.inkDim))
-        Spacer(Modifier.weight(1f))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(6.dp, 90.dp).background(HudTheme.accent, RoundedCornerShape(2.dp)))
-            Spacer(Modifier.width(24.dp))
-            Column(Modifier.weight(1f)) {
-                BasicText(if (timer.state == HudSnapshot.TimerState.done) "TIME'S UP" else "TIMER",
-                    style = HudTheme.mont(20f, tracking = 4f, color = HudTheme.inkDim))
-                BasicText(when (timer.state) {
-                    HudSnapshot.TimerState.idle -> "Click to start"
-                    HudSnapshot.TimerState.running -> "Running · click to pause"
-                    HudSnapshot.TimerState.paused -> "Paused · click to go on"
-                    HudSnapshot.TimerState.done -> "Click to start again"
-                }, style = HudTheme.mont(30f, FontWeight.SemiBold, color = HudTheme.inkDim))
-            }
-            BasicText(timer.text, style = HudTheme.mont(110f, tracking = -3f))
-        }
-        timer.progress?.let { p ->
-            Box(Modifier.fillMaxWidth().padding(top = 20.dp).height(6.dp).background(HudTheme.inkFaint, RoundedCornerShape(3.dp))) {
-                Box(Modifier.fillMaxWidth(p).fillMaxHeight().background(HudTheme.accent, RoundedCornerShape(3.dp)))
-            }
-        }
-    }
-}
-
-@Composable
-private fun WeatherApp(weather: HudSnapshot.Weather?) {
-    Column(Modifier.surface(56f)) {
-        Label("WEATHER")
-        if (weather == null) {
-            Spacer(Modifier.height(20.dp))
-            BasicText("Waiting for a reading", style = HudTheme.mont(40f, FontWeight.SemiBold, color = HudTheme.inkDim))
-            return@Column
-        }
-        Spacer(Modifier.weight(1f))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(verticalAlignment = Alignment.Top) {
-                BasicText("${weather.temperature}", style = HudTheme.mont(260f, tracking = -10f))
-                BasicText("°", style = HudTheme.mont(140f))
-            }
-            Spacer(Modifier.width(48.dp))
-            Column {
-                Icon(weather.icon.vector(), 130f)
-                Spacer(Modifier.height(14.dp))
-                BasicText(weather.condition, style = HudTheme.mont(40f, tracking = 5f))
-                BasicText("H ${weather.high}°  L ${weather.low}°  ·  ${weather.place}",
-                    style = HudTheme.mont(26f, tracking = 3f, color = HudTheme.inkDim))
-            }
-        }
-        Spacer(Modifier.weight(1f))
-        Row(Modifier.fillMaxWidth()) {
-            for (hour in weather.hours) {
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    BasicText(hour.label, style = HudTheme.mont(24f, tracking = 2f, color = HudTheme.inkDim))
-                    Icon(hour.icon.vector(), 52f)
-                    BasicText("${hour.temperature}°", style = HudTheme.mont(40f))
-                }
-            }
         }
     }
 }
@@ -360,7 +352,7 @@ private fun Bar(browser: HudSnapshot.Browser, width: Float, showsButtons: Boolea
         if (browser.isEditingAddress) {
             Row(Modifier.offset(x = (b * 2).dp).width(maxOf(width - b * 4, 0f).dp).fillMaxHeight().padding(horizontal = 30.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Search, 26f, HudTheme.inkDim)
+                HudIcon(Icons.Rounded.Search, 26f, HudTheme.inkDim)
                 Spacer(Modifier.width(14.dp))
                 BasicText(buildAnnotatedString {
                     if (browser.url.isEmpty()) {
@@ -396,7 +388,7 @@ private fun Bar(browser: HudSnapshot.Browser, width: Float, showsButtons: Boolea
 @Composable
 private fun Nav(icon: ImageVector, enabled: Boolean) {
     Box(Modifier.width(BrowserMetrics.BUTTON_WIDTH.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-        Icon(icon, 32f, if (enabled) HudTheme.ink else HudTheme.inkFaint)
+        HudIcon(icon, 32f, if (enabled) HudTheme.ink else HudTheme.inkFaint)
     }
 }
 
@@ -416,7 +408,7 @@ private fun Tab(browser: HudSnapshot.Browser, index: Int, count: Int, hovered: B
             verticalAlignment = Alignment.CenterVertically) {
             if (active) {
                 val home = browser.isHome
-                Icon(when { home -> Icons.Rounded.Search; browser.isFavorite -> Icons.Rounded.Star; else -> Icons.Rounded.Language }, 24f,
+                HudIcon(when { home -> Icons.Rounded.Search; browser.isFavorite -> Icons.Rounded.Star; else -> Icons.Rounded.Language }, 24f,
                     if (browser.isFavorite && !home) HudTheme.accent else HudTheme.inkDim)
                 Spacer(Modifier.width(12.dp))
                 BasicText(when { home -> "Search or enter website name"; browser.title.isNotEmpty() -> browser.title; else -> browser.url },
@@ -430,7 +422,7 @@ private fun Tab(browser: HudSnapshot.Browser, index: Int, count: Int, hovered: B
         }
         if (several && hovered) {
             Box(Modifier.width(BrowserMetrics.CLOSE_WIDTH.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.Close, 22f, HudTheme.ink.copy(alpha = 0.8f))
+                HudIcon(Icons.Rounded.Close, 22f, HudTheme.ink.copy(alpha = 0.8f))
             }
         }
     }

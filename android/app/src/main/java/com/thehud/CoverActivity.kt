@@ -26,9 +26,12 @@ class CoverActivity : ComponentActivity() {
         // The cover screen sleeps after seconds; while it is the glasses' touchpad it should not.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent { CoverScreen() }
-        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION), 1)
-        }
+        // Everything the panels read, asked for once; each panel says what it lacks if refused.
+        val wanted = arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.RECORD_AUDIO, Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.READ_CALENDAR,
+            Manifest.permission.POST_NOTIFICATIONS)
+        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
 
     override fun onStart() {
@@ -40,5 +43,12 @@ class CoverActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         HudController.refreshWeather()
+        HudController.startProviders()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Back from the system's settings (notification access, accessibility): pick up what changed.
+        HudController.startProviders()
     }
 }

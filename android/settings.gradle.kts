@@ -16,6 +16,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Astronomy Engine, the sky's positions, as the iPhone app uses it.
+        maven("https://jitpack.io") { content { includeGroup("com.github.cosinekitty") } }
     }
 }
 

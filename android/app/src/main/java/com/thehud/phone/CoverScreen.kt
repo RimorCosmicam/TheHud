@@ -120,6 +120,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.thehud.HudController
+import com.thehud.padTitle
+import com.thehud.data.CaptionsLog
+import com.thehud.data.CaptionsEngine
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import com.thehud.KeyboardTarget
 import com.thehud.NoteAction
 import com.thehud.PhoneAction
@@ -207,8 +216,11 @@ fun CoverScreen() {
                     PadHeader()
                     // The pad runs to the bottom edge: the cameras simply sit over a corner of it.
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        if (c.pad == PhonePad.app && c.solo?.hasPhoneControls == true) AppControls(c.solo!!)
-                        else Touchpad(Modifier.fillMaxSize())
+                        when {
+                            c.pad == PhonePad.app && c.solo?.hasPhoneControls == true -> AppControls(c.solo!!)
+                            c.pad == PhonePad.remote -> RemotePad(Modifier.fillMaxSize())
+                            else -> Touchpad(Modifier.fillMaxSize())
+                        }
                     }
                 }
             }
@@ -578,16 +590,16 @@ private fun PadHeader() {
     val c = HudController
     val view = LocalView.current
     val app = c.solo?.takeIf { it.hasPhoneControls }
-    val choices = listOfNotNull(app?.let { PhonePad.app }, PhonePad.touchpad)
+    val choices = listOfNotNull(app?.let { PhonePad.app }, PhonePad.touchpad, PhonePad.remote)
     Row(Modifier.fillMaxWidth().height(30.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         for (pad in choices) {
-            val on = pad == c.pad || choices.size == 1
+            val on = pad == c.pad || (pad == PhonePad.touchpad && c.pad == PhonePad.app && app == null)
             Column(Modifier.width(IntrinsicSize.Max).clickable { view.tick(); c.perform(PhoneAction.Pad(pad)) }) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     if (pad == PhonePad.app && app != null) Image(app.icon, null, Modifier.size(12.dp),
                         colorFilter = ColorFilter.tint(if (on) HudTheme.ink else HudTheme.inkFaint))
-                    BasicText(if (pad == PhonePad.touchpad) "TOUCHPAD" else if (app == HudPanelKind.clock) "TIMER" else app?.title ?: "",
+                    BasicText(when (pad) { PhonePad.touchpad -> "TOUCHPAD"; PhonePad.remote -> "REMOTE"; PhonePad.app -> app?.padTitle ?: "" },
                         style = HudTheme.mont(11f, tracking = 2f, color = if (on) HudTheme.ink else HudTheme.inkFaint))
                 }
                 Box(Modifier.padding(top = 3.dp).fillMaxWidth().height(2.5.dp).background(if (on) HudTheme.accent else Color.Transparent, chipShape))
@@ -630,6 +642,11 @@ private fun AppControls(kind: HudPanelKind) {
         when (kind) {
             HudPanelKind.clock -> TimerControls(HudController.snapshot.timer)
             HudPanelKind.note -> NoteControls(HudController.snapshot.note)
+            HudPanelKind.sky -> SkyControls()
+            HudPanelKind.music -> MusicControls()
+            HudPanelKind.captions -> CaptionsControls()
+            HudPanelKind.youtube -> YouTubeControls()
+            HudPanelKind.map -> MapsControls()
             else -> {}
         }
     }
@@ -728,15 +745,130 @@ private fun NoteControls(note: HudSnapshot.Note) {
 
 @Composable
 private fun SettingsPage() {
+    val c = HudController
+    val context = LocalContext.current
+    val view = LocalView.current
     val display = GlassesPresenter.shownDisplay
-    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        BasicText("GLASSES", style = HudTheme.mont(12f, tracking = 2.5f, color = HudTheme.inkDim))
-        BasicText(display?.let { "${it.name} · display ${it.displayId} · ${it.mode.physicalWidth}×${it.mode.physicalHeight}" }
-            ?: "Not connected", style = HudTheme.mont(16f, FontWeight.SemiBold))
-        Spacer(Modifier.height(6.dp))
-        BasicText("HOW IT WORKS", style = HudTheme.mont(12f, tracking = 2.5f, color = HudTheme.inkDim))
-        BasicText("Tap GLASSES to clear the view; hold it to arrange. Tap a panel to switch it off or on; hold it to show it alone. " +
-            "Hold a scene to put it back as it was.", style = HudTheme.mont(13f, FontWeight.SemiBold, color = HudTheme.inkDim))
+    @Suppress("UNUSED_VARIABLE") val version = c.settingsVersion
+    val sessions = remember(version) { CaptionsLog.sessions(context) }
+    fun open(intent: Intent) = runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { SettingsTitle("GLASSES") }
+        item {
+            BasicText(display?.let { "${it.name} · ${it.mode.physicalWidth}×${it.mode.physicalHeight}" } ?: "Not connected",
+                style = HudTheme.mont(15f, FontWeight.SemiBold))
+        }
+        item { SettingsTitle("TRACKPAD") }
+        item {
+            SettingsStepper("Speed", "%.1f×".format(c.trackpadSpeed),
+                { c.changeTrackpadSpeed(c.trackpadSpeed - 0.1f) }, { c.changeTrackpadSpeed(c.trackpadSpeed + 0.1f) })
+        }
+        item { SettingsTitle("ACTIVITY") }
+        item { SettingsStepper("Daily goal", "%,d steps".format(c.stepGoal), { c.changeStepGoal(c.stepGoal - 500) }, { c.changeStepGoal(c.stepGoal + 500) }) }
+        item { SettingsTitle("CAPTIONS") }
+        item {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for ((tag, name) in CaptionsEngine.languages) {
+                    val on = tag == c.captionsLanguage
+                    Box(Modifier.height(30.dp).clip(chipShape).background(if (on) HudTheme.accent else Color(0xFF1F1F1F))
+                        .clickable { view.tick(); c.changeCaptionsLanguage(tag) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                        BasicText(name, style = HudTheme.mont(10f, FontWeight.SemiBold, color = if (on) Color.Black else HudTheme.inkDim))
+                    }
+                }
+            }
+        }
+        if (sessions.isEmpty()) item { SettingsNote("Every captions session is saved here as a text file.") }
+        items(sessions.take(20), key = { it.file.path }) { session ->
+            Row(Modifier.fillMaxWidth().clip(tileShape).background(Color(0xFF171717)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    BasicText(java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(session.date)) +
+                        " · ${session.lines} lines", style = HudTheme.mont(11f, FontWeight.SemiBold))
+                    BasicText(session.preview, style = HudTheme.mont(10f, FontWeight.SemiBold, color = HudTheme.inkDim), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                BasicText("SHARE", style = HudTheme.mont(9f, tracking = 1.5f, color = HudTheme.accent), modifier = Modifier.padding(horizontal = 8.dp).clickable {
+                    runCatching {
+                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, session.file.readText())
+                        context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }
+                })
+                BasicText("DELETE", style = HudTheme.mont(9f, tracking = 1.5f, color = HudTheme.inkDim), modifier = Modifier.clickable {
+                    CaptionsLog.delete(session); c.captionSessionsChanged()
+                })
+            }
+        }
+        item { SettingsTitle("YOUTUBE") }
+        item {
+            SettingsToggle("Subscriptions tab", c.youtubeSubscriptions) { c.changeYouTubeSubscriptions(!c.youtubeSubscriptions) }
+            SettingsNote("Signed in through the browser on the glasses: open youtube.com there and sign in, and Home and Subscriptions are yours.")
+        }
+        item { SettingsTitle("ACCESS") }
+        item {
+            SettingsLink("Now Playing", if (c.musicAllowed) "ON" else "NOTIFICATION ACCESS") {
+                open(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }
+        }
+        item {
+            SettingsLink("Android apps on the glasses", if (c.appsServiceEnabled) "ON" else "ACCESSIBILITY") { c.openAccessibilitySettings() }
+        }
+        item {
+            SettingsLink("Location, microphone, steps, calendar", "APP SETTINGS") {
+                open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", context.packageName, null)))
+            }
+        }
+        item { SettingsTitle("HOW IT WORKS") }
+        item {
+            SettingsNote("Tap GLASSES to clear the view; hold it to arrange. Tap a panel to switch it off or on; hold it to show it alone. " +
+                "Hold a scene to put it back as it was. Switch the lower half between TOUCHPAD, REMOTE and the app's own controls above it.")
+        }
+        item {
+            SettingsNote("Routes are worked out by routing.openstreetmap.de from where you are, to about ten metres. Searches, weather and " +
+                "the sky's aircraft only get your position rounded to a kilometre or so.")
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun SettingsTitle(text: String) {
+    BasicText(text, style = HudTheme.mont(11f, tracking = 2.5f, color = HudTheme.inkDim), modifier = Modifier.padding(top = 10.dp))
+}
+
+@Composable
+private fun SettingsNote(text: String) {
+    BasicText(text, style = HudTheme.mont(11f, FontWeight.SemiBold, color = HudTheme.inkDim))
+}
+
+@Composable
+private fun SettingsStepper(title: String, value: String, minus: () -> Unit, plus: () -> Unit) {
+    val view = LocalView.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BasicText(title, style = HudTheme.mont(13f, FontWeight.SemiBold), modifier = Modifier.weight(1f))
+        for ((label, act) in listOf("−" to minus)) Box(Modifier.size(34.dp).clip(chipShape).background(Color(0xFF242424)).clickable { view.tick(); act() },
+            contentAlignment = Alignment.Center) { BasicText(label, style = HudTheme.mont(16f)) }
+        BasicText(value, style = HudTheme.mont(12f), modifier = Modifier.width(92.dp), maxLines = 1)
+        Box(Modifier.size(34.dp).clip(chipShape).background(Color(0xFF242424)).clickable { view.tick(); plus() },
+            contentAlignment = Alignment.Center) { BasicText("+", style = HudTheme.mont(16f)) }
+    }
+}
+
+@Composable
+private fun SettingsToggle(title: String, on: Boolean, toggle: () -> Unit) {
+    val view = LocalView.current
+    Row(Modifier.fillMaxWidth().clickable { view.tick(); toggle() }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        BasicText(title, style = HudTheme.mont(13f, FontWeight.SemiBold), modifier = Modifier.weight(1f))
+        Box(Modifier.size(44.dp, 26.dp).clip(chipShape).background(if (on) HudTheme.accent else Color(0xFF333333))) {
+            Box(Modifier.padding(3.dp).size(20.dp).align(if (on) Alignment.CenterEnd else Alignment.CenterStart).background(Color.White, chipShape))
+        }
+    }
+}
+
+@Composable
+private fun SettingsLink(title: String, value: String, action: () -> Unit) {
+    val view = LocalView.current
+    Row(Modifier.fillMaxWidth().clip(tileShape).background(Color(0xFF171717)).clickable { view.tick(); action() }.padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        BasicText(title, style = HudTheme.mont(12f, FontWeight.SemiBold), modifier = Modifier.weight(1f))
+        BasicText(value, style = HudTheme.mont(9f, tracking = 1.5f, color = if (value == "ON") HudTheme.accent else HudTheme.inkDim))
     }
 }
 
@@ -767,12 +899,18 @@ private fun KeyboardProxy() {
         onValueChange = { v -> field = v; c.draftChanged(v.text) },
         singleLine = target != KeyboardTarget.note,
         keyboardOptions = KeyboardOptions(
-            capitalization = if (target == KeyboardTarget.address) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,
-            autoCorrectEnabled = target != KeyboardTarget.address,
+            capitalization = if (target == KeyboardTarget.address || target == KeyboardTarget.mac) KeyboardCapitalization.None
+                else KeyboardCapitalization.Sentences,
+            autoCorrectEnabled = target != KeyboardTarget.address && target != KeyboardTarget.mac,
             keyboardType = if (target == KeyboardTarget.address) KeyboardType.Uri else KeyboardType.Text,
-            imeAction = when (target) { KeyboardTarget.address -> ImeAction.Go; KeyboardTarget.note -> ImeAction.Default; else -> ImeAction.Send },
+            imeAction = when (target) {
+                KeyboardTarget.address -> ImeAction.Go
+                KeyboardTarget.note -> ImeAction.Default
+                KeyboardTarget.mapSearch, KeyboardTarget.youtubeSearch -> ImeAction.Search
+                else -> ImeAction.Send
+            },
         ),
-        keyboardActions = KeyboardActions(onGo = { c.submitTyping() }, onSend = { c.submitTyping() }),
+        keyboardActions = KeyboardActions(onGo = { c.submitTyping() }, onSend = { c.submitTyping() }, onSearch = { c.submitTyping() }),
         modifier = Modifier.size(1.dp).alpha(0f).focusRequester(focus),
     )
 

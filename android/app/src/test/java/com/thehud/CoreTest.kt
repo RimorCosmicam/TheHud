@@ -51,7 +51,7 @@ class CoreTest {
         val row = standard.setStrip(HudEdge.top)
         val layout = GlassesLayout(row)
         val frames = layout.widgetFrames
-        assertEquals(3, frames.size)
+        assertEquals(4, frames.size)
         assertTrue(frames.all { it.second.top == 64f })
         assertTrue(layout.browserFrame!!.top > frames[0].second.bottom)
     }
