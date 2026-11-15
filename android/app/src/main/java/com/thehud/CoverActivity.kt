@@ -1,12 +1,14 @@
 package com.thehud
 
 import android.Manifest
+import android.accounts.AccountManager
 import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import com.thehud.glasses.GlassesPresenter
 import com.thehud.phone.CoverScreen
@@ -20,6 +22,15 @@ class HudApplication : Application() {
 
 /** The phone's side: made for the cover screen, and it works on the inside screen too. */
 class CoverActivity : ComponentActivity() {
+    private val chooseAccount = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)?.let { HudController.webSignIn(this, it) }
+    }
+
+    /** Picks one of the phone's Google accounts (Android asks the wearer) to sign the glasses' browser in. */
+    fun signInWithGoogle() {
+        chooseAccount.launch(AccountManager.newChooseAccountIntent(null, null, arrayOf("com.google"), null, null, null, null))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

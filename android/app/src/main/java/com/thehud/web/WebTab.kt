@@ -15,6 +15,7 @@ import android.webkit.WebViewClient
 import androidx.compose.ui.geometry.Offset
 import androidx.webkit.UserAgentMetadata
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONArray
 
@@ -52,7 +53,7 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
         settings.loadWithOverviewMode = true
         settings.setSupportZoom(false)
         // The panel is a desktop's width; phone layouts stretched across it are mostly air.
-        desktop(settings)
+        desktop(this)
         // A white page is the brightest thing the glasses can show, and it blinds.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
@@ -199,14 +200,19 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
             ?.takeIf { it.isNotBlank() } ?: "156.0.0.0"
         private val major = engine.substringBefore('.')
 
-        val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$major.0.0.0 Safari/537.36"
+        val DESKTOP_UA = "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$major.0.0.0 Safari/537.36"
 
         /**
          * Desktop Chrome, said the same way everywhere: the user agent, the client hints (which
          * otherwise still say "Android WebView" on a phone) and no X-Requested-With naming this
-         * app. Google signs a browser in only when all of it agrees.
+         * app; an ARM machine, as the phone is, so the page's own platform agrees; and on Google's
+         * sign-in, the window.chrome that every Chrome has. Google signs a browser in only when all of it agrees.
          */
-        fun desktop(settings: WebSettings) {
+        fun desktop(view: WebView) {
+            val settings = view.settings
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) runCatching {
+                WebViewCompat.addDocumentStartJavaScript(view, CHROME, setOf("https://accounts.google.com"))
+            }
             settings.userAgentString = DESKTOP_UA
             if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) runCatching {
                 fun brand(name: String, version: String) =
@@ -214,13 +220,30 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
                         .setFullVersion(version).build()
                 WebSettingsCompat.setUserAgentMetadata(settings, UserAgentMetadata.Builder()
                     .setBrandVersionList(listOf(brand("Google Chrome", engine), brand("Chromium", engine), brand("Not_A Brand", "24.0.0.0")))
-                    .setFullVersion(engine).setPlatform("Linux").setPlatformVersion("").setArchitecture("x86")
+                    .setFullVersion(engine).setPlatform("Linux").setPlatformVersion("").setArchitecture("arm")
                     .setModel("").setMobile(false).setBitness(64).setWow64(false).build())
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) runCatching {
                 WebSettingsCompat.setRequestedWithHeaderOriginAllowList(settings, emptySet())
             }
         }
+
+        private const val CHROME = """
+            if (!window.chrome) {
+                const t0 = performance.timeOrigin / 1000;
+                window.chrome = {
+                    app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+                           RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+                           getDetails() { return null; }, getIsInstalled() { return false; } },
+                    runtime: {},
+                    csi() { return { startE: t0 * 1000, onloadT: Date.now(), pageT: performance.now(), tran: 15 }; },
+                    loadTimes() { return { requestTime: t0, startLoadTime: t0, commitLoadTime: t0, finishDocumentLoadTime: 0,
+                        finishLoadTime: 0, firstPaintTime: 0, firstPaintAfterLoadTime: 0, navigationType: 'Other',
+                        wasFetchedViaSpdy: true, wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2',
+                        wasAlternateProtocolAvailable: false, connectionInfo: 'h2' }; }
+                };
+            }
+        """
     }
 }
 

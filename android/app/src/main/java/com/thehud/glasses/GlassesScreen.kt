@@ -338,9 +338,12 @@ fun BrowserPanel(browser: HudSnapshot.Browser, layout: GlassesLayout, cursor: Of
     }
     val hovering = layout.isOverBar(cursor)
     val hoveredTab = layout.tabAt(cursor)
+    val bar = layout.barFrame
     Box(Modifier.fillMaxSize().clip(panelShape).background(Color.Black).border(1.dp, HudTheme.edge, panelShape)) {
-        Box(Modifier.fillMaxSize().padding(top = BrowserMetrics.contentTopInset.dp)) { page?.invoke() ?: PageStandIn() }
-        val bar = layout.barFrame ?: return@Box
+        Box(Modifier.fillMaxSize().padding(top = if (bar != null) BrowserMetrics.contentTopInset.dp else 0.dp)) {
+            page?.invoke() ?: PageStandIn()
+        }
+        if (bar == null) return@Box
         Box(Modifier.padding(BrowserMetrics.BAR_INSET.dp).fillMaxWidth().height(BrowserMetrics.BAR_HEIGHT.dp)) {
             Bar(browser, bar.width, hovering && !browser.isEditingAddress, hoveredTab, layout.tabCount)
         }

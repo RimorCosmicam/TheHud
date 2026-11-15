@@ -58,6 +58,8 @@ class GlassesLayout(
     val activeTab: Int = 0,
     fullscreen: Boolean = false,
     desktopAspect: Float = 16f / 10f,
+    /** Typing an address from the phone: the bar shows wherever the browser is, to show what is typed. */
+    val editingAddress: Boolean = false,
 ) {
     val desktopAspect = if (desktopAspect > 0) desktopAspect else 16f / 10f
     val tabCount = maxOf(tabCount, 1)
@@ -145,9 +147,13 @@ class GlassesLayout(
             return Rect(Offset(f.center.x - w / 2, f.center.y - h / 2), Size(w, h))
         }
 
+    /**
+     * The address bar and tabs: only when the browser is held open on its own (or an address is being
+     * typed). In the arrangement the panel is the page alone, edge to edge.
+     */
     val barFrame: Rect?
         get() {
-            if (fullscreen) return null
+            if (fullscreen || (solo != HudPanelKind.browser && !editingAddress)) return null
             val f = browserFrame ?: return null
             val i = BrowserMetrics.BAR_INSET
             return Rect(Offset(f.left + i, f.top + i), Size(f.width - i * 2, BrowserMetrics.BAR_HEIGHT))

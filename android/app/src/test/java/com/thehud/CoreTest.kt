@@ -56,21 +56,28 @@ class CoreTest {
         assertTrue(layout.browserFrame!!.top > frames[0].second.bottom)
     }
 
-    @Test fun clicksFindTheBarAndThePage() {
+    @Test fun theArrangedBrowserIsThePageAlone() {
         val layout = GlassesLayout(standard)
+        assertNull(layout.barFrame)
+        val f = layout.browserFrame!!
+        assertEquals(GlassesHit.Page(Offset(10f, 10f)), layout.hitTest(f.topLeft + Offset(10f, 10f)))
+        assertTrue(GlassesLayout(standard, editingAddress = true).barFrame != null)
+    }
+
+    @Test fun clicksFindTheBarAndThePage() {
+        val layout = GlassesLayout(standard, solo = HudPanelKind.browser)
         val bar = layout.barFrame!!
         assertEquals(GlassesHit.Back, layout.hitTest(Offset(bar.left + 10, bar.center.y)))
         assertEquals(GlassesHit.Reload, layout.hitTest(Offset(bar.right - 10, bar.center.y)))
         assertEquals(GlassesHit.Address, layout.hitTest(bar.center))
         val page = layout.hitTest(layout.browserFrame!!.center)
         assertTrue(page is GlassesHit.Page)
-        assertTrue(layout.hitTest(layout.frameOf(HudPanelKind.note)!!.center) is GlassesHit.Widget)
     }
 
     @Test fun tabsSplitTheBar() {
         val segments = BrowserMetrics.tabSegments(1000f, 3, 1)
         assertEquals(segments[1].second, segments[0].second * 2, 0.01f)
-        val layout = GlassesLayout(standard, tabCount = 3, activeTab = 0)
+        val layout = GlassesLayout(standard, solo = HudPanelKind.browser, tabCount = 3, activeTab = 0)
         val bar = layout.barFrame!!
         val second = BrowserMetrics.tabSegments(bar.width, 3, 0)[1]
         val x = bar.left + second.first + second.second - 5

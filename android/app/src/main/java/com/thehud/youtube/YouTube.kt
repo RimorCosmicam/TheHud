@@ -180,7 +180,7 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
-        WebTab.desktop(settings)
+        WebTab.desktop(this)
         isFocusable = false
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
         val early = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
@@ -280,6 +280,7 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
     }
 
     companion object {
+        // Sizes in %, never vw/vh: a web view first laid out at no height keeps 100vh at 0 pixels.
         private val PLAYER_ONLY = """
 (function () {
   var css =
@@ -291,12 +292,12 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
     '.iv-branding, .ytp-watermark, .ytp-cards-teaser, .ytp-spinner, .ytp-contextmenu,' +
     '.ytp-large-play-button, .ytp-bezel, .ytp-tooltip { display: none !important; }' +
     '#movie_player, #movie_player.html5-video-player { position: fixed !important; left: 0 !important;' +
-    ' top: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 2147483646 !important;' +
+    ' top: 0 !important; width: 100% !important; height: 100% !important; z-index: 2147483646 !important;' +
     ' background: #000 !important; }' +
     '#movie_player .html5-video-container { position: absolute !important; left: 0 !important;' +
-    ' top: 0 !important; width: 100vw !important; height: 100vh !important; }' +
+    ' top: 0 !important; width: 100% !important; height: 100% !important; }' +
     '#movie_player video, #movie_player video.html5-main-video { position: absolute !important;' +
-    ' left: 0 !important; top: 0 !important; width: 100vw !important; height: 100vh !important;' +
+    ' left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important;' +
     ' object-fit: contain !important; visibility: visible !important; opacity: 1 !important; }';
   function add() {
     if (document.getElementById('__hud_player_only')) return;

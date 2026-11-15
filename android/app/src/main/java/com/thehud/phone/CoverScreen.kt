@@ -206,7 +206,9 @@ fun CoverScreen() {
     val editor = remember { Editor() }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
-            ToolBar()
+            // The browser's buttons and tabs only while the browser is held open on the glasses (or
+            // in settings, whose button lives there); otherwise the keyboard and settings ride in the pad's header.
+            if (c.browsing || c.showingSettings) ToolBar()
             if (c.showingSettings) {
                 SettingsPage()
             } else {
@@ -287,7 +289,7 @@ private fun SettingsArea(editor: Editor) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Header()
         Miniature(editor, Modifier.fillMaxWidth().height(if (c.editingGlasses) 168.dp else 84.dp))
-        if (c.editingGlasses) Tray(editor) else TabStrip()
+        if (c.editingGlasses) Tray(editor) else if (c.browsing) TabStrip()
     }
 }
 
@@ -605,6 +607,20 @@ private fun PadHeader() {
                 Box(Modifier.padding(top = 3.dp).fillMaxWidth().height(2.5.dp).background(if (on) HudTheme.accent else Color.Transparent, chipShape))
             }
         }
+        if (!c.browsing) {
+            Spacer(Modifier.weight(1f))
+            HeaderButton(if (c.keyboardTarget != null) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard,
+                lit = c.keyboardTarget != null) { c.perform(PhoneAction.Keyboard) }
+            HeaderButton(Icons.Rounded.Settings, lit = c.showingSettings) { c.showingSettings = !c.showingSettings }
+        }
+    }
+}
+
+@Composable
+private fun HeaderButton(icon: ImageVector, lit: Boolean, action: () -> Unit) {
+    val view = LocalView.current
+    Box(Modifier.size(30.dp).clickable { view.tick(); action() }, contentAlignment = Alignment.Center) {
+        Image(icon, null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(if (lit) HudTheme.accent else HudTheme.ink))
     }
 }
 
@@ -799,7 +815,10 @@ private fun SettingsPage() {
         item { SettingsTitle("YOUTUBE") }
         item {
             SettingsToggle("Subscriptions tab", c.youtubeSubscriptions) { c.changeYouTubeSubscriptions(!c.youtubeSubscriptions) }
-            SettingsNote("Signed in through the browser on the glasses: open youtube.com there and sign in, and Home and Subscriptions are yours.")
+            SettingsLink("Sign in with this phone's Google account", c.googleSignIn.ifEmpty { "CHOOSE" }) {
+                (context as? com.thehud.CoverActivity)?.signInWithGoogle()
+            }
+            SettingsNote("Signs in the browser and YouTube on the glasses with an account already on the phone: no password, and Home and Subscriptions are yours.")
         }
         item { SettingsTitle("ACCESS") }
         item {

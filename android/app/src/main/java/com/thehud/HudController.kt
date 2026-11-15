@@ -1,6 +1,7 @@
 package com.thehud
 
 import android.content.Context
+import android.util.Log
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
@@ -216,6 +217,9 @@ object HudController {
         private set
     val browser: WebTab? get() = tabs.getOrNull(activeTab)
 
+    /** The browser in use: held open on the glasses, or an address being typed. Its buttons and tabs show only then. */
+    val browsing: Boolean get() = solo == HudPanelKind.browser || keyboardTarget == KeyboardTarget.address
+
     /** The phone's own pictures for the glasses: the map's ground and the album art. */
     var mapGround by mutableStateOf<ImageBitmap?>(null)
         private set
@@ -284,7 +288,7 @@ object HudController {
 
     val layout: GlassesLayout
         get() = GlassesLayout(arrangement, solo, clearView, snapshot.browser.tabs.size, activeTab, snapshot.browser.isFullscreen,
-            snapshot.desktop.aspect)
+            snapshot.desktop.aspect, snapshot.browser.isEditingAddress)
 
     fun isOnGlasses(kind: HudPanelKind): Boolean =
         if (clearView) false else solo?.let { it == kind } ?: arrangement.isShown(kind)
@@ -293,6 +297,9 @@ object HudController {
         if (::app.isInitialized) return
         app = context.applicationContext
         prefs = app.getSharedPreferences("hud", Context.MODE_PRIVATE)
+        // Debug builds' pages can be inspected from the Mac's Chrome (chrome://inspect).
+        if (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
+            android.webkit.WebView.setWebContentsDebuggingEnabled(true)
         // Map tiles are cached on the phone, as OpenStreetMap's tile policy asks.
         runCatching { android.net.http.HttpResponseCache.install(java.io.File(app.cacheDir, "http"), 64L * 1024 * 1024) }
         loadScenes()
@@ -1042,6 +1049,42 @@ object HudController {
         return WebTab(context) { tab -> if (tab === browser) browserChanged() else syncTabs() }
     }
 
+    // ------------------------------------------------------------------ Google sign-in
+
+    /** Where signing the browser in with the phone's Google account stands, for the settings page. */
+    var googleSignIn by mutableStateOf("")
+        private set
+
+    /**
+     * The phone's own Google account signs the glasses' browser in: Android's account system, with
+     * the wearer's consent, hands out a one-time link that sets youtube.com's and google.com's
+     * cookies, so no password page (and none of Google's checks of in-app browsers) is involved.
+     */
+    fun webSignIn(activity: android.app.Activity, name: String) {
+        val accounts = android.accounts.AccountManager.get(activity)
+        val account = android.accounts.Account(name, "com.google")
+        val type = "weblogin:service=youtube&continue=" + java.net.URLEncoder.encode("https://www.youtube.com/", "UTF-8")
+        googleSignIn = "ASKING"
+        accounts.getAuthToken(account, type, null, activity, { future ->
+            val link = runCatching { future.result.getString(android.accounts.AccountManager.KEY_AUTHTOKEN) }
+                .onFailure { Log.w("HudSignIn", "no sign-in link: ${it.javaClass.simpleName}: ${it.message}") }
+                .getOrNull()
+            if (link == null || !link.startsWith("https://")) {
+                googleSignIn = "REFUSED"
+                return@getAuthToken
+            }
+            // The link works once: forget it, so another sign-in asks for a fresh one.
+            accounts.invalidateAuthToken("com.google", link)
+            val tab = browser
+            if (tab != null) tab.load(link) else openTab(link)
+            googleSignIn = "SIGNED IN"
+            main.postDelayed({
+                refreshYouTube(HudSnapshot.YouTube.Tab.home, force = true)
+                refreshYouTube(HudSnapshot.YouTube.Tab.subscriptions, force = true)
+            }, 6000)
+        }, null)
+    }
+
     fun openTab(url: String?) {
         if (tabs.size >= BrowserMetrics.MAX_TABS) { url?.let { browser?.load(it) }; return }
         val tab = makeTab() ?: return
@@ -1094,6 +1137,23 @@ object HudController {
             tabs = tabTitles(), activeTab = activeTab,
             isHome = s.isHome, isFavorite = !s.isHome && favorites.any { it.url == s.address },
         ))
+        youtubeAccountCheck()
+    }
+
+    private var youtubeSignedIn: Boolean? = null
+
+    /**
+     * YouTube shares the browser's sign-in, as on the iPhone: one cookie store for both. When
+     * someone signs in or out in the browser, the YouTube panel's lists are fetched again at once.
+     */
+    private fun youtubeAccountCheck() {
+        val now = YouTubeData.isSignedIn
+        val was = youtubeSignedIn
+        youtubeSignedIn = now
+        if (was == null || was == now) return
+        android.webkit.CookieManager.getInstance().flush()
+        refreshYouTube(HudSnapshot.YouTube.Tab.home, force = true)
+        refreshYouTube(HudSnapshot.YouTube.Tab.subscriptions, force = true)
     }
 
     // ------------------------------------------------------------------ the pad
@@ -1226,9 +1286,9 @@ object HudController {
         browser?.scroll(ticks, inPage(point), frame.width)
     }
 
-    /** Panel points to the page's: below the bar, unless the page is fullscreen. */
+    /** Panel points to the page's: below the bar, when the bar shows. */
     private fun inPage(p: Offset) =
-        if (layout.fullscreen) p else Offset(p.x, maxOf(p.y - com.thehud.core.BrowserMetrics.contentTopInset, 0f))
+        if (layout.barFrame == null) p else Offset(p.x, maxOf(p.y - com.thehud.core.BrowserMetrics.contentTopInset, 0f))
 
     // ------------------------------------------------------------------ the keyboard
 
