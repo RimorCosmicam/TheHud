@@ -10,8 +10,13 @@ cd "$(dirname "$0")/.."
 swift build -c release --product hudcast
 APP="dist/HudCast.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/hudcast "$APP/Contents/MacOS/HudCast"
+
+# The phone app's sunglasses, cut to the Mac's icon shape.
+ICONSET=".build/HudCast.iconset"
+swift scripts/hudcast-icon.swift App/TheHud/Assets.xcassets/AppIcon.appiconset/AppIcon.png "$ICONSET"
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/HudCast.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -23,6 +28,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key>
 	<string>HudCast</string>
 	<key>CFBundleDisplayName</key>
+	<string>HudCast</string>
+	<key>CFBundleIconFile</key>
 	<string>HudCast</string>
 	<key>CFBundleExecutable</key>
 	<string>HudCast</string>
