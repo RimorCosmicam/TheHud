@@ -68,6 +68,16 @@ struct Hudshot {
         try write(PhoneScreen(surface: plain, solo: .map),
                   to: outDir, "phone-solo", scale: scale)
 
+        // The GLASSES section: arranging, and the view cleared.
+        try write(PhoneScreen(surface: plain, arrangement: fullGrid, editing: true),
+                  to: outDir, "phone-arranging", scale: scale)
+        var someHidden = fullGrid
+        someHidden.toggleHidden(.note)
+        try write(PhoneScreen(surface: plain, arrangement: someHidden),
+                  to: outDir, "phone-glasses", scale: scale)
+        try write(PhoneScreen(surface: plain, arrangement: fullGrid, clearView: true),
+                  to: outDir, "phone-clear", scale: scale)
+
         // The glasses canvas: 1080p, the mode the Air reports over DisplayPort. Rendered at
         // scale 1, because 1920x1080 is what the glasses are actually handed.
         try write(GlassesScreen(), to: outDir, "glasses-browser", scale: 1)
@@ -119,24 +129,51 @@ struct Hudshot {
         }
 
         // Each panel alone, as a held tile on the phone shows it.
-        for kind in [HudPanelKind.map, .clock, .weather, .browser] {
-            try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), visible: [kind]),
+        var still = HudSnapshot(cursor: nil)
+        still.sky = previewSky
+        for kind in HudPanelKind.allCases where kind != .mac {
+            try write(GlassesScreen(snapshot: still, arrangement: fullGrid, solo: kind),
                       to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
         }
+        // A running timer in the clock app, the cursor on it.
+        var timing = still
+        var timer = HudTimer(setSeconds: 25 * 60)
+        let now = Date()
+        timer.toggle(at: now.addingTimeInterval(-7 * 60 - 12))
+        timing.timer = timer.reading(at: now)
+        timing.cursor = CGPoint(x: HudTheme.safeInset + ClockAppLayout.timerCard.midX,
+                                y: HudTheme.safeInset + ClockAppLayout.timerCard.midY)
+        try write(GlassesScreen(snapshot: timing, arrangement: fullGrid, solo: .clock),
+                  to: outDir, "glasses-solo-clock-timer", scale: 1)
+
+        // The grid: six widgets and the browser; then the browser over the right side.
+        try write(GlassesScreen(snapshot: still, arrangement: fullGrid),
+                  to: outDir, "glasses-grid", scale: 1)
+        var takeover = fullGrid
+        takeover.place(.browser, at: .slot(.right, 0))
+        try write(GlassesScreen(snapshot: still, arrangement: takeover),
+                  to: outDir, "glasses-takeover", scale: 1)
+        var open = fullGrid
+        open.remove(.browser)
+        try write(GlassesScreen(snapshot: still, arrangement: open),
+                  to: outDir, "glasses-open-middle", scale: 1)
 
         // The Mac beside the browser, then alone; and the waiting card before HudCast answers.
         var mac = HudSnapshot(cursor: nil)
         mac.desktop = .preview
-        try write(GlassesScreen(snapshot: mac, visible: [.browser, .desktop, .clock, .weather, .map]),
-                  to: outDir, "glasses-desktop-split", scale: 1)
-        try write(GlassesScreen(snapshot: mac, visible: [.desktop]),
-                  to: outDir, "glasses-solo-desktop", scale: 1)
-        try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), visible: [.desktop, .clock],
+        var both = HudArrangement.standard
+        both.place(.mac, at: .middle)
+        both.place(.browser, at: .slot(.left, 0))
+        try write(GlassesScreen(snapshot: mac, arrangement: both),
+                  to: outDir, "glasses-mac-split", scale: 1)
+        try write(GlassesScreen(snapshot: mac, arrangement: both, solo: .mac),
+                  to: outDir, "glasses-solo-mac", scale: 1)
+        try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), visible: [.mac, .clock],
                                 placeholders: false),
-                  to: outDir, "glasses-desktop-waiting", scale: 1)
+                  to: outDir, "glasses-mac-waiting", scale: 1)
         var macWindow = HudSnapshot.Desktop.preview
         macWindow.source?.window = 12
-        try write(PhoneScreen(surface: plain, visible: [.browser, .desktop, .map],
+        try write(PhoneScreen(surface: plain, arrangement: HudArrangement(visible: [.browser, .mac, .map]),
                               desktop: macWindow, showsWindows: true),
                   to: outDir, "phone-windows", scale: scale)
 
@@ -145,11 +182,11 @@ struct Hudshot {
         searching.maps = .previewSearch
         searching.cursor = CGPoint(x: MapsLayout(resultCount: 4).resultFrame(1).midX + 120,
                                    y: MapsLayout(resultCount: 4).resultFrame(1).midY)
-        try write(GlassesScreen(snapshot: searching, visible: [.map]),
+        try write(GlassesScreen(snapshot: searching, visible: [.map], solo: .map),
                   to: outDir, "glasses-maps-search", scale: 1)
         var navigating = HudSnapshot(cursor: nil)
         navigating.maps = .previewNavigation
-        try write(GlassesScreen(snapshot: navigating, visible: [.map]),
+        try write(GlassesScreen(snapshot: navigating, visible: [.map], solo: .map),
                   to: outDir, "glasses-maps-route", scale: 1)
 
         if live {
@@ -159,7 +196,7 @@ struct Hudshot {
             if let soloGround {
                 var solo = snapshot
                 solo.minimap.groundSpanMetres = soloGround.span
-                try write(GlassesScreen(snapshot: solo, visible: [.map],
+                try write(GlassesScreen(snapshot: solo, visible: [.map], solo: .map,
                                         mapGround: soloGround.image),
                           to: outDir, "glasses-live-solo-map", scale: 1)
             }
@@ -170,6 +207,20 @@ struct Hudshot {
 
         print("\nimages in \(outDir.path)")
     }
+
+    /// All six slots full, the browser in the middle.
+    static let fullGrid = HudArrangement(left: [.clock, .weather, .map],
+                                         right: [.music, .sky, .note],
+                                         bigs: [.init(kind: .browser)])
+
+    /// Lisbon at ten at night in mid-November, so the stills have stars.
+    static let previewSky: HudSnapshot.Sky = {
+        let lisbon = TimeZone(identifier: "Europe/Lisbon")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = lisbon
+        let night = calendar.date(from: DateComponents(year: 2026, month: 11, day: 15, hour: 22))!
+        return SkyModel.compute(at: night, latitude: 38.72, longitude: -9.14, timeZone: lisbon)
+    }()
 
     @MainActor
     private static func write<V: View>(_ view: V, to dir: URL, _ name: String,

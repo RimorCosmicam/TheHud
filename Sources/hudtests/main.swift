@@ -15,6 +15,7 @@ runHomePageTests()
 runTabTests()
 runAppTests()
 runDesktopTests()
+runGridTests()
 MainActor.assumeIsolated { runPageScriptTests() }
 
 exit(TestKit.summarise())

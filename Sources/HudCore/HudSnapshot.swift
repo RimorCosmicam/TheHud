@@ -15,6 +15,15 @@ public struct HudSnapshot: Sendable {
     public var maps: Maps = Maps()
     /// The Mac streamed by HudCast.
     public var desktop: Desktop = Desktop()
+    /// The clock app's timer, as it reads this second.
+    public var timer: TimerReading = TimerReading()
+    /// Steps today. Nil where the phone cannot count them, or before it has.
+    public var activity: Activity? = .preview
+    public var sky: Sky = Sky()
+    /// What the Music app is playing. Nil when nothing is queued.
+    public var music: NowPlaying? = .preview
+    public var note: Note = .preview
+    public var captions: Captions = .preview
     public var browser: Browser
     /// Where the trackpad has put the pointer, in canvas points. Nil hides it.
     public var cursor: CGPoint?
@@ -126,6 +135,28 @@ public struct HudSnapshot: Sendable {
         public var sunset: String?
         public var hourly: [Hour] = []
         public var daily: [Day] = []
+        /// Air quality, UV and pollen, for the weather app. Nil until a reading arrives.
+        public var air: Air?
+
+        public struct Air: Sendable, Hashable {
+            /// European AQI: 0-20 good ... over 100 extremely poor.
+            public var index: Int
+            public var label: String
+            public var uv: Double
+            public var uvLabel: String
+            public var pm25: Double?
+            /// "GRASS · MODERATE": the strongest pollen, where it is measured.
+            public var pollen: String?
+            public init(index: Int, label: String, uv: Double, uvLabel: String,
+                        pm25: Double? = nil, pollen: String? = nil) {
+                self.index = index
+                self.label = label
+                self.uv = uv
+                self.uvLabel = uvLabel
+                self.pm25 = pm25
+                self.pollen = pollen
+            }
+        }
 
         public init(temperature: Int, condition: String, symbol: String,
                     high: Int, low: Int, place: String) {
@@ -174,6 +205,8 @@ public struct HudSnapshot: Sendable {
             weather.feelsLike = 10
             weather.humidity = 82
             weather.windKmh = 18
+            weather.air = Air(index: 24, label: "FAIR", uv: 2.1, uvLabel: "LOW", pm25: 8.2,
+                              pollen: "GRASS \u{00B7} LOW")
             weather.sunrise = "7:24"
             weather.sunset = "17:21"
             let temps = [12, 12, 13, 14, 14, 13, 12, 11, 10, 10, 9, 9]
@@ -243,6 +276,155 @@ public struct HudSnapshot: Sendable {
 
         public static let preview = Minimap(place: "ALFAMA", heading: 34, headingLabel: "NE",
                                             speed: "4.2 KM/H", spanMetres: 300)
+    }
+
+    /// The timer in the clock app, as drawn: worked out from `HudTimer` each second.
+    public struct TimerReading: Sendable, Equatable {
+        public enum State: Sendable, Equatable { case idle, running, paused, done }
+        public var text: String = "5:00"
+        /// 0 at the start, 1 when it runs out. Nil for the stopwatch.
+        public var progress: Double? = 0
+        public var state: State = .idle
+        /// Set to zero: counts up instead.
+        public var isStopwatch: Bool = false
+        public init() {}
+    }
+
+    public struct Activity: Sendable, Equatable {
+        public var steps: Int
+        public var goal: Int
+        public var distanceKm: Double?
+        public var floors: Int?
+        /// Steps in each hour of today so far, midnight first.
+        public var hourly: [Int]
+        public init(steps: Int, goal: Int = 8000, distanceKm: Double? = nil, floors: Int? = nil,
+                    hourly: [Int] = []) {
+            self.steps = steps
+            self.goal = goal
+            self.distanceKm = distanceKm
+            self.floors = floors
+            self.hourly = hourly
+        }
+        public var fraction: Double { min(Double(steps) / Double(max(goal, 1)), 1) }
+
+        public static let preview: Activity = Activity(
+            steps: 6_412, goal: 8000, distanceKm: 4.7, floors: 6,
+            hourly: [0, 0, 0, 0, 0, 0, 0, 120, 880, 1_240, 310, 460, 920, 1_330, 640, 512])
+    }
+
+    public struct NowPlaying: Sendable, Equatable {
+        public var title: String
+        public var artist: String
+        public var album: String
+        public var isPlaying: Bool
+        public var elapsed: TimeInterval
+        public var duration: TimeInterval
+        public init(title: String, artist: String, album: String = "", isPlaying: Bool,
+                    elapsed: TimeInterval = 0, duration: TimeInterval = 0) {
+            self.title = title
+            self.artist = artist
+            self.album = album
+            self.isPlaying = isPlaying
+            self.elapsed = elapsed
+            self.duration = duration
+        }
+        public var progress: Double { duration > 0 ? min(elapsed / duration, 1) : 0 }
+
+        public static func time(_ seconds: TimeInterval) -> String {
+            let s = max(Int(seconds.rounded(.down)), 0)
+            return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                             : String(format: "%d:%02d", s / 60, s % 60)
+        }
+
+        public static let preview = NowPlaying(title: "Midnight City", artist: "M83",
+                                               album: "Hurry Up, We're Dreaming",
+                                               isPlaying: true, elapsed: 97, duration: 243)
+    }
+
+    public struct Note: Sendable, Equatable {
+        public var text: String
+        public var isEditing: Bool = false
+        /// How far the fullscreen note is scrolled, in points: a teleprompter.
+        public var scroll: CGFloat = 0
+        public init(text: String = "") { self.text = text }
+
+        public static let preview = Note(text: "Gate B32, boarding 18:40. Ask Ana about the "
+                                         + "slides before Friday. Milk, coffee, batteries.")
+    }
+
+    public struct Captions: Sendable, Equatable {
+        public var isListening: Bool = false
+        /// Finished sentences, oldest first; only the last few are kept here.
+        public var lines: [String] = []
+        /// What is being said right now, still changing.
+        public var partial: String = ""
+        /// "LISTENING", "OFF", "NO MICROPHONE ACCESS".
+        public var status: String = "OFF"
+        /// "12:04", how long this session has run.
+        public var elapsed: String = ""
+        public init() {}
+
+        public static let preview: Captions = {
+            var captions = Captions()
+            captions.isListening = true
+            captions.status = "LISTENING"
+            captions.elapsed = "3:12"
+            captions.lines = ["So the plan is to ship the HUD on Friday.",
+                              "We still need the icons for the editor,",
+                              "and someone should test it on the train."]
+            captions.partial = "I can do that tomorrow morning"
+            return captions
+        }()
+    }
+
+    /// The sky over the wearer: the day's sun and moon for the widget, the stars for the app.
+    public struct Sky: Sendable {
+        public var hasLocation = false
+        public var sunrise: String?
+        public var sunset: String?
+        /// When the evening's golden hour starts: the sun six degrees up.
+        public var goldenHour: String?
+        /// Through the day, 0 at sunrise and 1 at sunset; nil at night.
+        public var dayProgress: Double?
+        public var sunAltitude: Double = 0
+        public var moonPhase: String = ""
+        public var moonSymbol: String = "moonphase.new.moon"
+        /// Percent of the disc lit.
+        public var moonIllumination: Int = 0
+        public var moonrise: String?
+        public var moonset: String?
+        /// Stars above the horizon, as azimuth and altitude in degrees.
+        public var stars: [Star] = []
+        /// Constellation figures; points below the horizon are kept so lines can be cut there.
+        public var lines: [[Point]] = []
+        public var constellations: [Label] = []
+        public var starNames: [Label] = []
+        /// The sun, the moon and the planets.
+        public var bodies: [Body] = []
+
+        public init() {}
+
+        public struct Point: Sendable { public var az: Float; public var alt: Float
+            public init(az: Float, alt: Float) { self.az = az; self.alt = alt } }
+        public struct Star: Sendable { public var az: Float; public var alt: Float
+            public var mag: Float; public var bv: Float
+            public init(az: Float, alt: Float, mag: Float, bv: Float) {
+                self.az = az; self.alt = alt; self.mag = mag; self.bv = bv } }
+        public struct Label: Sendable { public var az: Float; public var alt: Float
+            public var name: String
+            public init(az: Float, alt: Float, name: String) {
+                self.az = az; self.alt = alt; self.name = name } }
+        public struct Body: Sendable {
+            public enum Kind: Sendable { case sun, moon, planet }
+            public var kind: Kind
+            public var name: String
+            public var az: Double
+            public var alt: Double
+            public var mag: Double
+            public init(kind: Kind, name: String, az: Double, alt: Double, mag: Double) {
+                self.kind = kind; self.name = name; self.az = az; self.alt = alt; self.mag = mag
+            }
+        }
     }
 
     /// The desktop panel: whether a Mac is there, what it offers and what it is showing.
@@ -406,12 +588,18 @@ public struct HudSnapshot: Sendable {
     /// What the device starts from: the time, and nothing it has not actually been told. The
     /// default initialiser is preview data, which must never reach the glasses.
     public static var blank: HudSnapshot {
-        HudSnapshot(clock: .now(),
-                    weather: nil,
-                    minimap: Minimap(place: "LOCATING", heading: 0, headingLabel: "",
-                                     speed: "", spanMetres: 300),
-                    browser: Browser(url: "", title: "", tabs: ["New tab"], activeTab: 0,
-                                     canGoBack: false, canGoForward: false, isHome: true),
-                    cursor: nil)
+        var snapshot = HudSnapshot(clock: .now(),
+                                   weather: nil,
+                                   minimap: Minimap(place: "LOCATING", heading: 0, headingLabel: "",
+                                                    speed: "", spanMetres: 300),
+                                   browser: Browser(url: "", title: "", tabs: ["New tab"], activeTab: 0,
+                                                    canGoBack: false, canGoForward: false, isHome: true),
+                                   cursor: nil)
+        // Nothing made up on the device: each of these waits for its real source.
+        snapshot.activity = nil
+        snapshot.music = nil
+        snapshot.note = Note()
+        snapshot.captions = Captions()
+        return snapshot
     }
 }

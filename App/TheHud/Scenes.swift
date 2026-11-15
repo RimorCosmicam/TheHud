@@ -78,10 +78,13 @@ struct GlassesHost: View {
             let scale = min(geometry.size.width / canvas.width,
                             geometry.size.height / canvas.height)
             GlassesScreen(snapshot: controller.snapshot,
-                          visible: controller.shownPanels,
+                          arrangement: controller.arrangement,
+                          solo: controller.solo,
+                          clearView: controller.clearView,
                           browserContent: AnyView(WebBrowserView(controller.browser)),
                           desktopContent: AnyView(DesktopVideoView(layer: controller.desktopLink.displayLayer)),
                           mapGround: controller.mapGround,
+                          artwork: controller.artwork,
                           placeholders: false,
                           liveGlass: true)
                 .scaleEffect(scale)

@@ -234,6 +234,10 @@ public struct WeatherApp: View {
                         now(weather)
                         Spacer(minLength: 24)
                         details(weather)
+                        if let air = weather.air {
+                            Spacer(minLength: 20)
+                            airRow(air)
+                        }
                         Spacer(minLength: 24)
                         hourly(weather)
                     }
@@ -299,6 +303,37 @@ public struct WeatherApp: View {
                         .foregroundStyle(HudTheme.inkDim)
                     Text(item.1).font(HudTheme.mont(30, .black))
                         .foregroundStyle(HudTheme.ink)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, index > 0 ? 22 : 0)
+            }
+        }
+    }
+
+    /// Air quality, UV and pollen: what to know before going out, beside the temperature.
+    private func airRow(_ air: HudSnapshot.Weather.Air) -> some View {
+        let items: [(String, String, String)] = [
+            ("AIR", "\(air.index)", air.label),
+            ("UV", String(format: "%.0f", air.uv), air.uvLabel),
+            air.pm25.map { ("PM2.5", String(format: "%.0f", $0), "\u{00B5}G/M\u{00B3}") },
+            air.pollen.map { ("POLLEN", "", $0) },
+        ].compactMap { $0 }
+        return HStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index > 0 {
+                    Rectangle().fill(HudTheme.edge).frame(width: 1, height: 56)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.0).font(HudTheme.mont(15, .black)).tracking(2.5)
+                        .foregroundStyle(HudTheme.inkDim)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        if !item.1.isEmpty {
+                            Text(item.1).font(HudTheme.mont(30, .black)).foregroundStyle(HudTheme.ink)
+                        }
+                        Text(item.2).font(HudTheme.mont(item.1.isEmpty ? 22 : 16, .black)).tracking(1.5)
+                            .foregroundStyle(item.1.isEmpty ? HudTheme.ink : HudTheme.accent)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, index > 0 ? 22 : 0)
@@ -385,14 +420,27 @@ public struct WeatherApp: View {
 
 // MARK: - Clock
 
+/// Where the clock app's timer card is, in the app's own points: scroll on it to set it,
+/// click to start or pause, right-click to reset.
+public enum ClockAppLayout {
+    public static let timerCard = CGRect(x: 824, y: 330, width: 440, height: 320)
+}
+
 public struct ClockApp: View {
     public var clock: HudSnapshot.Clock
-    public init(_ clock: HudSnapshot.Clock) { self.clock = clock }
+    public var timer: HudSnapshot.TimerReading
+    public var hover: CGPoint?
+    public init(_ clock: HudSnapshot.Clock, timer: HudSnapshot.TimerReading = .init(),
+                hover: CGPoint? = nil) {
+        self.clock = clock
+        self.timer = timer
+        self.hover = hover
+    }
 
     public var body: some View {
-        HStack(alignment: .center, spacing: 72) {
+        ZStack(alignment: .topLeading) {
             ClockDial(clock: clock)
-                .frame(width: 700, height: 700)
+                .at(CGRect(x: 60, y: 126, width: 700, height: 700))
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 14) {
@@ -412,20 +460,52 @@ public struct ClockApp: View {
                 Text("\(clock.weekday)  \u{00B7}  \(clock.date)")
                     .font(HudTheme.mont(28, .black)).tracking(4)
                     .foregroundStyle(HudTheme.inkDim)
-
-                agenda.padding(.top, 40)
-                Spacer(minLength: 24)
-                worldClocks
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.vertical, 20)
+            .at(CGRect(x: 824, y: 40, width: 916, height: 270))
+
+            timerCard.at(ClockAppLayout.timerCard)
+            agenda.at(CGRect(x: 1300, y: 340, width: 440, height: 310))
+            worldClocks.at(CGRect(x: 824, y: 730, width: 916, height: 170))
         }
-        .padding(52)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HudTheme.surface,
-                    in: RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous)
-            .strokeBorder(HudTheme.edge, lineWidth: 1))
+        .appSurface()
+    }
+
+    private var timerCard: some View {
+        let hovered = hover.map(ClockAppLayout.timerCard.contains) ?? false
+        let hint: String
+        switch timer.state {
+        case .idle: hint = "SCROLL TO SET \u{00B7} CLICK TO START"
+        case .running: hint = "CLICK TO PAUSE"
+        case .paused: hint = "CLICK TO GO ON \u{00B7} RIGHT-CLICK TO RESET"
+        case .done: hint = "CLICK TO RUN AGAIN"
+        }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(timer.state == .done ? "TIME'S UP" : (timer.isStopwatch ? "STOPWATCH" : "TIMER"))
+                    .font(HudTheme.mont(18, .black)).tracking(3)
+                    .foregroundStyle(timer.state == .idle ? HudTheme.inkDim : HudTheme.accent)
+                Spacer()
+                Image(systemName: timer.state == .running ? "pause.fill" : "play.fill")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(HudTheme.inkDim)
+            }
+            Spacer(minLength: 0)
+            Text(timer.text).font(HudTheme.mont(110, .black)).tracking(-3).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.5)
+                .foregroundStyle(timer.state == .done ? HudTheme.accent : HudTheme.ink)
+            Spacer(minLength: 0)
+            if let progress = timer.progress {
+                ProgressLine(progress: progress).frame(height: 6).padding(.bottom, 16)
+            }
+            Text(hint).font(HudTheme.mont(14, .black)).tracking(2)
+                .foregroundStyle(HudTheme.inkFaint).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .padding(28)
+        .background(Color.white.opacity(hovered ? 0.1 : 0.05),
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .strokeBorder(hovered ? HudTheme.accent.opacity(0.7) : HudTheme.edge,
+                          lineWidth: hovered ? 2 : 1))
     }
 
     private var agenda: some View {
@@ -436,7 +516,7 @@ public struct ClockApp: View {
                     .font(HudTheme.mont(28, .semibold))
                     .foregroundStyle(HudTheme.inkDim)
             }
-            ForEach(Array(clock.agenda.prefix(4).enumerated()), id: \.offset) { _, event in
+            ForEach(Array(clock.agenda.prefix(3).enumerated()), id: \.offset) { _, event in
                 HStack(spacing: 18) {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(event.isNow ? HudTheme.accent : Color.white.opacity(0.25))

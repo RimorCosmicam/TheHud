@@ -14,16 +14,35 @@ final class HudController: ObservableObject {
 
     @Published private(set) var snapshot = HudSnapshot.blank
     @Published private(set) var contacts: [TouchPoint] = []
-    @Published private(set) var visible: Set<HudPanelKind>
-    /// One panel held up on its own, filling the glasses. Not saved: it is a moment's focus,
-    /// and the chosen set is what comes back.
-    @Published private(set) var solo: HudPanelKind? {
-        didSet { if solo != oldValue { soloChanged(from: oldValue) } }
+    /// What is on the glasses and where, as arranged on the phone. Saved.
+    @Published private(set) var arrangement: HudArrangement {
+        didSet {
+            guard arrangement != oldValue else { return }
+            if let data = try? JSONEncoder().encode(arrangement) {
+                UserDefaults.standard.set(data, forKey: Self.arrangementKey)
+            }
+            panelsChanged()
+        }
     }
-    /// What the glasses actually show: the solo panel, or the chosen set.
-    var shownPanels: Set<HudPanelKind> { solo.map { [$0] } ?? visible }
-    /// The map alone, soloed or as the only panel chosen: it gets the whole canvas.
-    private var mapFillsCanvas: Bool { shownPanels == [.map] }
+    /// One panel held up on its own, filling the glasses. Not saved: it is a moment's focus,
+    /// and the arrangement is what comes back.
+    @Published private(set) var solo: HudPanelKind? {
+        didSet { if solo != oldValue { panelsChanged() } }
+    }
+    /// Everything hidden, to see straight through the glasses.
+    @Published private(set) var clearView = false {
+        didSet { if clearView != oldValue { panelsChanged() } }
+    }
+    /// The phone's GLASSES section is being arranged.
+    @Published private(set) var editingGlasses = false
+
+    /// Whether a panel is on the glasses right now.
+    func isOnGlasses(_ kind: HudPanelKind) -> Bool {
+        if clearView { return false }
+        return solo.map { $0 == kind } ?? arrangement.isShown(kind)
+    }
+    /// The map held up alone: it gets the whole canvas, as the Maps app.
+    private var mapFillsCanvas: Bool { solo == .map && !clearView }
     @Published var config: HalftoneConfig = .miniMateDefault
     @Published var trackpad = TouchpadSettings()
 
@@ -39,7 +58,7 @@ final class HudController: ObservableObject {
     @Published var cornerPressed = false
 
     /// Where keystrokes go while the keyboard is up.
-    enum KeyboardTarget { case address, page, mapSearch, desktop }
+    enum KeyboardTarget { case address, page, mapSearch, mac, note }
     @Published private(set) var keyboardTarget: KeyboardTarget?
     /// The invisible text field's contents. For the address bar it is the draft itself; for the
     /// page it is a proxy that is diffed into insertions and deletions.
@@ -62,6 +81,25 @@ final class HudController: ObservableObject {
     private let weatherProvider: WeatherProviding = OpenMeteoWeatherProvider()
     private let maps = MapSnapshotProvider()
     private let mapsService = MapsService()
+
+    // The widgets' own sources. Each starts the first time its widget is on the glasses, so
+    // nothing asks for a permission the wearer has not shown they want.
+    private var timer: HudTimer
+    private var timerDoneAt: Date?
+    private let music = MusicProvider()
+    private let activityProvider = ActivityProvider()
+    let captions = CaptionsEngine()
+    /// The Music app's artwork for what is playing.
+    @Published private(set) var artwork: Image?
+    /// The activity ring's target.
+    @Published var stepGoal: Int = UserDefaults.standard.object(forKey: "stepGoal") as? Int ?? 8000 {
+        didSet {
+            UserDefaults.standard.set(stepGoal, forKey: "stepGoal")
+            activityProvider.goal = stepGoal
+            snapshot.activity?.goal = stepGoal
+        }
+    }
+    private var lastSky: Date = .distantPast
     /// HudCast on the Mac. Looks for it only while the desktop panel is on.
     let desktopLink = DesktopLink()
     /// The last click went to the Mac, so the keyboard button types there.
@@ -112,9 +150,8 @@ final class HudController: ObservableObject {
     }()
 
     private init() {
-        let stored = UserDefaults.standard.stringArray(forKey: Self.visibleKey)
-        visible = stored.map { Set($0.compactMap(HudPanelKind.init(rawValue:))) }
-            ?? HudPanelKind.standard
+        arrangement = Self.loadArrangement()
+        timer = HudTimer(setSeconds: UserDefaults.standard.object(forKey: "timerSeconds") as? Int ?? 300)
         if let data = UserDefaults.standard.data(forKey: Self.favoritesKey),
            let stored = try? JSONDecoder().decode([Favorite].self, from: data) {
             favorites = stored
@@ -123,12 +160,29 @@ final class HudController: ObservableObject {
         }
         snapshot.cursor = pointer.position
         snapshot.clock = .now()
+        snapshot.note.text = UserDefaults.standard.string(forKey: "note") ?? ""
+        snapshot.timer = timer.reading(at: Date())
         loadSettings()
 
         tabs = [makeTab()]
     }
 
-    private static let visibleKey = "visiblePanels"
+    private static let arrangementKey = "arrangement"
+
+    /// The saved arrangement; or, from before there was one, the old on/off set laid out the
+    /// standard way.
+    private static func loadArrangement() -> HudArrangement {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: arrangementKey),
+           let stored = try? JSONDecoder().decode(HudArrangement.self, from: data) {
+            return stored
+        }
+        if let old = defaults.stringArray(forKey: "visiblePanels") {
+            let kinds = old.compactMap { HudPanelKind(rawValue: $0 == "desktop" ? "mac" : $0) }
+            return HudArrangement(visible: Set(kinds))
+        }
+        return .standard
+    }
     private static let favoritesKey = "favorites"
 
     /// Called once the phone scene is on screen.
@@ -153,6 +207,13 @@ final class HudController: ObservableObject {
         location.start()
 
         desktopLink.onChange = { [weak self] desktop in self?.snapshot.desktop = desktop }
+        music.onChange = { [weak self] playing, artwork in
+            self?.snapshot.music = playing
+            self?.artwork = artwork
+        }
+        activityProvider.goal = stepGoal
+        activityProvider.onChange = { [weak self] activity in self?.snapshot.activity = activity }
+        captions.onChange = { [weak self] captions in self?.snapshot.captions = captions }
         panelsChanged()
 
         browser.goHome()
@@ -175,7 +236,8 @@ final class HudController: ObservableObject {
         clock.nextEventTime = calendarNext?.time
         clock.agenda = calendarAgenda
         // A redraw a second is for the clock app alone.
-        guard shownPanels == [.clock] || calendarChanged
+        tickWidgets()
+        guard isOnGlasses(.clock) && solo == .clock || calendarChanged
                 || clock.time != snapshot.clock.time else { return }
         snapshot.clock = clock
     }
@@ -194,14 +256,16 @@ final class HudController: ObservableObject {
             let place = minimap.place
             Task { [weak self] in
                 guard let self else { return }
-                if let weather = try? await self.weatherProvider.weather(at: coordinate,
+                if var weather = try? await self.weatherProvider.weather(at: coordinate,
                                                                          placeName: place) {
+                    weather.air = try? await AirQualityProvider.air(at: coordinate)
                     self.snapshot.weather = weather
                 }
             }
         }
 
         lastCoordinate = coordinate
+        if !snapshot.sky.hasLocation { updateSky(force: true) }
         applyGroundOffset()
         if var tracker {
             snapshot.maps.navigation = tracker.update(at: coordinate)
@@ -265,13 +329,13 @@ final class HudController: ObservableObject {
         }
     }
 
-    private func soloChanged(from old: HudPanelKind?) {
-        panelsChanged()
-        // Typing into something no longer on screen stops.
+    /// Typing into something no longer on screen stops.
+    private func stopTypingIntoHidden() {
         switch keyboardTarget {
-        case .address, .page: if !shownPanels.contains(.browser) { endTyping() }
+        case .address, .page: if !isOnGlasses(.browser) { endTyping() }
         case .mapSearch: if !mapFillsCanvas { endTyping() }
-        case .desktop: if !shownPanels.contains(.desktop) { endTyping() }
+        case .mac: if !isOnGlasses(.mac) { endTyping() }
+        case .note: if !isOnGlasses(.note) { endTyping() }
         case nil: break
         }
     }
@@ -279,12 +343,14 @@ final class HudController: ObservableObject {
     /// The map's raster is sized for its panel; going to or from the full canvas needs another
     /// one. The old one stays up, at the same zoom, until it arrives.
     private func panelsChanged() {
-        if shownPanels.contains(.desktop) {
+        stopTypingIntoHidden()
+        startWidgetSources()
+        if isOnGlasses(.mac) {
             desktopLink.start()
         } else {
             desktopLink.stop()
             desktopFocused = false
-            if keyboardTarget == .desktop { endTyping() }
+            if keyboardTarget == .mac { endTyping() }
         }
         if groundSpan > 0, groundPlan.span != groundSpan, let here = lastCoordinate {
             fetchGround(at: here)
@@ -443,8 +509,8 @@ final class HudController: ObservableObject {
         case let .showWindows(show):
             stripShowsWindows = show
         case .settings: showingSettings = true
-        case let .toggle(kind):
-            // Fullscreen, whether a held tile or a video, and a tap on any tile ends it.
+        case let .tapPanel(kind):
+            // Fullscreen, whether a held panel or a video, and any tap ends it.
             if solo != nil {
                 solo = nil
                 return
@@ -453,11 +519,19 @@ final class HudController: ObservableObject {
                 browser.toggleFullscreen()
                 return
             }
-            if visible.contains(kind) { visible.remove(kind) } else { visible.insert(kind) }
-            UserDefaults.standard.set(visible.map(\.rawValue), forKey: Self.visibleKey)
-            panelsChanged()
+            if clearView { clearView = false }
+            arrangement.toggleHidden(kind)
         case let .solo(kind):
+            clearView = false
             solo = kind
+        case .clearView:
+            if solo != nil { solo = nil }
+            clearView.toggle()
+        case let .editGlasses(on):
+            if on { endTyping() }
+            editingGlasses = on
+        case let .place(kind, spot):
+            arrangement.place(kind, at: spot)
         }
     }
 
@@ -496,7 +570,8 @@ final class HudController: ObservableObject {
     }
 
     private var layout: GlassesLayout {
-        GlassesLayout(visible: shownPanels, tabCount: tabs.count, activeTab: activeTab,
+        GlassesLayout(arrangement: arrangement, solo: solo, clearView: clearView,
+                      tabCount: tabs.count, activeTab: activeTab,
                       fullscreen: snapshot.browser.isFullscreen,
                       desktopAspect: snapshot.desktop.aspect)
     }
@@ -504,8 +579,8 @@ final class HudController: ObservableObject {
     /// The keyboard button types on the Mac when it is the only thing to type on, or when the
     /// last click went to it.
     private var typesOnDesktop: Bool {
-        guard shownPanels.contains(.desktop) else { return false }
-        return desktopFocused || !shownPanels.contains(.browser)
+        guard isOnGlasses(.mac) else { return false }
+        return desktopFocused || !isOnGlasses(.browser)
     }
 
     /// A left click wherever the cursor is. The glasses take no touches, so this is arithmetic
@@ -523,18 +598,47 @@ final class HudController: ObservableObject {
         case .address:
             desktopFocused = false
             beginAddressEditing()
-        case let .desktop(point):
+        case let .mac(point):
             // Typing on the page stops; typing on the Mac carries on into what was clicked.
-            if keyboardTarget != nil && keyboardTarget != .desktop { endTyping() }
+            if keyboardTarget != nil && keyboardTarget != .mac { endTyping() }
             desktopFocused = true
             desktopLink.send(.click(x: point.x, y: point.y, button: 0))
         case let .page(point):
             desktopFocused = false
-            if keyboardTarget == .address || keyboardTarget == .desktop { endTyping() }
+            if keyboardTarget == .address || keyboardTarget == .mac || keyboardTarget == .note {
+                endTyping()
+            }
             Task {
                 if await browser.click(at: point) { beginPageTyping() }
             }
+        case let .widget(kind, point, size):
+            widgetClick(kind, at: point, size: size)
         case .none: break
+        }
+    }
+
+    /// Clicks on widgets, small or held up alone. Most only show things; these do.
+    private func widgetClick(_ kind: HudPanelKind, at point: CGPoint, size: CGSize) {
+        let alone = solo == kind
+        switch kind {
+        case .note:
+            keyboardTarget == .note ? endTyping() : beginNoteEditing()
+        case .captions:
+            captions.toggle()
+        case .music:
+            switch MusicLayout.control(at: point, in: size, large: alone) {
+            case .previous: music.previous()
+            case .playPause: music.playPause()
+            case .next: music.next()
+            case nil: break
+            }
+        case .clock where alone:
+            if ClockAppLayout.timerCard.contains(point) {
+                timer.toggle(at: Date())
+                timerChanged()
+            }
+        default:
+            break
         }
     }
 
@@ -544,10 +648,26 @@ final class HudController: ObservableObject {
         guard ticks != 0 else { return }
         // In the Maps app, scrolling zooms: down to see more, up to see closer.
         if mapFillsCanvas { return zoomMap(pow(1.1, Double(ticks))) }
-        if case let .desktop(p) = layout.hitTest(pointer.position) {
+        switch layout.hitTest(pointer.position) {
+        case let .mac(p):
             // A Mac wheel's positive is up; a tick's is down the page.
             desktopLink.send(.scroll(x: p.x, y: p.y, dx: 0, dy: Double(-ticks * 48)))
             return
+        case let .widget(.clock, p, _) where solo == .clock:
+            // The wheel sets the timer: up for more.
+            if ClockAppLayout.timerCard.contains(p) {
+                timer.adjust(notches: -ticks)
+                UserDefaults.standard.set(timer.setSeconds, forKey: "timerSeconds")
+                timerChanged()
+            }
+            return
+        case .widget(.note, _, _) where solo == .note:
+            snapshot.note.scroll = max(snapshot.note.scroll + CGFloat(ticks) * 40, 0)
+            return
+        case .widget:
+            return
+        default:
+            break
         }
         guard let content = layout.contentFrame else { return }
         let point: CGPoint
@@ -587,12 +707,23 @@ final class HudController: ObservableObject {
 
     func beginDesktopTyping() {
         if keyboardTarget == .address { snapshot.browser.isEditingAddress = false }
-        keyboardTarget = .desktop
+        keyboardTarget = .mac
         draft = Self.sentinel
+    }
+
+    func beginNoteEditing() {
+        if keyboardTarget == .address { snapshot.browser.isEditingAddress = false }
+        keyboardTarget = .note
+        draft = snapshot.note.text
+        snapshot.note.isEditing = true
     }
 
     func endTyping() {
         if keyboardTarget == .mapSearch { snapshot.maps.isEditing = false }
+        if keyboardTarget == .note {
+            snapshot.note.isEditing = false
+            UserDefaults.standard.set(snapshot.note.text, forKey: "note")
+        }
         if keyboardTarget == .address {
             snapshot.browser.isEditingAddress = false
             snapshot.browser.url = browser.state.url
@@ -607,6 +738,9 @@ final class HudController: ObservableObject {
         case .address:
             draft = new
             snapshot.browser.url = new
+        case .note:
+            draft = new
+            snapshot.note.text = new
         case .mapSearch:
             draft = new
             snapshot.maps.query = new
@@ -615,7 +749,7 @@ final class HudController: ObservableObject {
             searchDebounce = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
                 MainActor.assumeIsolated { self.runMapSearch() }
             }
-        case .page, .desktop:
+        case .page, .mac:
             let sentinel = Self.sentinel
             let old = draft.hasPrefix(sentinel) ? String(draft.dropFirst()) : draft
             if new.hasPrefix(sentinel) {
@@ -636,7 +770,7 @@ final class HudController: ObservableObject {
         let edit = TextEdit.between(old, new)
         deleteBackward(edit.deletes)
         guard !edit.insert.isEmpty else { return }
-        if keyboardTarget == .desktop {
+        if keyboardTarget == .mac {
             desktopLink.send(.text(edit.insert))
         } else {
             browser.insert(edit.insert)
@@ -645,7 +779,7 @@ final class HudController: ObservableObject {
 
     private func deleteBackward(_ count: Int) {
         guard count > 0 else { return }
-        if keyboardTarget == .desktop {
+        if keyboardTarget == .mac {
             for _ in 0..<count { desktopLink.send(.key("delete")) }
         } else {
             browser.deleteBackward(count)
@@ -660,7 +794,9 @@ final class HudController: ObservableObject {
         case .page:
             browser.submit()
             endTyping()
-        case .desktop:
+        case .note:
+            endTyping()
+        case .mac:
             // Return on a Mac is a line, not the end of typing: the keyboard stays up.
             desktopLink.send(.key("return"))
             draft = Self.sentinel
@@ -771,6 +907,69 @@ final class HudController: ObservableObject {
         applyRoute()
     }
 
+    // ------------------------------------------------------------------ widgets
+
+    /// Starts the sources of whatever is on the glasses (or arranged there), once each.
+    private func startWidgetSources() {
+        let placed = { (kind: HudPanelKind) in self.arrangement.isPlaced(kind) || self.solo == kind }
+        if placed(.music) { music.start() }
+        if placed(.activity) { activityProvider.start() }
+        if placed(.sky) || solo == .sky { updateSky(force: true) }
+        // Hidden or cleared away, captions keep listening (the phone shows a red dot); taken
+        // off the glasses, they stop.
+        if captions.state.isListening && !placed(.captions) { captions.stop() }
+    }
+
+    /// Every second, with the clock.
+    private func tickWidgets() {
+        let now = Date()
+        if timer.isRunning || snapshot.timer.state == .done { timerChanged(now: now) }
+        music.tick()
+        activityProvider.tick(now: now)
+        captions.tick(now: now)
+        updateSky()
+    }
+
+    private func timerChanged(now: Date = Date()) {
+        let reading = timer.reading(at: now)
+        if reading.state == .done, snapshot.timer.state != .done {
+            timerDoneAt = now
+            buzz()
+        }
+        // Done for a while: back to ready, at the same time.
+        if reading.state == .done, let doneAt = timerDoneAt, now.timeIntervalSince(doneAt) > 12 {
+            timer.reset()
+            timerDoneAt = nil
+            snapshot.timer = timer.reading(at: now)
+            return
+        }
+        if reading != snapshot.timer { snapshot.timer = reading }
+    }
+
+    /// The phone is in the hand: three firm taps say the time is up.
+    private func buzz() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.warning)
+        for delay in [0.45, 0.9] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                generator.notificationOccurred(.warning)
+            }
+        }
+    }
+
+    /// The sky moves slowly: once a minute is plenty, and the stars only while they are seen.
+    private func updateSky(force: Bool = false) {
+        guard arrangement.isPlaced(.sky) || solo == .sky,
+              force || Date().timeIntervalSince(lastSky) > 60,
+              let here = lastCoordinate else { return }
+        lastSky = Date()
+        let latitude = here.latitude, longitude = here.longitude
+        Task.detached(priority: .utility) {
+            let sky = SkyModel.compute(at: Date(), latitude: latitude, longitude: longitude)
+            await MainActor.run { self.snapshot.sky = sky }
+        }
+    }
+
     // ------------------------------------------------------------------ settings
 
     func settingsChanged() {
@@ -824,12 +1023,18 @@ final class HudController: ObservableObject {
             pointerMoved()
         case .tapClick: click()
         case .rightClick:
-            if case let .desktop(p) = layout.hitTest(pointer.position) {
+            switch layout.hitTest(pointer.position) {
+            case let .mac(p):
                 desktopFocused = true
                 desktopLink.send(.click(x: p.x, y: p.y, button: 1))
+            case let .widget(.clock, p, _) where solo == .clock && ClockAppLayout.timerCard.contains(p):
+                timer.reset()
+                timerChanged()
+            default:
+                break
             }
         case .doubleTapDragStart:
-            if case let .desktop(p) = layout.hitTest(pointer.position) {
+            if case let .mac(p) = layout.hitTest(pointer.position) {
                 desktopDragging = true
                 desktopLink.send(.press(x: p.x, y: p.y))
             }
@@ -850,7 +1055,7 @@ final class HudController: ObservableObject {
     /// Mouse movement reaches the page, a few dozen times a second rather than on every
     /// sample: enough for hover menus and for video controls to wake, without flooding WebKit.
     private func pointerMoved() {
-        if shownPanels.contains(.desktop), Date().timeIntervalSince(lastDesktopMove) > 0.033 {
+        if isOnGlasses(.mac), Date().timeIntervalSince(lastDesktopMove) > 0.033 {
             if desktopDragging {
                 // A drag keeps going past the picture's edge, pinned to it.
                 let p = desktopPoint(clamped: pointer.position)
@@ -858,7 +1063,7 @@ final class HudController: ObservableObject {
                 desktopLink.send(.move(x: p.x, y: p.y))
                 return
             }
-            if case let .desktop(p) = layout.hitTest(pointer.position) {
+            if case let .mac(p) = layout.hitTest(pointer.position) {
                 lastDesktopMove = Date()
                 desktopLink.send(.move(x: p.x, y: p.y))
                 return

@@ -12,7 +12,13 @@ let package = Package(
     targets: [
         // Shared by the iOS app and the macOS preview tool. No platform-specific code here
         // beyond what Metal itself provides, so what the preview renders is what the app renders.
-        .target(name: "HudCore", resources: [.copy("Resources/Fonts")]),
+        .target(name: "HudCore", dependencies: ["CAstronomy"],
+                resources: [.copy("Resources/Fonts"), .copy("Resources/Sky")]),
+
+        // Astronomy Engine (MIT, Don Cross), vendored as its single C file: where the sun, the
+        // moon and the planets are, for the sky widget. A proven library rather than our own
+        // approximations.
+        .target(name: "CAstronomy", exclude: ["LICENSE.txt"]),
 
         // macOS-only: renders HudCore scenes to PNG without a device or a simulator.
         .executableTarget(name: "hudshot", dependencies: ["HudCore"]),

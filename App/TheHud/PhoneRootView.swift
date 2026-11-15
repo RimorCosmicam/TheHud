@@ -30,8 +30,10 @@ struct PhoneRootView: View {
 
                 // The slack. The keyboard takes the height it needs from here, because
                 // everything else in the stack is fixed.
-                SettingsArea(visible: controller.visible,
+                SettingsArea(arrangement: controller.arrangement,
                              solo: controller.solo,
+                             clearView: controller.clearView,
+                             editing: controller.editingGlasses,
                              glassesConnected: controller.glassesConnected,
                              tabs: controller.snapshot.browser.tabs,
                              activeTab: controller.snapshot.browser.activeTab,
@@ -41,17 +43,23 @@ struct PhoneRootView: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .clipped()
 
-                surface(CGSize(width: geometry.size.width - PhoneMetrics.surfaceMargin * 2,
-                               height: surfaceHeight),
-                        keyboardUp: keyboardUp)
-                    .padding(.horizontal, PhoneMetrics.surfaceMargin)
-                    .padding(.bottom, gap)
+                // Arranging the glasses, the editor has the trackpad's room.
+                if !controller.editingGlasses {
+                    surface(CGSize(width: geometry.size.width - PhoneMetrics.surfaceMargin * 2,
+                                   height: surfaceHeight),
+                            keyboardUp: keyboardUp)
+                        .padding(.horizontal, PhoneMetrics.surfaceMargin)
+                        .padding(.bottom, gap)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
         // The safe area is kept at the bottom on purpose: the pad ends above the home
         // indicator, where an upward swipe is iOS's and not ours.
         .background(Color.black.ignoresSafeArea())
         .overlay(alignment: .top) { keyboardProxy }
+        .overlay(alignment: .top) { recordingDot }
+        .animation(.easeOut(duration: 0.25), value: controller.editingGlasses)
         .sheet(isPresented: $controller.showingSettings) {
             SettingsSheet(controller: controller)
                 .presentationDetents([.medium, .large])
@@ -69,6 +77,23 @@ struct PhoneRootView: View {
         }
     }
 
+    /// Captions are listening and saving: a red dot at the top of the phone, which only the
+    /// wearer sees, the same place iOS puts its own.
+    @ViewBuilder
+    private var recordingDot: some View {
+        if controller.snapshot.captions.isListening {
+            HStack(spacing: 6) {
+                Circle().fill(Color.red).frame(width: 9, height: 9)
+                Text("CAPTIONS").font(HudTheme.mont(9, .black)).tracking(1.5)
+                    .foregroundStyle(Color.red)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Color.black.opacity(0.8), in: Capsule())
+            .padding(.top, 2)
+            .allowsHitTesting(false)
+        }
+    }
+
     /// Invisible but focusable: the app draws no keyboard of its own, it asks iOS for the real
     /// one. Autocorrect, dictation, swipe typing, every installed language and the emoji picker
     /// all arrive with it, and what is typed is forwarded to the address bar or the page.
@@ -76,15 +101,15 @@ struct PhoneRootView: View {
         TextField("", text: Binding(get: { controller.draft },
                                     set: { controller.draftChanged($0) }))
             .focused($typing)
-            .keyboardType(controller.keyboardTarget == .page || controller.keyboardTarget == .desktop
-                          ? .default : .webSearch)
+            .keyboardType(controller.keyboardTarget == .page || controller.keyboardTarget == .mac
+                          || controller.keyboardTarget == .note ? .default : .webSearch)
             .textInputAutocapitalization(controller.keyboardTarget == .address ? .never : .sentences)
             .autocorrectionDisabled(controller.keyboardTarget == .address)
             .submitLabel(controller.keyboardTarget == .address ? .go
                          : controller.keyboardTarget == .mapSearch ? .search : .return)
             .onSubmit {
                 controller.submitTyping()
-                if controller.keyboardTarget == .desktop { typing = true }
+                if controller.keyboardTarget == .mac { typing = true }
             }
             .frame(width: 1, height: 1)
             .opacity(0.01)
@@ -127,6 +152,12 @@ struct SettingsSheet: View {
                     Toggle("Natural scrolling", isOn: $controller.trackpad.naturalScrolling)
                     Toggle("Momentum", isOn: $controller.trackpad.momentumScrolling)
                     Toggle("Tap to click", isOn: $controller.trackpad.tapToClick)
+                }
+
+                Section("Widgets") {
+                    Stepper("Daily steps: \(controller.stepGoal.formatted())",
+                            value: $controller.stepGoal, in: 2000...30000, step: 1000)
+                    NavigationLink("Saved captions") { CaptionsSessionsView() }
                 }
 
                 Section("Surface") {

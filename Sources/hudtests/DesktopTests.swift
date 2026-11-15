@@ -28,46 +28,42 @@ func runDesktopTests() {
         }
     }
 
-    test("layout: browser and desktop split the space right of the column in halves") {
-        let layout = GlassesLayout(visible: [.browser, .desktop, .clock])
-        let browser = layout.browserFrame!, desktop = layout.desktopFrame!, area = layout.mainArea!
-        expectEqual(browser.width, desktop.width)
-        expectEqual(browser.minX, area.minX)
-        expectEqual(desktop.maxX, area.maxX)
-        expectEqual(desktop.minX - browser.maxX, GlassesLayout.gap)
-        expect(!browser.intersects(desktop), "panels overlap")
+    test("layout: browser and Mac share the middle in halves") {
+        let layout = GlassesLayout(visible: [.browser, .mac, .clock])
+        let browser = layout.browserFrame!, mac = layout.desktopFrame!
+        let span = GlassesLayout.bigSpan(taking: [])
+        expectEqual(browser.width, mac.width)
+        expectEqual(browser.minX, span.minX)
+        expectEqual(mac.maxX, span.maxX)
+        expectEqual(mac.minX - browser.maxX, GlassesLayout.gap)
     }
 
-    test("layout: the desktop alone takes the canvas inside the safe inset") {
-        let layout = GlassesLayout(visible: [.desktop])
-        let inset = HudTheme.safeInset
-        expectEqual(layout.desktopFrame,
-                    CGRect(x: inset, y: inset, width: 1920 - inset * 2, height: 1080 - inset * 2))
+    test("layout: the Mac held up alone takes the canvas inside the safe inset") {
+        let layout = GlassesLayout(arrangement: HudArrangement(visible: [.mac]), solo: .mac)
+        expectEqual(layout.desktopFrame, GlassesLayout.safeFrame)
         expect(layout.browserFrame == nil, "no browser")
     }
 
     test("layout: a click on the picture is a fraction of it, and the letterbox is nothing") {
-        let layout = GlassesLayout(visible: [.browser, .desktop], desktopAspect: 16 / 10)
+        let layout = GlassesLayout(visible: [.browser, .mac], desktopAspect: 16 / 10)
         let picture = layout.desktopPicture!
         expectEqual((picture.width / picture.height * 100).rounded(), 160)
         let hit = layout.hitTest(CGPoint(x: picture.minX + picture.width / 4,
                                          y: picture.minY + picture.height * 0.75))
-        guard case let .desktop(p) = hit else { return expect(false, "\(hit)") }
+        guard case let .mac(p) = hit else { return expect(false, "\(hit)") }
         expect(abs(p.x - 0.25) < 0.001 && abs(p.y - 0.75) < 0.001, "\(p)")
-        // Above the picture, inside the panel: the bars around a fitted picture take no clicks.
         let frame = layout.desktopFrame!
         if picture.minY > frame.minY + 2 {
             expectEqual(layout.hitTest(CGPoint(x: frame.midX, y: frame.minY + 1)), .none)
         }
-        // The browser half still gets its own clicks.
         if case .page = layout.hitTest(CGPoint(x: layout.browserFrame!.midX, y: 700)) {} else {
             expect(false, "browser half lost its page")
         }
     }
 
-    test("layout: a fullscreen video hides the desktop") {
-        let layout = GlassesLayout(visible: [.browser, .desktop], fullscreen: true)
-        expect(layout.desktopFrame == nil, "desktop still there")
+    test("layout: a fullscreen video hides the Mac") {
+        let layout = GlassesLayout(visible: [.browser, .mac], fullscreen: true)
+        expect(layout.desktopFrame == nil, "Mac still there")
         expectEqual(layout.browserFrame, CGRect(origin: .zero, size: HudTheme.glassesSize))
     }
 

@@ -1,23 +1,41 @@
 import Foundation
 import CoreGraphics
 
-/// The four things the glasses can show.
-public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable {
-    case browser, desktop, map, weather, clock
+/// Everything the glasses can show: two big things for the middle, and the widgets that sit in
+/// the slots either side of it.
+public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable {
+    case browser, mac
+    case clock, weather, map, activity, sky, music, note, captions
 
     public var id: String { rawValue }
 
-    /// What a new install starts with. The desktop waits to be asked for: turning it on is
-    /// what starts looking for a Mac on the network.
-    public static let standard: Set<HudPanelKind> = [.browser, .map, .weather, .clock]
+    /// The browser and the Mac: they go in the middle, can reach over a side, and are what the
+    /// cursor mostly works on.
+    public var isBig: Bool { self == .browser || self == .mac }
+
+    public static let bigs: [HudPanelKind] = [.browser, .mac]
+    public static let widgets: [HudPanelKind] = [.clock, .weather, .map, .activity, .sky,
+                                                 .music, .note, .captions]
 
     public var symbol: String {
         switch self {
         case .browser: return "globe"
-        case .desktop: return "desktopcomputer"
-        case .map: return "map"
-        case .weather: return "cloud.sun"
+        case .mac: return "desktopcomputer"
         case .clock: return "clock"
+        case .weather: return "cloud.sun"
+        case .map: return "map"
+        case .activity: return "figure.walk"
+        case .sky: return "moon.stars"
+        case .music: return "music.note"
+        case .note: return "note.text"
+        case .captions: return "captions.bubble"
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .music: return "MUSIC"
+        default: return rawValue.uppercased()
         }
     }
 }
@@ -75,21 +93,33 @@ public enum GlassesHitTarget: Equatable, Sendable {
     /// A point inside the page, in the web view's own coordinates.
     case page(CGPoint)
     /// A point on the Mac's picture, as fractions of it (0...1 each way).
-    case desktop(CGPoint)
+    case mac(CGPoint)
+    /// A widget, or a widget's fullscreen app: the point inside it, and its size.
+    case widget(HudPanelKind, CGPoint, CGSize)
     case none
 }
 
 /// Where things are on the 1920x1080 canvas.
 ///
+/// Three slots down each side for widgets; the middle for the browser and the Mac. Either of
+/// those can reach over one side as well, hiding the widgets there, or be held up alone.
+///
 /// The glasses scene takes no touches — every click is the phone's cursor landing somewhere on a
 /// canvas the phone cannot see. So the layout is arithmetic rather than something read back from
 /// the view tree: the controller has to answer "what is under the cursor" without a view to ask,
-/// and arithmetic can be tested on a Mac.
+/// and arithmetic can be tested on a Mac. The phone's miniature is this same arithmetic, scaled.
 public struct GlassesLayout: Sendable {
-    public static let columnWidth: CGFloat = 470
+    public static let slotWidth: CGFloat = 400
     public static let gap: CGFloat = 24
+    public static var slotHeight: CGFloat {
+        (HudTheme.glassesSize.height - HudTheme.safeInset * 2 - gap * 2) / 3
+    }
 
-    public var visible: Set<HudPanelKind>
+    public var arrangement: HudArrangement
+    /// One panel held up alone.
+    public var solo: HudPanelKind?
+    /// Everything off: the glasses show the world.
+    public var clearView: Bool
     public var tabCount: Int
     public var activeTab: Int
     /// A video (or any page element) has asked for fullscreen: the browser is the whole canvas,
@@ -98,50 +128,91 @@ public struct GlassesLayout: Sendable {
     /// The Mac picture's width over its height, to fit it in its panel.
     public var desktopAspect: CGFloat
 
-    public init(visible: Set<HudPanelKind> = HudPanelKind.standard,
+    public init(arrangement: HudArrangement = .standard, solo: HudPanelKind? = nil,
+                clearView: Bool = false,
                 tabCount: Int = 1, activeTab: Int = 0, fullscreen: Bool = false,
                 desktopAspect: CGFloat = 16 / 10) {
-        self.visible = visible
-        self.fullscreen = fullscreen && visible.contains(.browser)
+        self.arrangement = arrangement
+        self.solo = solo
+        self.clearView = clearView
         self.tabCount = max(tabCount, 1)
         self.activeTab = activeTab
         self.desktopAspect = desktopAspect > 0 ? desktopAspect : 16 / 10
+        let browserShown = solo.map { $0 == .browser } ?? arrangement.isShown(.browser)
+        self.fullscreen = fullscreen && browserShown && !clearView
     }
 
-    /// The clock, weather and map share one column beside the browser.
-    public var hasColumn: Bool { !visible.isDisjoint(with: [.clock, .weather, .map]) }
+    /// The set as a plain list of what is on: widgets fill the left slots, then the right, and
+    /// the big ones share the middle. For stills and tests.
+    public init(visible: Set<HudPanelKind>, tabCount: Int = 1, activeTab: Int = 0,
+                fullscreen: Bool = false, desktopAspect: CGFloat = 16 / 10) {
+        self.init(arrangement: HudArrangement(visible: visible), tabCount: tabCount,
+                  activeTab: activeTab, fullscreen: fullscreen, desktopAspect: desktopAspect)
+    }
 
-    /// Right of the column: the browser's, the desktop's, or both side by side.
-    public var mainArea: CGRect? {
-        guard visible.contains(.browser) || visible.contains(.desktop) else { return nil }
+    /// The canvas inside the safe inset.
+    public static var safeFrame: CGRect {
         let inset = HudTheme.safeInset
-        let canvas = HudTheme.glassesSize
-        let x = inset + (hasColumn ? Self.columnWidth + Self.gap : 0)
-        return CGRect(x: x, y: inset,
-                      width: canvas.width - inset - x,
-                      height: canvas.height - inset * 2)
+        return CGRect(x: inset, y: inset, width: HudTheme.glassesSize.width - inset * 2,
+                      height: HudTheme.glassesSize.height - inset * 2)
     }
 
-    /// Both on: the browser takes the left half, the desktop the right.
-    private var splits: Bool { visible.contains(.browser) && visible.contains(.desktop) }
-
-    private func half(_ area: CGRect, right: Bool) -> CGRect {
-        let width = (area.width - Self.gap) / 2
-        return CGRect(x: right ? area.maxX - width : area.minX, y: area.minY,
-                      width: width, height: area.height)
+    public static func slotFrame(_ side: HudSide, _ index: Int) -> CGRect {
+        let safe = safeFrame
+        let x = side == .left ? safe.minX : safe.maxX - slotWidth
+        return CGRect(x: x, y: safe.minY + CGFloat(index) * (slotHeight + gap),
+                      width: slotWidth, height: slotHeight)
     }
 
-    public var browserFrame: CGRect? {
-        guard visible.contains(.browser), let area = mainArea else { return nil }
-        if fullscreen { return CGRect(origin: .zero, size: HudTheme.glassesSize) }
-        return splits ? half(area, right: false) : area
+    /// The middle, plus any side a big panel has taken over.
+    public static func bigSpan(taking sides: Set<HudSide>) -> CGRect {
+        let safe = safeFrame
+        let minX = sides.contains(.left) ? safe.minX : safe.minX + slotWidth + gap
+        let maxX = sides.contains(.right) ? safe.maxX : safe.maxX - slotWidth - gap
+        return CGRect(x: minX, y: safe.minY, width: maxX - minX, height: safe.height)
     }
 
-    /// The desktop panel. Not while a video has the browser fullscreen.
-    public var desktopFrame: CGRect? {
-        guard visible.contains(.desktop), !fullscreen, let area = mainArea else { return nil }
-        return splits ? half(area, right: true) : area
+    private var drawsArrangement: Bool { !clearView && solo == nil && !fullscreen }
+
+    /// The widgets on the canvas and where: not hidden, not under a big panel's side.
+    public var widgetFrames: [(kind: HudPanelKind, frame: CGRect)] {
+        guard drawsArrangement else { return [] }
+        return arrangement.shownWidgets.map { ($0.kind, Self.slotFrame($0.side, $0.index)) }
     }
+
+    /// The big panels on the canvas, left to right.
+    public var bigFrames: [(kind: HudPanelKind, frame: CGRect)] {
+        if clearView { return [] }
+        if fullscreen { return [(.browser, CGRect(origin: .zero, size: HudTheme.glassesSize))] }
+        if let solo {
+            return solo.isBig ? [(solo, Self.safeFrame)] : []
+        }
+        let bigs = arrangement.orderedBigs
+        guard !bigs.isEmpty else { return [] }
+        let span = Self.bigSpan(taking: arrangement.takenSides)
+        let width = (span.width - Self.gap * CGFloat(bigs.count - 1)) / CGFloat(bigs.count)
+        return bigs.enumerated().map { index, big in
+            (big.kind, CGRect(x: span.minX + CGFloat(index) * (width + Self.gap), y: span.minY,
+                              width: width, height: span.height))
+        }
+    }
+
+    /// Where a widget's fullscreen app is drawn and clicked.
+    public var soloWidgetFrame: CGRect? {
+        guard !clearView, !fullscreen, let solo, !solo.isBig else { return nil }
+        return Self.safeFrame
+    }
+
+    public func frame(of kind: HudPanelKind) -> CGRect? {
+        if kind.isBig { return bigFrames.first { $0.kind == kind }?.frame }
+        if solo == kind { return soloWidgetFrame }
+        return widgetFrames.first { $0.kind == kind }?.frame
+    }
+
+    public var browserFrame: CGRect? { frame(of: .browser) }
+
+    /// The Mac panel. Not while a video has the browser fullscreen.
+    public var desktopFrame: CGRect? { frame(of: .mac) }
 
     /// The Mac's picture inside its panel, fitted without cropping.
     public var desktopPicture: CGRect? {
@@ -179,12 +250,20 @@ public struct GlassesLayout: Sendable {
     }
 
     public func hitTest(_ point: CGPoint) -> GlassesHitTarget {
+        if clearView { return .none }
+        if let frame = soloWidgetFrame, let solo {
+            return .widget(solo, CGPoint(x: point.x - frame.minX, y: point.y - frame.minY),
+                           frame.size)
+        }
         if let picture = desktopPicture, picture.contains(point) {
-            return .desktop(CGPoint(x: (point.x - picture.minX) / picture.width,
-                                    y: (point.y - picture.minY) / picture.height))
+            return .mac(CGPoint(x: (point.x - picture.minX) / picture.width,
+                                y: (point.y - picture.minY) / picture.height))
+        }
+        for (kind, frame) in widgetFrames where frame.contains(point) {
+            return .widget(kind, CGPoint(x: point.x - frame.minX, y: point.y - frame.minY),
+                           frame.size)
         }
         guard let frame = browserFrame, frame.contains(point) else { return .none }
-
         if let bar = barFrame, bar.contains(point) {
             let x = point.x - bar.minX
             let button = BrowserMetrics.buttonWidth

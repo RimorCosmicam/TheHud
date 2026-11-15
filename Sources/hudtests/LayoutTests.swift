@@ -12,22 +12,27 @@ func runLayoutTests() {
     let frame = all.browserFrame!
     let bar = all.barFrame!
 
-    test("browser sits right of the column, inside the safe inset") {
-        expectEqual(frame.minX, HudTheme.safeInset + GlassesLayout.columnWidth + GlassesLayout.gap)
-        expectEqual(frame.maxX, HudTheme.glassesSize.width - HudTheme.safeInset)
+    test("browser sits in the middle, between the widget columns") {
+        let side = GlassesLayout.slotWidth + GlassesLayout.gap
+        expectEqual(frame.minX, HudTheme.safeInset + side)
+        expectEqual(frame.maxX, HudTheme.glassesSize.width - HudTheme.safeInset - side)
         expectEqual(frame.minY, HudTheme.safeInset)
     }
 
-    test("browser takes the full width with the column off") {
-        let alone = GlassesLayout(visible: [.browser]).browserFrame!
-        expectEqual(alone.minX, HudTheme.safeInset)
+    test("browser reaching over the left side starts at the safe inset, and hides that side") {
+        var arrangement = HudArrangement.standard
+        arrangement.place(.browser, at: .slot(.left, 0))
+        let over = GlassesLayout(arrangement: arrangement)
+        expectEqual(over.browserFrame!.minX, HudTheme.safeInset)
+        expect(over.widgetFrames.isEmpty, "the left widgets are under it")
     }
 
     test("the browser held up alone fills the canvas inside the safe inset, bar and all") {
-        let solo = GlassesLayout(visible: [.browser])
+        let solo = GlassesLayout(arrangement: .standard, solo: .browser)
         let frame = solo.browserFrame!
         expectEqual(frame.width, HudTheme.glassesSize.width - HudTheme.safeInset * 2)
         expect(solo.barFrame != nil)
+        expect(solo.widgetFrames.isEmpty)
     }
 
     test("the map's zoom is fixed: the same metres per point in the column and alone") {
@@ -78,8 +83,9 @@ func runLayoutTests() {
                     .page(CGPoint(x: 100, y: 300)))
     }
 
-    test("outside the browser is nothing") {
-        expectEqual(all.hitTest(CGPoint(x: 100, y: 500)), .none)
+    test("between the widgets and the browser is nothing") {
+        let gapX = HudTheme.safeInset + GlassesLayout.slotWidth + GlassesLayout.gap / 2
+        expectEqual(all.hitTest(CGPoint(x: gapX, y: 500)), .none)
     }
 
     print("\nAddressInput")

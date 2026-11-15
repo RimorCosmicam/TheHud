@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The Mac, as HudCast streams it: the whole screen or one window, fitted into the panel
 /// without cropping. Clicks and keys on it go to the Mac.
-public struct DesktopPanel: View {
+public struct MacPanel: View {
     public var desktop: HudSnapshot.Desktop
     public var content: AnyView?
     public var standIn: Bool
@@ -19,7 +19,7 @@ public struct DesktopPanel: View {
             if let content {
                 content
             } else if standIn {
-                StandInDesktop()
+                StandInMac()
                     .aspectRatio(desktop.aspect, contentMode: .fit)
             }
             if !desktop.hasPicture && !standIn {
@@ -53,7 +53,7 @@ public struct DesktopPanel: View {
 }
 
 /// A made-up desktop for stills: a wallpaper, a menu bar and two windows.
-struct StandInDesktop: View {
+struct StandInMac: View {
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size

@@ -123,9 +123,16 @@ public enum PhoneAction: Sendable {
     case back, forward, reload, home, favorite, address, keyboard, settings
     case newTab
     case selectTab(Int), closeTab(Int)
-    case toggle(HudPanelKind)
-    /// Show one panel alone on the glasses, or put the set back if it already is.
+    /// A tap on a panel in the miniature: off for now, keeping its place, or back on. While
+    /// something is fullscreen, any tap puts things back.
+    case tapPanel(HudPanelKind)
+    /// Show one panel alone on the glasses.
     case solo(HudPanelKind)
+    /// Everything off at once, or back.
+    case clearView
+    case editGlasses(Bool)
+    /// A drop in the editor.
+    case place(HudPanelKind, HudSpot)
     /// Stream one of the Mac's windows, by its place in the list; nil for the whole screen.
     case selectWindow(Int?)
     /// With the browser and the desktop both on: list the Mac's windows instead of the tabs.
@@ -274,8 +281,11 @@ public struct SystemKeyboardStandIn: View {
 /// for it. Nothing here is needed while the thumb is on the trackpad, which is what makes it the
 /// right thing to lose.
 public struct SettingsArea: View {
-    public var visible: Set<HudPanelKind>
+    public var arrangement: HudArrangement
     public var solo: HudPanelKind?
+    public var clearView: Bool
+    /// Arranging: the miniature is big, the icons not in use are under it, and everything drags.
+    public var editing: Bool
     public var glassesConnected: Bool
     public var tabs: [String]
     public var activeTab: Int
@@ -284,16 +294,23 @@ public struct SettingsArea: View {
     public var showsWindows: Bool
     public var action: (PhoneAction) -> Void
 
-    public init(visible: Set<HudPanelKind> = HudPanelKind.standard,
+    @State private var drag: (kind: HudPanelKind, location: CGPoint)?
+    @State private var miniFrame: CGRect = .zero
+
+    public init(arrangement: HudArrangement = .standard,
                 solo: HudPanelKind? = nil,
+                clearView: Bool = false,
+                editing: Bool = false,
                 glassesConnected: Bool = true,
                 tabs: [String] = ["New Tab"],
                 activeTab: Int = 0,
                 desktop: HudSnapshot.Desktop = HudSnapshot.Desktop(),
                 showsWindows: Bool = false,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
-        self.visible = visible
+        self.arrangement = arrangement
         self.solo = solo
+        self.clearView = clearView
+        self.editing = editing
         self.glassesConnected = glassesConnected
         self.tabs = tabs
         self.activeTab = activeTab
@@ -303,20 +320,85 @@ public struct SettingsArea: View {
     }
 
     private func shown(_ kind: HudPanelKind) -> Bool {
-        solo.map { $0 == kind } ?? visible.contains(kind)
+        if clearView { return false }
+        return solo.map { $0 == kind } ?? arrangement.isShown(kind)
     }
 
-    /// The strip lists the Mac's windows when the desktop is on and the browser is not, or
+    /// The strip lists the Mac's windows when the Mac is on and the browser is not, or
     /// when both are and WINDOWS was picked.
     private var listsWindows: Bool {
-        shown(.desktop) && (!shown(.browser) || showsWindows)
+        shown(.mac) && (!shown(.browser) || showsWindows)
     }
+
+    private static let space = "glassesEditor"
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(solo == nil ? "ON THE GLASSES" : "FULLSCREEN").hudLabel()
-                Spacer()
+            header
+
+            miniature
+                .frame(height: editing ? 210 : 104)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: MiniFrameKey.self,
+                                           value: geometry.frame(in: .named(Self.space)))
+                })
+
+            if editing {
+                tray
+            } else {
+                stripHeader.padding(.top, 4)
+                if listsWindows { windowStrip } else { tabStrip }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: editing ? .infinity : nil, alignment: .top)
+        .background(.black)
+        .coordinateSpace(name: Self.space)
+        .onPreferenceChange(MiniFrameKey.self) { miniFrame = $0 }
+        .overlay(alignment: .topLeading) {
+            if let drag {
+                MiniChip(kind: drag.kind, state: .lifted)
+                    .frame(width: 92, height: 40)
+                    .position(drag.location)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: editing)
+    }
+
+    // MARK: header
+
+    /// GLASSES: a tap clears the view, a hold arranges.
+    private var header: some View {
+        HStack {
+            Text(editing ? "ARRANGING" : clearView ? "CLEAR VIEW" : solo != nil ? "FULLSCREEN" : "GLASSES")
+                .font(HudTheme.mont(16, .black)).tracking(3)
+                .foregroundStyle(editing || clearView ? HudTheme.accent : HudTheme.inkDim)
+                .padding(.vertical, 6)
+                .padding(.trailing, 24)
+                .contentShape(Rectangle())
+                .gesture(
+                    LongPressGesture(minimumDuration: 0.45)
+                        .onEnded { _ in if !editing { action(.editGlasses(true)) } }
+                        .exclusively(before: TapGesture().onEnded {
+                            action(editing ? .editGlasses(false) : .clearView)
+                        })
+                )
+                .sensoryFeedback(.impact(weight: .medium), trigger: editing)
+                .sensoryFeedback(.selection, trigger: clearView)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Tap to clear the view, hold to arrange")
+            Spacer()
+            if editing {
+                Button { action(.editGlasses(false)) } label: {
+                    Text("DONE").font(HudTheme.mont(13, .black)).tracking(2)
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 16).frame(height: 32)
+                        .background(HudTheme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(glassesConnected ? HudTheme.accent : HudTheme.inkFaint)
@@ -326,27 +408,171 @@ public struct SettingsArea: View {
                         .foregroundStyle(glassesConnected ? HudTheme.inkDim : HudTheme.inkFaint)
                 }
             }
+        }
+    }
 
-            HStack(spacing: 10) {
-                ForEach(HudPanelKind.allCases) { kind in
-                    tile(kind)
+    // MARK: miniature
+
+    private var miniature: some View {
+        GeometryReader { geometry in
+            let mini = MiniLayout(size: geometry.size)
+            let target = dropTarget(mini)
+            ZStack(alignment: .topLeading) {
+                ForEach(HudSide.allCases, id: \.self) { side in
+                    ForEach(0..<HudArrangement.slotsPerSide, id: \.self) { index in
+                        let frame = mini.slot(side, index)
+                        slot(arrangement.slots(side)[index],
+                             highlighted: target == .slot(side, index) && drag?.kind.isBig == false)
+                            .frame(width: frame.width, height: frame.height)
+                            .offset(x: frame.minX, y: frame.minY)
+                    }
+                }
+                if arrangement.bigs.isEmpty {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.white.opacity(editing ? 0.18 : 0.07),
+                                      style: StrokeStyle(lineWidth: 1, dash: editing ? [4, 4] : []))
+                        .overlay {
+                            Text(editing ? "DRAG BROWSER OR MAC HERE" : "OPEN")
+                                .font(HudTheme.mont(8, .black)).tracking(1.5)
+                                .foregroundStyle(HudTheme.inkFaint)
+                        }
+                        .frame(width: mini.middle.width, height: mini.middle.height)
+                        .offset(x: mini.middle.minX)
+                }
+                ForEach(mini.bigFrames(arrangement), id: \.kind) { kind, frame in
+                    chip(kind, big: true)
+                        .frame(width: frame.width, height: frame.height)
+                        .offset(x: frame.minX, y: frame.minY)
+                }
+                if let drag, drag.kind.isBig, let target {
+                    bigTargetMark(target, mini)
                 }
             }
-
-            stripHeader
-                .padding(.top, 10)
-
-            if listsWindows { windowStrip } else { tabStrip }
+            .opacity(clearView && !editing ? 0.35 : 1)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .top)
-        .background(.black)
+    }
+
+    /// Where the dragged thing would land, if it is over the miniature.
+    private func dropTarget(_ mini: MiniLayout) -> HudSpot? {
+        guard let drag, miniFrame.contains(drag.location) else { return nil }
+        return mini.spot(at: CGPoint(x: drag.location.x - miniFrame.minX,
+                                     y: drag.location.y - miniFrame.minY))
+    }
+
+    private func bigTargetMark(_ target: HudSpot, _ mini: MiniLayout) -> some View {
+        var frame = mini.middle
+        if case let .slot(side, _) = target {
+            frame = side == .left
+                ? CGRect(x: 0, y: 0, width: mini.middle.maxX, height: mini.size.height)
+                : CGRect(x: mini.middle.minX, y: 0, width: mini.size.width - mini.middle.minX,
+                         height: mini.size.height)
+        }
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(HudTheme.accent, lineWidth: 2)
+            .frame(width: frame.width, height: frame.height)
+            .offset(x: frame.minX, y: frame.minY)
+            .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func slot(_ kind: HudPanelKind?, highlighted: Bool) -> some View {
+        if let kind {
+            chip(kind, big: false)
+                .overlay {
+                    if highlighted {
+                        RoundedRectangle(cornerRadius: 8).strokeBorder(HudTheme.accent, lineWidth: 2)
+                    }
+                }
+        } else {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(highlighted ? HudTheme.accent : Color.white.opacity(editing ? 0.2 : 0.06),
+                              style: StrokeStyle(lineWidth: highlighted ? 2 : 1,
+                                                 dash: editing && !highlighted ? [3, 3] : []))
+        }
+    }
+
+    private func chipState(_ kind: HudPanelKind) -> MiniChip.State {
+        if drag?.kind == kind { return .ghost }
+        if solo == kind { return .solo }
+        if solo != nil || arrangement.hidden.contains(kind) { return .off }
+        if !kind.isBig, let side = side(of: kind), arrangement.takenSides.contains(side) {
+            return .covered
+        }
+        return .on
+    }
+
+    private func side(of kind: HudPanelKind) -> HudSide? {
+        if case let .slot(side, _) = arrangement.spot(of: kind) { return side }
+        return nil
+    }
+
+    /// A widget or big panel in the miniature. Normally: tap to switch it off or on, hold for
+    /// fullscreen. Arranging: drag it.
+    private func chip(_ kind: HudPanelKind, big: Bool) -> some View {
+        MiniChip(kind: kind, state: chipState(kind), big: big, wiggle: editing)
+            .contentShape(Rectangle())
+            .gesture(editing ? AnyGesture(dragGesture(kind).map { _ in () })
+                             : AnyGesture(LongPressGesture(minimumDuration: 0.4)
+                                .onEnded { _ in action(.solo(kind)) }
+                                .exclusively(before: TapGesture().onEnded { action(.tapPanel(kind)) })
+                                .map { _ in () }))
+            .sensoryFeedback(.impact(weight: .medium), trigger: solo == kind)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(kind.title)
+            .accessibilityHint(editing ? "Drag to move" : "Tap to switch off or on, hold to show it alone")
+    }
+
+    private func dragGesture(_ kind: HudPanelKind) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .named(Self.space))
+            .onChanged { value in drag = (kind, value.location) }
+            .onEnded { value in
+                drop(kind, at: value.location)
+                drag = nil
+            }
+    }
+
+    private func drop(_ kind: HudPanelKind, at location: CGPoint) {
+        if miniFrame.contains(location) {
+            let mini = MiniLayout(size: miniFrame.size)
+            let spot = mini.spot(at: CGPoint(x: location.x - miniFrame.minX,
+                                             y: location.y - miniFrame.minY))
+            if !kind.isBig, spot == .middle { return }
+            action(.place(kind, spot))
+        } else if arrangement.isPlaced(kind) {
+            // Dragged off the glasses: back with the icons.
+            action(.place(kind, .off))
+        }
+    }
+
+    // MARK: tray
+
+    /// Everything not on the glasses, to drag on.
+    private var tray: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("DRAG ONTO THE GLASSES").font(HudTheme.mont(11, .black)).tracking(2)
+                .foregroundStyle(HudTheme.inkFaint)
+                .padding(.top, 8)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                      spacing: 10) {
+                ForEach(arrangement.unplaced) { kind in
+                    MiniChip(kind: kind, state: drag?.kind == kind ? .ghost : .tray, big: true)
+                        .frame(height: 72)
+                        .contentShape(Rectangle())
+                        .gesture(dragGesture(kind))
+                }
+            }
+            Text("Drop on a slot to add or replace. Drag one off to remove it. Drop Browser or Mac on a side to take that side over.")
+                .font(HudTheme.mont(11, .semibold))
+                .foregroundStyle(HudTheme.inkFaint)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+            Spacer(minLength: 0)
+        }
     }
 
     @ViewBuilder
     private var stripHeader: some View {
-        if shown(.desktop) && shown(.browser) {
+        if shown(.mac) && shown(.browser) {
             HStack(spacing: 18) {
                 stripChoice("TABS", chosen: !listsWindows) { action(.showWindows(false)) }
                 stripChoice("WINDOWS", chosen: listsWindows) { action(.showWindows(true)) }
@@ -485,41 +711,73 @@ public struct SettingsArea: View {
         }
     }
 
-    /// Tap to put a panel on the glasses or take it off. Hold to show it fullscreen, alone on
-    /// the glasses; then any tap puts things back as they were.
-    private func tile(_ kind: HudPanelKind) -> some View {
-        let alone = solo == kind
-        let on = solo == nil ? visible.contains(kind) : alone
-        return VStack(spacing: 8) {
+}
+
+private struct MiniFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+/// One panel in the miniature or the tray: its icon and name.
+struct MiniChip: View {
+    enum State { case on, off, covered, solo, ghost, lifted, tray }
+    var kind: HudPanelKind
+    var state: State
+    var big = false
+    var wiggle = false
+
+    @SwiftUI.State private var tilt = false
+
+    var body: some View {
+        let layout = big ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 5))
+        layout {
             Image(systemName: kind.symbol)
-                .font(.system(size: 22, weight: .medium))
-            Text(kind.rawValue.uppercased())
-                .font(HudTheme.mont(9, .black))
-                .tracking(1.5)
+                .font(.system(size: big ? 18 : 12, weight: .medium))
+            Text(kind.title)
+                .font(HudTheme.mont(big ? 9 : 8, .black)).tracking(1)
+                .lineLimit(1).minimumScaleFactor(0.6)
         }
-        .foregroundStyle(alone ? HudTheme.accent : on ? HudTheme.ink : HudTheme.inkFaint)
-        .frame(maxWidth: .infinity)
-        .frame(height: 74)
-        .background(alone ? HudTheme.accent.opacity(0.14)
-                    : on ? Color.white.opacity(0.07) : HudTheme.surface)
-        .overlay(alignment: .top) {
-            Rectangle().fill(on ? HudTheme.accent : .clear).frame(height: 2)
-        }
+        .padding(.horizontal, 4)
+        .foregroundStyle(foreground)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            if alone { Rectangle().strokeBorder(HudTheme.accent.opacity(0.6), lineWidth: 1) }
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(state == .solo ? HudTheme.accent : Color.white.opacity(state == .on ? 0.12 : 0.05),
+                              lineWidth: 1)
         }
-        .contentShape(Rectangle())
-        // One gesture, the hold tried first: a tap only counts once the finger lifts before
-        // the hold completes, so a hold never also toggles the tile.
-        .gesture(
-            LongPressGesture(minimumDuration: 0.4)
-                .onEnded { _ in action(.solo(kind)) }
-                .exclusively(before: TapGesture().onEnded { action(.toggle(kind)) })
-        )
-        .sensoryFeedback(.impact(weight: .medium), trigger: alone)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Hold to show it alone")
-        .accessibilityAction(named: "Show alone") { action(.solo(kind)) }
+        .overlay(alignment: .top) {
+            if state == .on || state == .solo {
+                Rectangle().fill(HudTheme.accent).frame(height: 2).padding(.horizontal, 6)
+            }
+        }
+        .opacity(state == .ghost ? 0.25 : 1)
+        .scaleEffect(state == .lifted ? 1.12 : 1)
+        .shadow(color: .black.opacity(state == .lifted ? 0.6 : 0), radius: 10)
+        .rotationEffect(.degrees(wiggle ? (tilt ? 1.2 : -1.2) : 0))
+        .onAppear { if wiggle { startWiggle() } }
+        .onChange(of: wiggle) { _, on in if on { startWiggle() } else { tilt = false } }
+    }
+
+    private func startWiggle() {
+        withAnimation(.easeInOut(duration: 0.14).repeatForever(autoreverses: true)) { tilt = true }
+    }
+
+    private var foreground: Color {
+        switch state {
+        case .solo: return HudTheme.accent
+        case .on, .lifted, .tray: return HudTheme.ink
+        case .off, .covered, .ghost: return HudTheme.inkFaint
+        }
+    }
+
+    private var background: Color {
+        switch state {
+        case .solo: return HudTheme.accent.opacity(0.14)
+        case .on, .lifted: return Color(white: 0.13)
+        case .tray: return Color(white: 0.1)
+        case .off, .covered, .ghost: return Color(white: 0.06)
+        }
     }
 }
 
@@ -537,7 +795,9 @@ public struct PhoneScreen: View {
     public var predictiveBar: Bool
     public var solo: HudPanelKind?
     public var time: String
-    public var visible: Set<HudPanelKind>
+    public var arrangement: HudArrangement
+    public var clearView: Bool
+    public var editing: Bool
     public var desktop: HudSnapshot.Desktop
     public var showsWindows: Bool
 
@@ -548,10 +808,14 @@ public struct PhoneScreen: View {
                 predictiveBar: Bool = false,
                 solo: HudPanelKind? = nil,
                 time: String = "9:41",
-                visible: Set<HudPanelKind> = [.browser, .map, .clock],
+                arrangement: HudArrangement = .standard,
+                clearView: Bool = false,
+                editing: Bool = false,
                 desktop: HudSnapshot.Desktop = HudSnapshot.Desktop(),
                 showsWindows: Bool = false) {
-        self.visible = visible
+        self.arrangement = arrangement
+        self.clearView = clearView
+        self.editing = editing
         self.desktop = desktop
         self.showsWindows = showsWindows
         self.surface = surface
@@ -576,9 +840,14 @@ public struct PhoneScreen: View {
 
             // Below a row's worth of space there is nothing legible left to show, so it
             // collapses rather than leaving a clipped sliver of a heading behind.
-            let settings = max(0, PhoneMetrics.settingsHeight(keyboard: keyboardHeight))
+            // Arranging, the editor has the trackpad's room too.
+            let settings = editing
+                ? PhoneMetrics.size.height - PhoneMetrics.statusBar - PhoneMetrics.toolBar
+                    - PhoneMetrics.homeIndicator
+                : max(0, PhoneMetrics.settingsHeight(keyboard: keyboardHeight))
             if settings >= 44 {
-                SettingsArea(visible: visible, solo: solo,
+                SettingsArea(arrangement: arrangement, solo: solo, clearView: clearView,
+                             editing: editing,
                              tabs: ["YouTube", "Google", "Xreal Air 2 Ultra"], activeTab: 0,
                              desktop: desktop, showsWindows: showsWindows)
                     .frame(height: settings, alignment: .top).clipped()
@@ -586,12 +855,14 @@ public struct PhoneScreen: View {
                 Color.black.frame(height: settings)
             }
 
-            TrackpadSurface(surface: surface,
-                            railActive: railActive,
-                            cornerPressed: cornerPressed,
-                            keyboardUp: keyboardUp)
-                .frame(height: PhoneMetrics.trackpad)
-                .padding(.horizontal, PhoneMetrics.surfaceMargin)
+            if !editing {
+                TrackpadSurface(surface: surface,
+                                railActive: railActive,
+                                cornerPressed: cornerPressed,
+                                keyboardUp: keyboardUp)
+                    .frame(height: PhoneMetrics.trackpad)
+                    .padding(.horizontal, PhoneMetrics.surfaceMargin)
+            }
 
             Color.black.frame(height: PhoneMetrics.bottomGap(keyboard: keyboardHeight))
 
