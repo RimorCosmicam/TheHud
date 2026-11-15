@@ -368,6 +368,7 @@ public struct CaptionsApp: View {
                     .font(HudTheme.mont(22, .black)).foregroundStyle(HudTheme.inkDim)
                 Text(captions.isListening ? captions.status : captions.status + " \u{00B7} CLICK TO START")
                     .font(HudTheme.mont(20, .black)).tracking(3)
+                    .lineLimit(1).minimumScaleFactor(0.6)
                     .foregroundStyle(captions.isListening ? HudTheme.accent : HudTheme.inkFaint)
             }
             .at(CGRect(x: 72, y: 52, width: 1648, height: 40))

@@ -133,6 +133,8 @@ public enum PhoneAction: Sendable {
     case editGlasses(Bool)
     /// A drop in the editor.
     case place(HudPanelKind, HudSpot)
+    /// Switch to one of the three scenes, or put one back as it was preset.
+    case scene(Int), resetScene(Int)
     /// Stream one of the Mac's windows, by its place in the list; nil for the whole screen.
     case selectWindow(Int?)
     /// With the browser and the desktop both on: list the Mac's windows instead of the tabs.
@@ -292,8 +294,18 @@ public struct SettingsArea: View {
     public var desktop: HudSnapshot.Desktop
     /// Both lists are possible: whether the Mac's windows are the one showing.
     public var showsWindows: Bool
+    /// The scenes' names, and which one is on.
+    public var scenes: [String]
+    public var currentScene: Int
     public var action: (PhoneAction) -> Void
 
+    /// Held this long without moving, a panel goes fullscreen when let go; moved, it is dragged.
+    private static let holdTime: TimeInterval = 0.4
+
+    @State private var press: (id: Int, start: Date)?
+    @State private var pressCount = 0
+    /// Held long enough: a tick under the thumb, and the chip lifts.
+    @State private var held: HudPanelKind?
     @State private var drag: (kind: HudPanelKind, location: CGPoint)?
     /// Where the miniature is, and where this whole area is, both on screen: a drag and its
     /// drop are measured in the same global points.
@@ -309,6 +321,8 @@ public struct SettingsArea: View {
                 activeTab: Int = 0,
                 desktop: HudSnapshot.Desktop = HudSnapshot.Desktop(),
                 showsWindows: Bool = false,
+                scenes: [String] = HudScene.presets.map(\.name),
+                currentScene: Int = 0,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.arrangement = arrangement
         self.solo = solo
@@ -319,6 +333,8 @@ public struct SettingsArea: View {
         self.activeTab = activeTab
         self.desktop = desktop
         self.showsWindows = showsWindows
+        self.scenes = scenes
+        self.currentScene = currentScene
         self.action = action
     }
 
@@ -366,27 +382,36 @@ public struct SettingsArea: View {
 
     // MARK: header
 
-    /// GLASSES: a tap clears the view, a hold arranges.
+    /// GLASSES: a tap clears the view, a hold arranges. The scenes sit beside it.
     private var header: some View {
-        HStack {
-            Text(editing ? "ARRANGING" : clearView ? "CLEAR VIEW" : solo != nil ? "FULLSCREEN" : "GLASSES")
-                .font(HudTheme.mont(16, .black)).tracking(3)
-                .foregroundStyle(editing || clearView ? HudTheme.accent : HudTheme.inkDim)
-                .padding(.vertical, 6)
-                .padding(.trailing, 24)
-                .contentShape(Rectangle())
-                .gesture(
-                    LongPressGesture(minimumDuration: 0.45)
-                        .onEnded { _ in if !editing { action(.editGlasses(true)) } }
-                        .exclusively(before: TapGesture().onEnded {
-                            action(editing ? .editGlasses(false) : .clearView)
-                        })
-                )
-                .sensoryFeedback(.impact(weight: .medium), trigger: editing)
-                .sensoryFeedback(.selection, trigger: clearView)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityHint("Tap to clear the view, hold to arrange")
-            Spacer()
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Text(editing ? "ARRANGING" : clearView ? "CLEAR VIEW" : solo != nil ? "FULLSCREEN" : "GLASSES")
+                    .font(HudTheme.mont(16, .black)).tracking(3)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                    .foregroundStyle(editing || clearView ? HudTheme.accent : HudTheme.inkDim)
+                if !editing {
+                    Circle()
+                        .fill(glassesConnected ? HudTheme.accent : HudTheme.inkFaint)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.trailing, 8)
+            .contentShape(Rectangle())
+            .gesture(
+                LongPressGesture(minimumDuration: 0.45)
+                    .onEnded { _ in if !editing { action(.editGlasses(true)) } }
+                    .exclusively(before: TapGesture().onEnded {
+                        action(editing ? .editGlasses(false) : .clearView)
+                    })
+            )
+            .sensoryFeedback(.impact(weight: .medium), trigger: editing)
+            .sensoryFeedback(.selection, trigger: clearView)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(glassesConnected ? "Glasses, connected" : "Glasses, not connected")
+            .accessibilityHint("Tap to clear the view, hold to arrange")
+            Spacer(minLength: 4)
             if editing {
                 Button { action(.editGlasses(false)) } label: {
                     Text("DONE").font(HudTheme.mont(13, .black)).tracking(2)
@@ -396,16 +421,33 @@ public struct SettingsArea: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(glassesConnected ? HudTheme.accent : HudTheme.inkFaint)
-                        .frame(width: 6, height: 6)
-                    Text(glassesConnected ? "CONNECTED" : "NOT CONNECTED")
-                        .font(HudTheme.mont(9, .black)).tracking(1.5)
-                        .foregroundStyle(glassesConnected ? HudTheme.inkDim : HudTheme.inkFaint)
-                }
+                sceneSwitcher.fixedSize()
             }
         }
+    }
+
+    /// The three scenes: a tap switches, a hold puts that one back as it was preset.
+    private var sceneSwitcher: some View {
+        HStack(spacing: 4) {
+            ForEach(scenes.indices, id: \.self) { index in
+                let chosen = index == currentScene
+                Text(scenes[index])
+                    .font(HudTheme.mont(10, .black)).tracking(1.2)
+                    .foregroundStyle(chosen ? Color.black : HudTheme.inkDim)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(chosen ? HudTheme.accent : Color.white.opacity(0.07), in: Capsule())
+                    .contentShape(Capsule())
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.6)
+                            .onEnded { _ in action(.resetScene(index)) }
+                            .exclusively(before: TapGesture().onEnded { action(.scene(index)) })
+                    )
+                    .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityHint("Tap to switch, hold to reset this scene")
+            }
+        }
+        .sensoryFeedback(.selection, trigger: currentScene)
     }
 
     // MARK: miniature
@@ -508,15 +550,15 @@ public struct SettingsArea: View {
     private func chip(_ kind: HudPanelKind, big: Bool) -> some View {
         MiniChip(kind: kind, state: chipState(kind), big: big, wiggle: editing)
             .contentShape(Rectangle())
+            .scaleEffect(held == kind ? 1.08 : 1)
+            .animation(.easeOut(duration: 0.15), value: held == kind)
             .gesture(editing ? AnyGesture(dragGesture(kind).map { _ in () })
-                             : AnyGesture(LongPressGesture(minimumDuration: 0.4)
-                                .onEnded { _ in action(.solo(kind)) }
-                                .exclusively(before: TapGesture().onEnded { action(.tapPanel(kind)) })
-                                .map { _ in () }))
-            .sensoryFeedback(.impact(weight: .medium), trigger: solo == kind)
+                             : AnyGesture(pressGesture(kind).map { _ in () }))
+            .sensoryFeedback(.impact(weight: .medium), trigger: held == kind)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(kind.title)
-            .accessibilityHint(editing ? "Drag to move" : "Tap to switch off or on, hold to show it alone")
+            .accessibilityHint(editing ? "Drag to move"
+                               : "Tap to switch off or on, hold to show it alone, hold and drag to move")
     }
 
     private func dragGesture(_ kind: HudPanelKind) -> some Gesture {
@@ -528,14 +570,46 @@ public struct SettingsArea: View {
             }
     }
 
-    private func drop(_ kind: HudPanelKind, at location: CGPoint) {
+    /// Outside arranging: a tap switches it off or on; held and let go, it goes fullscreen; held
+    /// or pulled and dragged, it moves (the browser or the Mac over a side to take it over).
+    private func pressGesture(_ kind: HudPanelKind) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            .onChanged { value in
+                if press == nil {
+                    pressCount += 1
+                    let id = pressCount
+                    press = (id, Date())
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(Self.holdTime))
+                        if press?.id == id, drag == nil { held = kind }
+                    }
+                }
+                let moved = hypot(value.translation.width, value.translation.height)
+                if drag != nil || moved > 10 { drag = (kind, value.location) }
+            }
+            .onEnded { value in
+                let start = press?.start
+                press = nil
+                held = nil
+                if drag != nil {
+                    drag = nil
+                    drop(kind, at: value.location, removing: false)
+                } else if let start, Date().timeIntervalSince(start) >= Self.holdTime {
+                    action(.solo(kind))
+                } else {
+                    action(.tapPanel(kind))
+                }
+            }
+    }
+
+    private func drop(_ kind: HudPanelKind, at location: CGPoint, removing: Bool = true) {
         if miniFrame.contains(location) {
             let mini = MiniLayout(size: miniFrame.size)
             let spot = mini.spot(at: CGPoint(x: location.x - miniFrame.minX,
                                              y: location.y - miniFrame.minY))
             if !kind.isBig, spot == .middle { return }
             action(.place(kind, spot))
-        } else if arrangement.isPlaced(kind) {
+        } else if removing, arrangement.isPlaced(kind) {
             // Dragged off the glasses: back with the icons.
             action(.place(kind, .off))
         }

@@ -8,6 +8,39 @@ import HudCore
 func runGridTests() {
     print("\nGrid")
 
+    test("scenes: three presets, each widget once, nothing in a slot twice") {
+        expectEqual(HudScene.presets.count, HudScene.count)
+        for scene in HudScene.presets {
+            let a = scene.arrangement
+            let widgets = (a.left + a.right).compactMap { $0 }
+            expectEqual(Set(widgets).count, widgets.count)
+            expect(widgets.allSatisfy { !$0.isBig }, "\(scene.name): only widgets in slots")
+            expect(a.bigs.allSatisfy(\.kind.isBig), "\(scene.name): only big ones in the middle")
+            let decoded = try? JSONDecoder().decode(HudScene.self, from: JSONEncoder().encode(scene))
+            expectEqual(decoded, scene)
+        }
+        // DESK: the Mac over the right, so those widgets are covered.
+        let desk = GlassesLayout(arrangement: HudScene.presets[0].arrangement)
+        expectEqual(Set(desk.widgetFrames.map(\.kind)), [.clock, .weather, .note])
+        // STREET: the middle is empty, to see the street.
+        expect(GlassesLayout(arrangement: HudScene.presets[1].arrangement).bigFrames.isEmpty,
+               "nothing in the middle out walking")
+    }
+
+    test("the browser dropped on a side in the miniature takes it over, and back") {
+        let mini = MiniLayout(size: CGSize(width: 360, height: 104))
+        var arrangement = HudArrangement.standard
+        let left = mini.spot(at: CGPoint(x: 20, y: 50))
+        expectEqual(left, .slot(.left, 1))
+        arrangement.place(.browser, at: left)
+        expectEqual(arrangement.takenSides, [.left])
+        expectEqual(mini.bigFrames(arrangement).first?.frame.minX, 0)
+        expect(GlassesLayout(arrangement: arrangement).widgetFrames.isEmpty, "left widgets covered")
+        arrangement.place(.browser, at: mini.spot(at: CGPoint(x: 180, y: 50)))
+        expectEqual(arrangement.takenSides, [])
+        expectEqual(GlassesLayout(arrangement: arrangement).widgetFrames.count, 3)
+    }
+
     test("slots: three down each side, the same size, inside the safe inset") {
         let safe = GlassesLayout.safeFrame
         for side in HudSide.allCases {

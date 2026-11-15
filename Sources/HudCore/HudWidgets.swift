@@ -515,6 +515,7 @@ public struct CaptionsWidget: View {
                 Text(captions.isListening ? captions.elapsed : "")
                     .font(HudTheme.mont(16, .black)).foregroundStyle(HudTheme.inkDim)
                 Text(captions.status).font(HudTheme.mont(14, .black)).tracking(2)
+                    .lineLimit(2).minimumScaleFactor(0.6).multilineTextAlignment(.trailing)
                     .foregroundStyle(captions.isListening ? HudTheme.accent : HudTheme.inkFaint)
             }
             Spacer(minLength: 8)

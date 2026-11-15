@@ -367,7 +367,7 @@ public struct HudSnapshot: Sendable {
         public static let preview: Captions = {
             var captions = Captions()
             captions.isListening = true
-            captions.status = "LISTENING"
+            captions.status = "LISTENING · PT-BR"
             captions.elapsed = "3:12"
             captions.lines = ["So the plan is to ship the HUD on Friday.",
                               "We still need the icons for the editor,",

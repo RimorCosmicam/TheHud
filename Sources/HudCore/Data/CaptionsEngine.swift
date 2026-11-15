@@ -14,6 +14,41 @@ public final class CaptionsEngine {
     }
     public var onChange: ((HudSnapshot.Captions) -> Void)?
 
+    /// The language being spoken, as a BCP 47 tag. Changing it while listening starts over.
+    public var language: String = CaptionsEngine.defaultLanguage {
+        didSet {
+            guard language != oldValue, state.isListening else { return }
+            stop()
+            start()
+        }
+    }
+
+    /// The languages offered, by tag and by their own name.
+    public static let languages: [(id: String, name: String)] = [
+        ("pt-BR", "Português (Brasil)"),
+        ("pt-PT", "Português (Portugal)"),
+        ("en-US", "English (US)"),
+        ("en-GB", "English (UK)"),
+        ("es-ES", "Español (España)"),
+        ("es-MX", "Español (México)"),
+        ("fr-FR", "Français"),
+        ("de-DE", "Deutsch"),
+        ("it-IT", "Italiano"),
+    ]
+
+    /// The phone's own language where it is offered; Portuguese for a Brazilian phone whatever
+    /// language its menus are in, since that is what will be spoken around it.
+    public static var defaultLanguage: String {
+        let locale = Locale.current
+        if locale.region?.identifier == "BR" { return "pt-BR" }
+        let tag = locale.identifier(.bcp47)
+        if languages.contains(where: { $0.id == tag }) { return tag }
+        let code = locale.language.languageCode?.identifier ?? "en"
+        return languages.first { $0.id.hasPrefix(code + "-") }?.id ?? "en-US"
+    }
+
+    private var languageTag: String { language.uppercased() }
+
     private let audio = AVAudioEngine()
     private var task: Task<Void, Never>?
     private var finish: (() async -> Void)?
@@ -43,14 +78,24 @@ public final class CaptionsEngine {
                 let now = Date()
                 self.startedAt = now
                 self.logURL = CaptionsLog.begin(at: now)
+                let wanted = Locale(identifier: self.language)
                 if #available(iOS 26.0, macOS 26.0, *) {
-                    try await self.runAnalyzer()
-                } else {
-                    try await self.runRecognizer()
+                    do {
+                        try await self.runAnalyzer(wanted)
+                        return
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        // The new engine has no model for this language here, or could not
+                        // get one: the older recognizer knows more languages, and the network.
+                        await self.finishAnalyzer()
+                        self.releaseMicrophone()
+                    }
                 }
+                try await self.runRecognizer(wanted)
             } catch is CancellationError {
             } catch {
-                self.fail("CAPTIONS STOPPED")
+                self.fail("STOPPED: " + Self.reason(error))
             }
         }
     }
@@ -75,6 +120,23 @@ public final class CaptionsEngine {
     public func tick(now: Date = Date()) {
         guard let startedAt else { return }
         state.elapsed = HudSnapshot.NowPlaying.time(now.timeIntervalSince(startedAt))
+    }
+
+    /// An error, short enough for the glasses.
+    private static func reason(_ error: Error) -> String {
+        String(error.localizedDescription.prefix(60)).uppercased()
+    }
+
+    private func finishAnalyzer() async {
+        guard let finish else { return }
+        self.finish = nil
+        await finish()
+    }
+
+    /// The microphone off, ready to be tapped again.
+    private func releaseMicrophone() {
+        audio.inputNode.removeTap(onBus: 0)
+        audio.stop()
     }
 
     private func fail(_ status: String) {
@@ -115,8 +177,7 @@ public final class CaptionsEngine {
     }
 
     private func tearDownAudio() {
-        audio.inputNode.removeTap(onBus: 0)
-        audio.stop()
+        releaseMicrophone()
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
@@ -126,7 +187,10 @@ public final class CaptionsEngine {
     private func startMicrophone(format: AVAudioFormat?,
                                  _ deliver: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws {
         let input = audio.inputNode
+        // A tap left over from an engine that gave up would make installing another fatal.
+        input.removeTap(onBus: 0)
         let natural = input.outputFormat(forBus: 0)
+        guard natural.sampleRate > 0, natural.channelCount > 0 else { throw CaptionsError.noMicrophone }
         let target = format ?? natural
         let converter = target == natural ? nil : AVAudioConverter(from: natural, to: target)
         input.installTap(onBus: 0, bufferSize: 4096, format: natural) { buffer, _ in
@@ -153,15 +217,36 @@ public final class CaptionsEngine {
 
     // MARK: iOS 26: SpeechAnalyzer
 
+    enum CaptionsError: LocalizedError {
+        case noMicrophone, languageUnavailable(String)
+        var errorDescription: String? {
+            switch self {
+            case .noMicrophone: return "No microphone"
+            case let .languageUnavailable(tag): return "No speech recognition for \(tag)"
+            }
+        }
+    }
+
     @available(iOS 26.0, macOS 26.0, *)
-    private func runAnalyzer() async throws {
-        let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current)
-            ?? Locale(identifier: "en-US")
+    private func runAnalyzer(_ wanted: Locale) async throws {
+        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: wanted) else {
+            throw CaptionsError.languageUnavailable(languageTag)
+        }
+        // Each language's model has to be reserved before it can be used, and only so many can
+        // be: make room by giving back the oldest.
+        let tag = locale.identifier(.bcp47)
+        let reserved = await AssetInventory.reservedLocales
+        if !reserved.contains(where: { $0.identifier(.bcp47) == tag }) {
+            if reserved.count >= AssetInventory.maximumReservedLocales, let oldest = reserved.first {
+                _ = await AssetInventory.release(reservedLocale: oldest)
+            }
+            _ = try? await AssetInventory.reserve(locale: locale)
+        }
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
                                             reportingOptions: [.volatileResults],
                                             attributeOptions: [])
         if let install = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            state.status = "GETTING THE SPEECH MODEL"
+            state.status = "GETTING THE \(languageTag) MODEL"
             try await install.downloadAndInstall()
         }
         let analyzer = SpeechAnalyzer(modules: [transcriber])
@@ -175,7 +260,7 @@ public final class CaptionsEngine {
             try? await analyzer.finalizeAndFinishThroughEndOfInput()
         }
         try await analyzer.start(inputSequence: stream)
-        state.status = "LISTENING"
+        state.status = "LISTENING · \(languageTag)"
         for try await result in transcriber.results {
             try Task.checkCancellation()
             heard(String(result.text.characters), final: result.isFinal)
@@ -197,16 +282,18 @@ public final class CaptionsEngine {
         }
     }
 
-    private func runRecognizer() async throws {
+    private func runRecognizer(_ wanted: Locale) async throws {
         let allowed = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
         }
         guard allowed else { return fail("NO SPEECH RECOGNITION ACCESS") }
-        guard let recognizer = SFSpeechRecognizer(locale: .current) ?? SFSpeechRecognizer(),
-              recognizer.isAvailable else { return fail("NO SPEECH RECOGNIZER") }
+        guard let recognizer = SFSpeechRecognizer(locale: wanted) else {
+            return fail("NO SPEECH RECOGNITION FOR \(languageTag)")
+        }
+        guard recognizer.isAvailable else { return fail("\(languageTag) RECOGNITION UNAVAILABLE") }
         let box = RequestBox()
         try startMicrophone(format: nil) { buffer in box.append(buffer) }
-        state.status = "LISTENING"
+        state.status = "LISTENING · \(languageTag)"
 
         while !Task.isCancelled {
             let request = SFSpeechAudioBufferRecognitionRequest()

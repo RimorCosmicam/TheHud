@@ -229,3 +229,31 @@ public struct MiniLayout: Sendable {
         return .middle
     }
 }
+
+/// One of three ready arrangements the phone switches between. Each keeps its own edits; holding
+/// its name puts the preset back.
+public struct HudScene: Codable, Equatable, Sendable {
+    public var name: String
+    public var arrangement: HudArrangement
+
+    public init(name: String, arrangement: HudArrangement) {
+        self.name = name
+        self.arrangement = arrangement
+    }
+
+    public static let count = 3
+
+    public static let presets: [HudScene] = [
+        // At a desk: the browser in the middle, the Mac over the right.
+        HudScene(name: "DESK", arrangement: HudArrangement(
+            left: [.clock, .weather, .note], right: [.music, .activity, .captions],
+            bigs: [.init(kind: .browser), .init(kind: .mac, side: .right)])),
+        // Walking: nothing in the middle, so the street stays in view.
+        HudScene(name: "STREET", arrangement: HudArrangement(
+            left: [.map, .weather, .clock], right: [.music, .activity, .captions])),
+        // Evening: something to read, and the sky.
+        HudScene(name: "NIGHT", arrangement: HudArrangement(
+            left: [.clock, .weather, .sky], right: [.music, .note, .activity],
+            bigs: [.init(kind: .browser)])),
+    ]
+}

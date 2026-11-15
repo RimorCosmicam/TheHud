@@ -37,6 +37,21 @@ public final class LocationProvider: NSObject, CLLocationManagerDelegate, @unche
         #endif
     }
 
+    /// While the glasses are on: keep getting fixes with the phone locked, which is what keeps
+    /// the app running, and so the glasses drawn, in a pocket. iOS shows its location pill.
+    /// Needs the `location` background mode.
+    public var keepsRunningInBackground = false {
+        didSet {
+            #if os(iOS)
+            guard keepsRunningInBackground != oldValue else { return }
+            manager.allowsBackgroundLocationUpdates = keepsRunningInBackground
+            manager.pausesLocationUpdatesAutomatically = !keepsRunningInBackground
+            manager.showsBackgroundLocationIndicator = keepsRunningInBackground
+            if keepsRunningInBackground { manager.startUpdatingLocation() }
+            #endif
+        }
+    }
+
     public func stop() {
         manager.stopUpdatingLocation()
         #if os(iOS)

@@ -76,6 +76,13 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- Locked in a pocket with the glasses on, location keeps the app running so the glasses
+	     keep being drawn; audio keeps captions listening. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>audio</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Draws the minimap and fetches the weather where you are.</string>
 	<key>UISupportedInterfaceOrientations</key>

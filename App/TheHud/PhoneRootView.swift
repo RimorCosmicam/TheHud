@@ -39,6 +39,8 @@ struct PhoneRootView: View {
                              activeTab: controller.snapshot.browser.activeTab,
                              desktop: controller.snapshot.desktop,
                              showsWindows: controller.stripShowsWindows,
+                             scenes: controller.scenes.map(\.name),
+                             currentScene: controller.sceneIndex,
                              action: controller.perform)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .clipped()
@@ -155,6 +157,11 @@ struct SettingsSheet: View {
                 }
 
                 Section("Widgets") {
+                    Picker("Captions language", selection: $controller.captionsLanguage) {
+                        ForEach(CaptionsEngine.languages, id: \.id) { language in
+                            Text(language.name).tag(language.id)
+                        }
+                    }
                     Stepper("Daily steps: \(controller.stepGoal.formatted())",
                             value: $controller.stepGoal, in: 2000...30000, step: 1000)
                     NavigationLink("Saved captions") { CaptionsSessionsView() }

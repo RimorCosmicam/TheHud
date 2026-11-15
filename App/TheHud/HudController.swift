@@ -14,16 +14,18 @@ final class HudController: ObservableObject {
 
     @Published private(set) var snapshot = HudSnapshot.blank
     @Published private(set) var contacts: [TouchPoint] = []
-    /// What is on the glasses and where, as arranged on the phone. Saved.
+    /// What is on the glasses and where, as arranged on the phone: the current scene's.
     @Published private(set) var arrangement: HudArrangement {
         didSet {
             guard arrangement != oldValue else { return }
-            if let data = try? JSONEncoder().encode(arrangement) {
-                UserDefaults.standard.set(data, forKey: Self.arrangementKey)
-            }
+            scenes[sceneIndex].arrangement = arrangement
+            saveScenes()
             panelsChanged()
         }
     }
+    /// Three arrangements to switch between, each keeping its own edits. Saved.
+    private(set) var scenes: [HudScene]
+    @Published private(set) var sceneIndex: Int
     /// One panel held up on its own, filling the glasses. Not saved: it is a moment's focus,
     /// and the arrangement is what comes back.
     @Published private(set) var solo: HudPanelKind? {
@@ -46,10 +48,22 @@ final class HudController: ObservableObject {
     @Published var config: HalftoneConfig = .miniMateDefault
     @Published var trackpad = TouchpadSettings()
 
-    /// While the glasses are on, the phone must not auto-lock: locking backgrounds the app, and
-    /// a backgrounded app's external display goes black.
+    /// While the glasses are on, the phone does not auto-lock; and when it is locked anyway, to
+    /// go in a pocket, location keeps the app running so the glasses keep being drawn.
     @Published var glassesConnected = false {
-        didSet { UIApplication.shared.isIdleTimerDisabled = glassesConnected }
+        didSet {
+            UIApplication.shared.isIdleTimerDisabled = glassesConnected
+            location.keepsRunningInBackground = glassesConnected
+        }
+    }
+
+    /// The language the captions listen for.
+    @Published var captionsLanguage: String = UserDefaults.standard.string(forKey: "captionsLanguage")
+        ?? CaptionsEngine.defaultLanguage {
+        didSet {
+            UserDefaults.standard.set(captionsLanguage, forKey: "captionsLanguage")
+            captions.language = captionsLanguage
+        }
     }
 
     @Published private(set) var favorites: [Favorite]
@@ -150,7 +164,10 @@ final class HudController: ObservableObject {
     }()
 
     private init() {
-        arrangement = Self.loadArrangement()
+        let (scenes, index) = Self.loadScenes()
+        self.scenes = scenes
+        sceneIndex = index
+        arrangement = scenes[index].arrangement
         timer = HudTimer(setSeconds: UserDefaults.standard.object(forKey: "timerSeconds") as? Int ?? 300)
         if let data = UserDefaults.standard.data(forKey: Self.favoritesKey),
            let stored = try? JSONDecoder().decode([Favorite].self, from: data) {
@@ -167,26 +184,60 @@ final class HudController: ObservableObject {
         tabs = [makeTab()]
     }
 
-    private static let arrangementKey = "arrangement"
+    private static let scenesKey = "scenes"
+    private static let sceneIndexKey = "scene"
 
-    /// The saved arrangement; or, from before there was one, the old on/off set laid out the
-    /// standard way.
-    private static func loadArrangement() -> HudArrangement {
+    /// The saved scenes. From before there were scenes, the presets, with what was arranged
+    /// then kept as the first.
+    private static func loadScenes() -> ([HudScene], Int) {
         let defaults = UserDefaults.standard
-        if let data = defaults.data(forKey: arrangementKey),
-           let stored = try? JSONDecoder().decode(HudArrangement.self, from: data) {
-            return stored
+        let index = min(max(defaults.integer(forKey: sceneIndexKey), 0), HudScene.count - 1)
+        if let data = defaults.data(forKey: scenesKey),
+           let stored = try? JSONDecoder().decode([HudScene].self, from: data),
+           stored.count == HudScene.count {
+            return (stored, index)
         }
-        if let old = defaults.stringArray(forKey: "visiblePanels") {
+        var scenes = HudScene.presets
+        if let data = defaults.data(forKey: "arrangement"),
+           let old = try? JSONDecoder().decode(HudArrangement.self, from: data) {
+            scenes[0].arrangement = old
+        } else if let old = defaults.stringArray(forKey: "visiblePanels") {
             let kinds = old.compactMap { HudPanelKind(rawValue: $0 == "desktop" ? "mac" : $0) }
-            return HudArrangement(visible: Set(kinds))
+            scenes[0].arrangement = HudArrangement(visible: Set(kinds))
         }
-        return .standard
+        return (scenes, 0)
+    }
+
+    private func saveScenes() {
+        if let data = try? JSONEncoder().encode(scenes) {
+            UserDefaults.standard.set(data, forKey: Self.scenesKey)
+        }
+        UserDefaults.standard.set(sceneIndex, forKey: Self.sceneIndexKey)
+    }
+
+    private func switchScene(to index: Int) {
+        guard HudScene.presets.indices.contains(index) else { return }
+        solo = nil
+        clearView = false
+        sceneIndex = index
+        saveScenes()
+        arrangement = scenes[index].arrangement
+    }
+
+    private func resetScene(_ index: Int) {
+        guard HudScene.presets.indices.contains(index) else { return }
+        scenes[index] = HudScene.presets[index]
+        if index == sceneIndex {
+            arrangement = scenes[index].arrangement
+        }
+        saveScenes()
+        switchScene(to: index)
     }
     private static let favoritesKey = "favorites"
 
     /// Called once the phone scene is on screen.
     func start() {
+        captions.language = captionsLanguage
         tickClock()
         // Every second, for the clock app's seconds hand; the other layouts only take the
         // update when the minute changes.
@@ -532,6 +583,10 @@ final class HudController: ObservableObject {
             editingGlasses = on
         case let .place(kind, spot):
             arrangement.place(kind, at: spot)
+        case let .scene(index):
+            switchScene(to: index)
+        case let .resetScene(index):
+            resetScene(index)
         }
     }
 
