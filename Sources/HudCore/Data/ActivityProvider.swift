@@ -21,7 +21,7 @@ public final class ActivityProvider {
     public func start() {
         guard !started else { return }
         started = true
-        guard CMPedometer.isStepCountingAvailable() else { return onChange?(nil) }
+        guard CMPedometer.isStepCountingAvailable() else { onChange?(nil); return }
         restart()
     }
 
