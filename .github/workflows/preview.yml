@@ -1,0 +1,52 @@
+name: build
+
+# Two jobs, because they answer different questions. `engine` runs the input engine's tests and
+# renders the HUD to PNG on a Mac with nothing installed — that is the fast loop. `ios` is the
+# only place the app is compiled at all, since the development machine has no Xcode.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  engine:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Test
+        run: .build/release/hudtests
+
+      - name: Render
+        run: .build/release/hudshot --out out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hud-preview
+          path: out/*.png
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version && xcodebuild -showsdks | grep -i iphoneos || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project TheHud.xcodeproj \
+            -scheme TheHud \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO

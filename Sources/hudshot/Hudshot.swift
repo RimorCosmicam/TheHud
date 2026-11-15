@@ -1,0 +1,134 @@
+import Foundation
+import SwiftUI
+import HudCore
+import simd
+
+// hudshot — renders HudCore surfaces to PNG on a Mac, with no device and no simulator.
+//
+// The point is to see a change before spending a build on it. The halftone goes through the same
+// Metal renderer the app uses and the chrome through the same SwiftUI views, so these images are
+// the app's output at a different size rather than an illustration of it.
+
+@main
+struct Hudshot {
+    @MainActor
+    static func main() {
+        do { try run() } catch {
+            FileHandle.standardError.write("hudshot: \(error)\n".data(using: .utf8)!)
+            exit(1)
+        }
+    }
+
+    @MainActor
+    static func run() throws {
+        let outDir = parseOutDir()
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let renderer = try HalftoneRenderer()
+        print("device: \(renderer.device.name)")
+        HudTheme.bootstrap()
+
+        // The surface occupies exactly half the display, so that is the size the shader is asked
+        // for — aspect correction and dot pitch both follow the surface, not the screen.
+        let scale = PhoneMetrics.scale
+        let surfaceW = Int(PhoneMetrics.size.width * scale)
+        let surfaceH = Int(PhoneMetrics.trackpad * scale)
+        let surfaceSize = SIMD2<Float>(Float(surfaceW), Float(surfaceH))
+
+        let plain = try renderer.render(width: surfaceW, height: surfaceH)
+
+        // One contact held, one 0.4s into its fade, so a still shows the touchWarp ripple.
+        let touched = try renderer.render(
+            width: surfaceW, height: surfaceH,
+            touches: [
+                .fromPixels(SIMD2(760, 520), size: surfaceSize, age: 0.0, active: 1.0),
+                .fromPixels(SIMD2(420, 900), size: surfaceSize, age: 0.4, active: 0.0),
+            ])
+
+        try write(PhoneScreen(surface: plain),
+                  to: outDir, "phone-idle", scale: scale)
+
+        try write(PhoneScreen(surface: plain, keyboardUp: true),
+                  to: outDir, "phone-keyboard", scale: scale)
+
+        try write(PhoneScreen(surface: plain, keyboardUp: true, predictiveBar: true),
+                  to: outDir, "phone-keyboard-predictive", scale: scale)
+
+        try write(PhoneScreen(surface: touched, railActive: true, cornerPressed: true),
+                  to: outDir, "phone-active", scale: scale)
+
+        // The glasses canvas: 1080p, the mode the Air reports over DisplayPort. Rendered at
+        // scale 1, because 1920x1080 is what the glasses are actually handed.
+        try write(GlassesScreen(mode: .browser), to: outDir, "glasses-browser", scale: 1)
+
+        // End to end: a real swipe through the real recogniser, driving the real cursor. If the
+        // pointer in this image is not where the swipe should have put it, the engine is wrong.
+        let driven = HudSnapshot(cursor: cursorAfterSwipe())
+        try write(GlassesScreen(snapshot: driven, mode: .browser),
+                  to: outDir, "glasses-pointer", scale: 1)
+        try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), mode: .glance),
+                  to: outDir, "glasses-glance", scale: 1)
+
+        print("\nimages in \(outDir.path)")
+    }
+
+    @MainActor
+    private static func write<V: View>(_ view: V, to dir: URL, _ name: String,
+                                       scale: CGFloat) throws {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = scale
+        renderer.isOpaque = true
+        guard let image = renderer.cgImage else {
+            throw Failure("ImageRenderer produced nothing for \(name)")
+        }
+        try image.writePNG(to: dir.appendingPathComponent("\(name).png"))
+        report(name, dir, image.width, image.height)
+    }
+
+    private static func report(_ name: String, _ dir: URL, _ w: Int, _ h: Int) {
+        let path = dir.appendingPathComponent("\(name).png").path
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        print("wrote \(name).png  \(w)x\(h)  \(bytes / 1024) KB")
+    }
+
+    /// Drives the engine with a diagonal swipe and reports where the cursor ends up.
+    private static func cursorAfterSwipe() -> CGPoint {
+        let pointer = PointerState()
+        let recognizer = GestureRecognizer { pointer.apply($0) }
+        recognizer.surfaceSize = CGSize(width: PhoneMetrics.size.width, height: PhoneMetrics.trackpad)
+
+        func frame(_ action: TouchAction, _ x: CGFloat, _ y: CGFloat, _ t: Double) -> TouchFrame {
+            TouchFrame(action: action, touches: [TouchPoint(x: x, y: y, id: 0)], timeMs: t)
+        }
+
+        recognizer.handle(frame(.down, 120, 300, 0))
+        // Sixteen frames of a steady diagonal sweep, at 60Hz.
+        for step in 1...16 {
+            let t = Double(step) * 16
+            recognizer.handle(frame(.move, 120 + CGFloat(step) * 9, 300 - CGFloat(step) * 5, t))
+        }
+        recognizer.handle(frame(.up, 264, 220, 17 * 16))
+
+        print("cursor after swipe: \(Int(pointer.position.x)), \(Int(pointer.position.y))")
+        return pointer.position
+    }
+
+    private static func parseOutDir() -> URL {
+        var out = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("out")
+        var args = Array(CommandLine.arguments.dropFirst())
+        while let first = args.first {
+            args.removeFirst()
+            if first == "--out", let value = args.first {
+                args.removeFirst()
+                out = URL(fileURLWithPath: value)
+            }
+        }
+        return out
+    }
+
+    struct Failure: Error, CustomStringConvertible {
+        let description: String
+        init(_ d: String) { description = d }
+    }
+}
