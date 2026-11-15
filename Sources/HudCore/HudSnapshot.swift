@@ -81,15 +81,27 @@ public struct HudSnapshot: Sendable {
         public var speed: String
         /// Metres across the short edge of the panel, for the scale bar.
         public var spanMetres: Int
+        /// Where the wearer is relative to the centre of the map raster, in metres. The raster
+        /// is refetched only every so often; in between it slides under the marker by this much,
+        /// so the map moves with every location fix instead of jumping when a new image lands.
+        public var groundOffsetEast: Double
+        public var groundOffsetNorth: Double
 
         public init(place: String, heading: Double, headingLabel: String,
-                    speed: String, spanMetres: Int) {
+                    speed: String, spanMetres: Int,
+                    groundOffsetEast: Double = 0, groundOffsetNorth: Double = 0) {
             self.place = place
             self.heading = heading
             self.headingLabel = headingLabel
             self.speed = speed
             self.spanMetres = spanMetres
+            self.groundOffsetEast = groundOffsetEast
+            self.groundOffsetNorth = groundOffsetNorth
         }
+
+        /// The raster covers more ground than the panel shows, so rotating it never exposes a
+        /// corner and walking a little way does not run off its edge before the next one comes.
+        public static let groundOversize: Double = 1.9
 
         public static let preview = Minimap(place: "ALFAMA", heading: 34, headingLabel: "NE",
                                             speed: "4.2 KM/H", spanMetres: 300)
@@ -105,10 +117,17 @@ public struct HudSnapshot: Sendable {
         public var canGoForward: Bool
         /// The address bar is taking keystrokes, so `url` is a draft rather than where we are.
         public var isEditingAddress: Bool
+        /// On the start page rather than a site.
+        public var isHome: Bool
+        /// The current site is one of the favourites.
+        public var isFavorite: Bool
 
         public init(url: String, title: String, tabs: [String], activeTab: Int,
                     loading: Double? = nil, canGoBack: Bool = true, canGoForward: Bool = false,
-                    isEditingAddress: Bool = false) {
+                    isEditingAddress: Bool = false, isHome: Bool = false,
+                    isFavorite: Bool = false) {
+            self.isHome = isHome
+            self.isFavorite = isFavorite
             self.url = url
             self.title = title
             self.tabs = tabs
@@ -133,7 +152,7 @@ public struct HudSnapshot: Sendable {
                     minimap: Minimap(place: "LOCATING", heading: 0, headingLabel: "",
                                      speed: "", spanMetres: 300),
                     browser: Browser(url: "", title: "", tabs: ["New tab"], activeTab: 0,
-                                     canGoBack: false, canGoForward: false),
+                                     canGoBack: false, canGoForward: false, isHome: true),
                     cursor: nil)
     }
 }

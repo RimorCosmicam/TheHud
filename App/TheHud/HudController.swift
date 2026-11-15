@@ -18,7 +18,13 @@ final class HudController: ObservableObject {
     @Published var config: HalftoneConfig = .miniMateDefault
     @Published var trackpad = TouchpadSettings()
 
-    @Published var glassesConnected = false
+    /// While the glasses are on, the phone must not auto-lock: locking backgrounds the app, and
+    /// a backgrounded app's external display goes black.
+    @Published var glassesConnected = false {
+        didSet { UIApplication.shared.isIdleTimerDisabled = glassesConnected }
+    }
+
+    @Published private(set) var favorites: [Favorite]
     @Published var showingSettings = false
     @Published private(set) var railActive = false
     @Published var cornerPressed = false
@@ -46,7 +52,11 @@ final class HudController: ObservableObject {
     private var clockTimer: Timer?
     private var lastWeatherFetch: Date = .distantPast
     private var lastMapFetch: Date = .distantPast
-    private var lastMapCentre: CLLocationCoordinate2D?
+    /// Where the current map raster is centred. The raster slides by the wearer's distance from
+    /// here until a new one is fetched around where they are now.
+    private var groundCentre: CLLocationCoordinate2D?
+    private var lastCoordinate: CLLocationCoordinate2D?
+    private var mapFetchInFlight = false
 
     private let pointer = PointerState()
     private let momentum = MomentumScroller()
@@ -67,14 +77,22 @@ final class HudController: ObservableObject {
         let stored = UserDefaults.standard.stringArray(forKey: Self.visibleKey)
         visible = stored.map { Set($0.compactMap(HudPanelKind.init(rawValue:))) }
             ?? Set(HudPanelKind.allCases)
+        if let data = UserDefaults.standard.data(forKey: Self.favoritesKey),
+           let stored = try? JSONDecoder().decode([Favorite].self, from: data) {
+            favorites = stored
+        } else {
+            favorites = Favorite.defaults
+        }
         snapshot.cursor = pointer.position
         snapshot.clock = .now()
         loadSettings()
 
         browser.onChange = { [weak self] state in self?.browserChanged(state) }
+        browser.homeHTML = { [weak self] in HomePage.html(self?.favorites ?? Favorite.defaults) }
     }
 
     private static let visibleKey = "visiblePanels"
+    private static let favoritesKey = "favorites"
 
     /// Called once the phone scene is on screen.
     func start() {
@@ -92,7 +110,7 @@ final class HudController: ObservableObject {
         }
         location.start()
 
-        browser.load(URL(string: "https://duckduckgo.com")!)
+        browser.goHome()
     }
 
     private func tickClock() {
@@ -122,32 +140,56 @@ final class HudController: ObservableObject {
             }
         }
 
-        // The map only needs refetching once you have actually gone somewhere.
-        let movedFar = lastMapCentre.map {
-            CLLocation(latitude: $0.latitude, longitude: $0.longitude)
-                .distance(from: CLLocation(latitude: coordinate.latitude,
-                                           longitude: coordinate.longitude)) > 80
-        } ?? true
+        lastCoordinate = coordinate
+        applyGroundOffset()
 
-        if movedFar, Date().timeIntervalSince(lastMapFetch) > 20 {
+        // A new raster once the old one is running out under the marker. It covers
+        // `groundOversize` times the panel's span, and turning needs the panel's diagonal of
+        // that, so about a fifth of the span is the walking room either way.
+        let walked = groundCentre.map { metres(from: $0, to: coordinate) } ?? .infinity
+        let room = Double(minimap.spanMetres) * 0.2
+        if walked > room, !mapFetchInFlight, Date().timeIntervalSince(lastMapFetch) > 3 {
             lastMapFetch = Date()
-            lastMapCentre = coordinate
+            mapFetchInFlight = true
+            let span = Double(minimap.spanMetres) * HudSnapshot.Minimap.groundOversize
+            // Panel points per metre, times the span, so the raster is drawn at its own size.
+            let side = 470 * HudSnapshot.Minimap.groundOversize
             Task { [weak self] in
                 guard let self else { return }
+                defer { self.mapFetchInFlight = false }
                 if let ground = try? await self.maps.snapshot(
-                    centre: coordinate,
-                    spanMetres: Double(minimap.spanMetres) * 2,
-                    size: CGSize(width: 470, height: 492)) {
+                    centre: coordinate, spanMetres: span,
+                    size: CGSize(width: side, height: side)) {
                     self.mapGround = Image(decorative: ground, scale: 2)
+                    self.groundCentre = coordinate
+                    self.applyGroundOffset()
                 }
             }
         }
+    }
+
+    /// The wearer's position relative to the raster's centre, east and north in metres.
+    private func applyGroundOffset() {
+        guard let centre = groundCentre, let here = lastCoordinate else { return }
+        let metresPerDegree = 111_320.0
+        snapshot.minimap.groundOffsetNorth = (here.latitude - centre.latitude) * metresPerDegree
+        snapshot.minimap.groundOffsetEast = (here.longitude - centre.longitude) * metresPerDegree
+            * cos(centre.latitude * .pi / 180)
+    }
+
+    private func metres(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+        CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
     }
 
     // ------------------------------------------------------------------ browser
 
     private func browserChanged(_ state: WebBrowser.State) {
         var browser = snapshot.browser
+        browser.isHome = state.isHome
+        browser.isFavorite = !state.isHome && favorites.contains {
+            $0.site == Favorite.site(of: state.absoluteURL)
+        }
         if keyboardTarget != .address { browser.url = state.url }
         browser.title = state.title
         browser.canGoBack = state.canGoBack
@@ -165,6 +207,8 @@ final class HudController: ObservableObject {
         case .back: browser.back()
         case .forward: browser.forward()
         case .reload: browser.reload()
+        case .home: browser.goHome()
+        case .favorite: toggleFavorite()
         case .address: keyboardTarget == .address ? endTyping() : beginAddressEditing()
         case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
         case .settings: showingSettings = true
@@ -172,6 +216,40 @@ final class HudController: ObservableObject {
             if visible.contains(kind) { visible.remove(kind) } else { visible.insert(kind) }
             UserDefaults.standard.set(visible.map(\.rawValue), forKey: Self.visibleKey)
         }
+    }
+
+    /// Star the current site, or unstar it.
+    private func toggleFavorite() {
+        let state = browser.state
+        guard !state.isHome, !state.absoluteURL.isEmpty else { return }
+        let site = Favorite.site(of: state.absoluteURL)
+        if let index = favorites.firstIndex(where: { $0.site == site }) {
+            favorites.remove(at: index)
+        } else {
+            // The site's front page, not the article that happened to be open.
+            let url = URL(string: state.absoluteURL)
+            let root = url.flatMap { u in u.host.map { "\(u.scheme ?? "https")://\($0)" } }
+                ?? state.absoluteURL
+            let title = state.title.isEmpty ? site : Self.shortTitle(state.title, site: site)
+            favorites.append(Favorite(title: title, url: root))
+        }
+        if let data = try? JSONEncoder().encode(favorites) {
+            UserDefaults.standard.set(data, forKey: Self.favoritesKey)
+        }
+        snapshot.browser.isFavorite = favorites.contains { $0.site == site }
+    }
+
+    /// "Some video - YouTube" is a page title; the tile wants "YouTube". Sites put their own
+    /// name at one end after a separator, so take the end that looks like the site.
+    private static func shortTitle(_ title: String, site: String) -> String {
+        let separators = [" - ", " | ", " \u{2013} ", " \u{2014} ", " · "]
+        for separator in separators where title.contains(separator) {
+            let parts = title.components(separatedBy: separator)
+            let key = site.split(separator: ".").first.map(String.init)?.lowercased() ?? site
+            if let match = parts.first(where: { $0.lowercased().contains(key) }) { return match }
+            return parts.last ?? title
+        }
+        return title.count > 18 ? (site.split(separator: ".").first.map(String.init)?.capitalized ?? title) : title
     }
 
     private var layout: GlassesLayout { GlassesLayout(visible: visible) }

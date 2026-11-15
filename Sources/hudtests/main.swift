@@ -11,5 +11,6 @@ runMomentumTests()
 runRailTests()
 runGestureTests()
 runLayoutTests()
+runHomePageTests()
 
 exit(TestKit.summarise())

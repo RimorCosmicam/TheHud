@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import WebKit
+import ObjectiveC
 
 /// The browser: one `WKWebView`, owned here rather than by a view.
 ///
@@ -17,14 +18,24 @@ import WebKit
 /// `prefers-color-scheme` follow; the rest get the injected fallback below, which is deliberately
 /// crude — it is a brightness cap, not a reader mode.
 @MainActor
-public final class WebBrowser: NSObject, WKNavigationDelegate {
+public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     public struct State: Equatable {
         public var title = ""
         public var url = ""
+        /// The full address, for favourites.
+        public var absoluteURL = ""
         public var canGoBack = false
         public var canGoForward = false
         public var loading: Double?
+        public var isHome = true
     }
+
+    /// The start page lives at a scheme of our own, so it is a real history entry: back from a
+    /// site lands on it, and reload redraws it with the current favourites.
+    public static let homeURL = URL(string: "thehud://home")!
+
+    /// Supplies the start page's HTML each time it loads.
+    public var homeHTML: () -> String = { HomePage.html(Favorite.defaults) }
 
     public let webView: WKWebView
     public private(set) var state = State() {
@@ -37,6 +48,11 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
     public override init() {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
+        // The panel is 1300 points wide: that is a desktop, not a phone. Phone layouts stretched
+        // that wide are mostly whitespace.
+        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        let home = HomeSchemeHandler()
+        configuration.setURLSchemeHandler(home, forURLScheme: "thehud")
         configuration.userContentController.addUserScript(
             WKUserScript(source: Self.darkFallback, injectionTime: .atDocumentEnd,
                          forMainFrameOnly: false))
@@ -44,8 +60,10 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1352, height: 821),
                             configuration: configuration)
         super.init()
+        home.browser = self
 
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.backgroundColor = .black
@@ -53,6 +71,14 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
         webView.overrideUserInterfaceStyle = .dark
         // The glasses take no touches; the phone's cursor is the only way in.
         webView.isUserInteractionEnabled = false
+
+        // The page starts below the glass bar and scrolls up underneath it.
+        let top = BrowserMetrics.contentTopInset
+        let scrollView = webView.scrollView
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
+        scrollView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
+        Self.setObscuredInsets(UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0), on: webView)
 
         observations = [
             webView.observe(\.title) { [weak self] _, _ in self?.refresh() },
@@ -70,7 +96,11 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
             var next = State()
             next.title = webView.title ?? ""
             if let url = webView.url {
-                next.url = (url.host ?? url.absoluteString) + (url.path == "/" ? "" : url.path)
+                next.isHome = url.scheme == "thehud"
+                if !next.isHome {
+                    next.url = (url.host ?? url.absoluteString) + (url.path == "/" ? "" : url.path)
+                    next.absoluteURL = url.absoluteString
+                }
             }
             next.canGoBack = webView.canGoBack
             next.canGoForward = webView.canGoForward
@@ -82,6 +112,12 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
     // ------------------------------------------------------------------ navigation
 
     public func load(_ url: URL) { webView.load(URLRequest(url: url)) }
+    public func goHome() { load(Self.homeURL) }
+
+    /// Redraw the start page if it is showing, after the favourites change.
+    public func refreshHomeIfShowing() {
+        if state.isHome { webView.reload() }
+    }
     public func back() { webView.goBack() }
     public func forward() { webView.goForward() }
 
@@ -94,8 +130,10 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
     /// A left click at a point in the page's own coordinates. Reports whether it landed on
     /// something that takes text, so the phone knows to raise the keyboard.
     public func click(at point: CGPoint) async -> Bool {
+        let page = documentPoint(point)
         let script = """
-        (function (x, y) {
+        (function (dx, dy) {
+          var x = dx - window.scrollX, y = dy - window.scrollY;
           var el = document.elementFromPoint(x, y);
           if (!el) return false;
           var o = {bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,
@@ -111,7 +149,7 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
           el.dispatchEvent(new MouseEvent('mouseup', o));
           el.click();
           return !!editable;
-        })(\(Double(point.x)), \(Double(point.y)));
+        })(\(Double(page.x)), \(Double(page.y)));
         """
         return (try? await webView.evaluateJavaScript(script) as? Bool) ?? false
     }
@@ -119,8 +157,10 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
     /// Scroll the nearest scrollable thing under the point. Positive ticks move content up.
     public func scroll(ticks: Int, at point: CGPoint) {
         let pixels = Double(ticks) * 48
+        let page = documentPoint(point)
         let script = """
-        (function (x, y, dy) {
+        (function (dx, dy0, dy) {
+          var x = dx - window.scrollX, y = dy0 - window.scrollY;
           var el = document.elementFromPoint(x, y);
           while (el && el !== document.body && el !== document.documentElement) {
             var s = getComputedStyle(el);
@@ -130,9 +170,59 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
             el = el.parentElement;
           }
           window.scrollBy({top: dy});
-        })(\(Double(point.x)), \(Double(point.y)), \(pixels));
+        })(\(Double(page.x)), \(Double(page.y)), \(pixels));
         """
         webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    /// A point on the web view to a point in the document. Going through the scroll view rather
+    /// than trusting the page's own client coordinates keeps this right whatever the glass bar's
+    /// inset does to the viewport, and at any zoom.
+    private func documentPoint(_ point: CGPoint) -> CGPoint {
+        let scrollView = webView.scrollView
+        let zoom = max(scrollView.zoomScale, 0.01)
+        return CGPoint(x: (point.x + scrollView.contentOffset.x) / zoom,
+                       y: (point.y + scrollView.contentOffset.y) / zoom)
+    }
+
+    // ------------------------------------------------------------------ policy
+
+    /// Every link stays in here. A plain `.allow` lets iOS hand universal links — youtube.com,
+    /// maps, most big sites — to their app, which takes the wearer out of the HUD entirely. The
+    /// value two past `.allow` is WebKit's "allow without trying an app link", the one Safari
+    /// itself uses. Anything that is not web at all (a `youtube://`, an `intent://`) is dropped.
+    public func webView(_ webView: WKWebView,
+                        decidePolicyFor navigationAction: WKNavigationAction,
+                        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        let scheme = navigationAction.request.url?.scheme?.lowercased() ?? ""
+        guard ["http", "https", "about", "data", "blob", "thehud"].contains(scheme) else {
+            decisionHandler(.cancel)
+            return
+        }
+        let noAppLink = WKNavigationActionPolicy(rawValue: WKNavigationActionPolicy.allow.rawValue + 2)
+        decisionHandler(noAppLink ?? .allow)
+    }
+
+    /// `target="_blank"` and `window.open`: one tab, so they open here.
+    public func webView(_ webView: WKWebView,
+                        createWebViewWith configuration: WKWebViewConfiguration,
+                        for navigationAction: WKNavigationAction,
+                        windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if navigationAction.targetFrame == nil || navigationAction.targetFrame?.isMainFrame == false {
+            webView.load(navigationAction.request)
+        }
+        return nil
+    }
+
+    /// Tells WebKit the top of the view is covered, the way Safari does for its own bar, so fixed
+    /// headers sit below the glass instead of behind it. Private, so only if it is there.
+    private static func setObscuredInsets(_ insets: UIEdgeInsets, on webView: WKWebView) {
+        let selector = NSSelectorFromString("_setObscuredInsets:")
+        guard webView.responds(to: selector),
+              let method = class_getInstanceMethod(type(of: webView), selector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, UIEdgeInsets) -> Void
+        let set = unsafeBitCast(method_getImplementation(method), to: Setter.self)
+        set(webView, selector, insets)
     }
 
     // ------------------------------------------------------------------ keyboard
@@ -200,6 +290,24 @@ public final class WebBrowser: NSObject, WKNavigationDelegate {
       document.documentElement.appendChild(style);
     })();
     """
+}
+
+/// Serves `thehud://home`.
+private final class HomeSchemeHandler: NSObject, WKURLSchemeHandler {
+    weak var browser: WebBrowser?
+
+    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        let html = MainActor.assumeIsolated { browser?.homeHTML() } ?? HomePage.html([])
+        let data = Data(html.utf8)
+        let response = URLResponse(url: task.request.url ?? WebBrowser.homeURL,
+                                   mimeType: "text/html", expectedContentLength: data.count,
+                                   textEncodingName: "utf-8")
+        task.didReceive(response)
+        task.didReceive(data)
+        task.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
 /// Puts the browser's one web view on the canvas.

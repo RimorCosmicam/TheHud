@@ -20,9 +20,13 @@ public final class LocationProvider: NSObject, CLLocationManagerDelegate, @unche
     public override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-        // Ten metres of movement is about the resolution a 300m minimap can show anyway.
-        manager.distanceFilter = 10
+        // Every fix, as accurately as the phone can: the map slides with each one, so a coarse
+        // filter shows up as the map lurching ten metres at a time.
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = kCLDistanceFilterNone
+        #if os(iOS)
+        manager.headingFilter = 1
+        #endif
     }
 
     public func start() {
@@ -40,7 +44,23 @@ public final class LocationProvider: NSObject, CLLocationManagerDelegate, @unche
         #endif
     }
 
+    /// Unwrapped: 359 to 1 is +2, not -358, so the map turns two degrees instead of spinning
+    /// all the way round when you face north.
     private var heading: Double = 0
+    private var hasHeading = false
+
+    private func setHeading(_ degrees: Double) {
+        guard hasHeading else {
+            heading = degrees
+            hasHeading = true
+            return
+        }
+        let current = heading.truncatingRemainder(dividingBy: 360)
+        var delta = degrees - (current < 0 ? current + 360 : current)
+        if delta > 180 { delta -= 360 }
+        if delta < -180 { delta += 360 }
+        heading += delta
+    }
 
     public func locationManager(_ manager: CLLocationManager,
                                 didUpdateLocations locations: [CLLocation]) {
@@ -54,7 +74,7 @@ public final class LocationProvider: NSObject, CLLocationManagerDelegate, @unche
     public func locationManager(_ manager: CLLocationManager,
                                 didUpdateHeading newHeading: CLHeading) {
         guard newHeading.headingAccuracy >= 0 else { return }
-        heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        setHeading(newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading)
         if let location = manager.location { publish(location) }
     }
     #endif
@@ -68,7 +88,7 @@ public final class LocationProvider: NSObject, CLLocationManagerDelegate, @unche
         let minimap = HudSnapshot.Minimap(
             place: (placeName ?? "").uppercased(),
             heading: heading,
-            headingLabel: Self.compass(heading),
+            headingLabel: Self.compass(Self.normalised(heading)),
             speed: String(format: "%.1f KM/H", speed),
             spanMetres: 300)
 
@@ -87,6 +107,11 @@ public final class LocationProvider: NSObject, CLLocationManagerDelegate, @unche
             guard let placemark = placemarks?.first else { return }
             self?.placeName = placemark.subLocality ?? placemark.locality ?? placemark.name ?? ""
         }
+    }
+
+    static func normalised(_ degrees: Double) -> Double {
+        let d = degrees.truncatingRemainder(dividingBy: 360)
+        return d < 0 ? d + 360 : d
     }
 
     static func compass(_ degrees: Double) -> String {

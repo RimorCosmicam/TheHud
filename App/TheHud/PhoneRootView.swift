@@ -11,16 +11,20 @@ struct PhoneRootView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            // Half the glass, unless the keyboard (with its predictive bar) leaves less than that
-            // under the icon row. Then the surface gives up the difference rather than shoving
-            // the icons under the Dynamic Island.
-            let surfaceHeight = max(0, min(screenHeight / 2,
-                                           geometry.size.height - PhoneMetrics.toolBar))
+            let keyboardUp = controller.keyboardTarget != nil
+            let gap = keyboardUp ? PhoneMetrics.surfaceMargin : 0
+            // A little over half the glass, unless the keyboard (with its predictive bar)
+            // leaves less than that under the icon row. Then the surface gives up the
+            // difference rather than shoving the icons under the Dynamic Island.
+            let surfaceHeight = max(0, min((screenHeight * PhoneMetrics.trackpadFraction).rounded(),
+                                           geometry.size.height - PhoneMetrics.toolBar - gap))
 
             VStack(spacing: 0) {
                 HudToolBar(canGoBack: controller.snapshot.browser.canGoBack,
                            canGoForward: controller.snapshot.browser.canGoForward,
-                           keyboardUp: controller.keyboardTarget != nil,
+                           keyboardUp: keyboardUp,
+                           isFavorite: controller.snapshot.browser.isHome
+                               ? nil : controller.snapshot.browser.isFavorite,
                            action: controller.perform)
                     .frame(height: PhoneMetrics.toolBar)
 
@@ -32,12 +36,15 @@ struct PhoneRootView: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .clipped()
 
-                surface(CGSize(width: geometry.size.width, height: surfaceHeight))
+                surface(CGSize(width: geometry.size.width - PhoneMetrics.surfaceMargin * 2,
+                               height: surfaceHeight),
+                        keyboardUp: keyboardUp)
+                    .padding(.horizontal, PhoneMetrics.surfaceMargin)
+                    .padding(.bottom, gap)
             }
         }
-        // Down to the glass at the bottom, so the surface's corners can follow the screen's.
-        // Only the container edge is ignored: the keyboard still pushes everything up.
-        .ignoresSafeArea(.container, edges: .bottom)
+        // The safe area is kept at the bottom on purpose: the pad ends above the home
+        // indicator, where an upward swipe is iOS's and not ours.
         .background(Color.black.ignoresSafeArea())
         .overlay(alignment: .top) { keyboardProxy }
         .sheet(isPresented: $controller.showingSettings) {
@@ -69,9 +76,8 @@ struct PhoneRootView: View {
             .allowsHitTesting(false)
     }
 
-    private func surface(_ size: CGSize) -> some View {
-        let keyboardUp = controller.keyboardTarget != nil
-        return ZStack {
+    private func surface(_ size: CGSize, keyboardUp: Bool) -> some View {
+        ZStack {
             HalftoneSurfaceView(config: controller.config,
                                 contacts: controller.contacts,
                                 surfaceSize: size)

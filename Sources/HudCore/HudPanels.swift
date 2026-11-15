@@ -134,7 +134,7 @@ public struct MinimapPanel: View {
             GeometryReader { geometry in
                 ZStack {
                     if let ground {
-                        ground.resizable().aspectRatio(contentMode: .fill)
+                        groundLayer(ground, size: geometry.size)
                         // The snapshot is brighter than the rest of the HUD, and on a birdbath
                         // display brightness is what you see through. Knock it back.
                         Color.black.opacity(0.45)
@@ -157,6 +157,29 @@ public struct MinimapPanel: View {
         }
         .background(HudTheme.surface)
         .clipped()
+    }
+
+    /// The map raster, heading-up: it turns under the marker as the wearer turns, and slides
+    /// under it as they walk, so the marker can stay fixed at the centre pointing up.
+    ///
+    /// The raster is a square `groundOversize` times the panel's span, centred where it was
+    /// fetched. Between fetches the offset moves it by the distance walked since.
+    private func groundLayer(_ ground: Image, size: CGSize) -> some View {
+        let pointsPerMetre = size.width / CGFloat(max(minimap.spanMetres, 1))
+        let side = CGFloat(minimap.spanMetres) * CGFloat(HudSnapshot.Minimap.groundOversize)
+            * pointsPerMetre
+        return ground
+            .resizable()
+            .frame(width: side, height: side)
+            .offset(x: -CGFloat(minimap.groundOffsetEast) * pointsPerMetre,
+                    y: CGFloat(minimap.groundOffsetNorth) * pointsPerMetre)
+            .animation(.linear(duration: 0.9), value: minimap.groundOffsetEast)
+            .animation(.linear(duration: 0.9), value: minimap.groundOffsetNorth)
+            // Rotating after the offset turns the map about the panel's centre, which is where
+            // the wearer is.
+            .rotationEffect(.degrees(-minimap.heading))
+            .animation(.easeOut(duration: 0.25), value: minimap.heading)
+            .frame(width: size.width, height: size.height)
     }
 
     /// A deterministic, slightly irregular grid. Alfama is not a grid, which is the point of the

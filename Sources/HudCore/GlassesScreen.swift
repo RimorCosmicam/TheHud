@@ -18,12 +18,16 @@ public struct GlassesScreen: View {
     /// Stand-in page and procedural streets. True for stills; the device passes false, because a
     /// made-up map on someone's face is worse than an empty one.
     public var placeholders: Bool
+    /// A real backdrop blur under the browser's bar. The device only; see `BrowserPanel`.
+    public var liveGlass: Bool
 
     public init(snapshot: HudSnapshot = HudSnapshot(),
                 visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
                 browserContent: AnyView? = nil,
                 mapGround: Image? = nil,
-                placeholders: Bool = true) {
+                placeholders: Bool = true,
+                liveGlass: Bool = false) {
+        self.liveGlass = liveGlass
         self.snapshot = snapshot
         self.visible = visible
         self.browserContent = browserContent
@@ -72,7 +76,8 @@ public struct GlassesScreen: View {
                 .frame(width: GlassesLayout.columnWidth)
             }
 
-            BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders)
+            BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders,
+                         hovering: layout.isOverBar(snapshot.cursor), liveGlass: liveGlass)
         }
         .padding(HudTheme.safeInset)
     }

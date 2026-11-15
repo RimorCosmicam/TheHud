@@ -81,7 +81,8 @@ struct GlassesHost: View {
                           visible: controller.visible,
                           browserContent: AnyView(WebBrowserView(controller.browser)),
                           mapGround: controller.mapGround,
-                          placeholders: false)
+                          placeholders: false,
+                          liveGlass: true)
                 .scaleEffect(scale)
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }

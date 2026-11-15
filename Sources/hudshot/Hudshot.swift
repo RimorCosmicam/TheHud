@@ -3,6 +3,8 @@ import SwiftUI
 import HudCore
 import simd
 import CoreLocation
+import WebKit
+import AppKit
 
 // hudshot — renders HudCore surfaces to PNG on a Mac, with no device and no simulator.
 //
@@ -36,7 +38,7 @@ struct Hudshot {
         // The surface occupies exactly half the display, so that is the size the shader is asked
         // for — aspect correction and dot pitch both follow the surface, not the screen.
         let scale = PhoneMetrics.scale
-        let surfaceW = Int(PhoneMetrics.size.width * scale)
+        let surfaceW = Int((PhoneMetrics.size.width - PhoneMetrics.surfaceMargin * 2) * scale)
         let surfaceH = Int(PhoneMetrics.trackpad * scale)
         let surfaceSize = SIMD2<Float>(Float(surfaceW), Float(surfaceH))
 
@@ -71,6 +73,28 @@ struct Hudshot {
         let driven = HudSnapshot(cursor: cursorAfterSwipe())
         try write(GlassesScreen(snapshot: driven),
                   to: outDir, "glasses-pointer", scale: 1)
+
+        // The cursor on the bar: the buttons are up, and the page has scrolled under the glass.
+        let bar = GlassesLayout().barFrame!
+        let hovering = HudSnapshot(cursor: CGPoint(x: bar.midX + 180, y: bar.midY))
+        try write(GlassesScreen(snapshot: hovering,
+                                browserContent: AnyView(PageStandIn(scrolled: 150))),
+                  to: outDir, "glasses-hover", scale: 1)
+
+        // The start page, drawn by WebKit from the same HTML the phone serves.
+        var editing = HudSnapshot(cursor: nil)
+        editing.browser.isEditingAddress = true
+        editing.browser.url = "xreal air 2 ul"
+        try write(GlassesScreen(snapshot: editing), to: outDir, "glasses-address", scale: 1)
+
+        if let home = renderHomePage() {
+            var snapshot = HudSnapshot(cursor: nil)
+            snapshot.browser = HudSnapshot.Browser(url: "", title: "Favorites", tabs: [],
+                                                   activeTab: 0, canGoBack: false, isHome: true)
+            try write(GlassesScreen(snapshot: snapshot,
+                                    browserContent: AnyView(Image(decorative: home, scale: 1).resizable())),
+                      to: outDir, "glasses-home", scale: 1)
+        }
 
         if live {
             let (snapshot, ground) = try liveSnapshot()
@@ -148,11 +172,56 @@ struct Hudshot {
         return (snapshot, ground.map { Image(decorative: $0, scale: 2) })
     }
 
+    /// The start page through a real WebKit, at the size the browser panel gives it. Favicons
+    /// come from the network, so offline they fall back to their letters, as they would on the
+    /// phone.
+    @MainActor
+    private static func renderHomePage() -> CGImage? {
+        _ = NSApplication.shared
+        let size = GlassesLayout().contentFrame!.size
+        let webView = WKWebView(frame: CGRect(origin: .zero, size: size))
+        webView.setValue(false, forKey: "drawsBackground")
+        let delegate = LoadWaiter()
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString(HomePage.html(Favorite.defaults), baseURL: nil)
+
+        let deadline = Date().addingTimeInterval(15)
+        while !delegate.finished, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        // Let the favicons that are coming arrive.
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+
+        var result: CGImage?
+        var done = false
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = CGRect(origin: .zero, size: size)
+        configuration.snapshotWidth = NSNumber(value: Double(size.width))
+        webView.takeSnapshot(with: configuration) { image, _ in
+            result = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            done = true
+        }
+        while !done, Date() < deadline.addingTimeInterval(5) {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        print(result == nil ? "home: WebKit snapshot failed" : "home: rendered by WebKit")
+        return result
+    }
+
+    final class LoadWaiter: NSObject, WKNavigationDelegate {
+        var finished = false
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished = true }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            finished = true
+        }
+    }
+
     /// Drives the engine with a diagonal swipe and reports where the cursor ends up.
     private static func cursorAfterSwipe() -> CGPoint {
         let pointer = PointerState()
         let recognizer = GestureRecognizer { pointer.apply($0) }
-        recognizer.surfaceSize = CGSize(width: PhoneMetrics.size.width, height: PhoneMetrics.trackpad)
+        recognizer.surfaceSize = CGSize(width: PhoneMetrics.size.width - PhoneMetrics.surfaceMargin * 2,
+                                         height: PhoneMetrics.trackpad)
 
         func frame(_ action: TouchAction, _ x: CGFloat, _ y: CGFloat, _ t: Double) -> TouchFrame {
             TouchFrame(action: action, touches: [TouchPoint(x: x, y: y, id: 0)], timeMs: t)

@@ -19,17 +19,19 @@ public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable {
 
 /// The browser chrome's measurements, shared by the view that draws it and the hit test that
 /// decides what a click landed on. One set of numbers, so the two cannot disagree.
+///
+/// The chrome is one floating glass bar, Safari's compact layout: the page runs the full height
+/// of the panel and scrolls up underneath it.
 public enum BrowserMetrics {
-    public static let tabHeight: CGFloat = 54
-    public static let addressHeight: CGFloat = 76
-    public static let dividerHeight: CGFloat = 1
-    public static let sidePadding: CGFloat = 12
-    public static let navButtonWidth: CGFloat = 52
-    public static let reloadWidth: CGFloat = 64
-    public static let fieldGap: CGFloat = 10
-    public static let fieldHeight: CGFloat = 50
+    /// The bar's margin from the panel's edges.
+    public static let barInset: CGFloat = 16
+    public static let barHeight: CGFloat = 66
+    /// Back, forward and reload: hidden until the cursor is on the bar.
+    public static let buttonWidth: CGFloat = 78
+    public static let panelRadius: CGFloat = 28
 
-    public static var chromeHeight: CGFloat { tabHeight + addressHeight + dividerHeight }
+    /// Where the page starts when scrolled to the top, so nothing begins hidden under the bar.
+    public static var contentTopInset: CGFloat { barInset + barHeight + 10 }
 }
 
 /// What a click on the canvas landed on.
@@ -72,35 +74,36 @@ public struct GlassesLayout: Sendable {
                       height: canvas.height - inset * 2)
     }
 
-    /// The page itself: the browser's frame less its chrome.
-    public var contentFrame: CGRect? {
+    /// The page: the whole panel, because the bar floats over it.
+    public var contentFrame: CGRect? { browserFrame }
+
+    /// The glass bar.
+    public var barFrame: CGRect? {
         guard let frame = browserFrame else { return nil }
-        return CGRect(x: frame.minX, y: frame.minY + BrowserMetrics.chromeHeight,
-                      width: frame.width, height: frame.height - BrowserMetrics.chromeHeight)
+        let inset = BrowserMetrics.barInset
+        return CGRect(x: frame.minX + inset, y: frame.minY + inset,
+                      width: frame.width - inset * 2, height: BrowserMetrics.barHeight)
+    }
+
+    /// Whether the cursor is over the bar, which is what brings its buttons up.
+    public func isOverBar(_ point: CGPoint?) -> Bool {
+        guard let point, let bar = barFrame else { return false }
+        return bar.contains(point)
     }
 
     public func hitTest(_ point: CGPoint) -> GlassesHitTarget {
         guard let frame = browserFrame, frame.contains(point) else { return .none }
 
-        let x = point.x - frame.minX
-        let y = point.y - frame.minY
-
-        if y < BrowserMetrics.tabHeight { return .none }
-
-        if y < BrowserMetrics.tabHeight + BrowserMetrics.addressHeight {
-            let left = BrowserMetrics.sidePadding
-            let nav = BrowserMetrics.navButtonWidth
-            let right = frame.width - BrowserMetrics.sidePadding
-
-            if x >= left && x < left + nav { return .back }
-            if x >= left + nav && x < left + nav * 2 { return .forward }
-            if x >= right - BrowserMetrics.reloadWidth && x < right { return .reload }
-            if x >= left + nav * 2 && x < right - BrowserMetrics.reloadWidth { return .address }
-            return .none
+        if let bar = barFrame, bar.contains(point) {
+            let x = point.x - bar.minX
+            let button = BrowserMetrics.buttonWidth
+            if x < button { return .back }
+            if x < button * 2 { return .forward }
+            if x >= bar.width - button { return .reload }
+            return .address
         }
 
-        let pageY = y - BrowserMetrics.chromeHeight
-        return pageY >= 0 ? .page(CGPoint(x: x, y: pageY)) : .none
+        return .page(CGPoint(x: point.x - frame.minX, y: point.y - frame.minY))
     }
 }
 
@@ -120,7 +123,7 @@ public enum AddressInput {
             return url
         }
 
-        var components = URLComponents(string: "https://duckduckgo.com/")!
+        var components = URLComponents(string: "https://www.google.com/search")!
         components.queryItems = [URLQueryItem(name: "q", value: trimmed)]
         return components.url
     }

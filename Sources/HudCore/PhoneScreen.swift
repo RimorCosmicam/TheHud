@@ -12,15 +12,22 @@ public enum PhoneMetrics {
     public static let statusBar: CGFloat = 59
     /// The icon row.
     public static let toolBar: CGFloat = 56
-    /// Exactly half the display, as asked, and anchored to the bottom edge.
-    public static var trackpad: CGFloat { size.height / 2 }
+    /// A little over half the display. It sits clear of the home indicator rather than under
+    /// it: a swipe that starts on the bottom edge belongs to iOS, so the pad stops above it.
+    public static let trackpadFraction: CGFloat = 0.56
+    public static var trackpad: CGFloat { (size.height * trackpadFraction).rounded() }
+    /// The home indicator's strip, which the pad stays out of.
+    public static let homeIndicator: CGFloat = 34
+    /// Side margin, and the gap above the keyboard when it is up.
+    public static let surfaceMargin: CGFloat = 10
 
-    /// The display's own corner radius on the Pro phones, so the surface's lower corners run
-    /// parallel to the glass instead of being cut off by it.
-    public static let screenCornerRadius: CGFloat = 55
-    /// The surface's upper corners: rounded to match, but tighter, because they sit mid-screen
-    /// rather than against the bezel.
+    /// The surface's lower corners, concentric with the display's own (55pt on the Pro phones)
+    /// at the margin the pad is inset by.
+    public static let surfaceBottomRadius: CGFloat = 45
+    /// The upper corners: rounded to match, but tighter, because they sit mid-screen rather
+    /// than against the bezel.
     public static let surfaceTopRadius: CGFloat = 30
+    public static let screenCornerRadius: CGFloat = 55
 
     /// iOS gives the portrait keyboard about 291pt at this width, about 336pt with the
     /// predictive bar on.
@@ -30,13 +37,18 @@ public enum PhoneMetrics {
     /// The settings area between the toolbar and the surface. It is the slack: the keyboard
     /// pushes everything up and this is what gets spent.
     public static func settingsHeight(keyboard: CGFloat) -> CGFloat {
-        size.height - statusBar - toolBar - trackpad - keyboard
+        size.height - statusBar - toolBar - trackpad - bottomGap(keyboard: keyboard) - keyboard
+    }
+
+    /// Below the pad: the home indicator's strip, or a margin above the keyboard.
+    public static func bottomGap(keyboard: CGFloat) -> CGFloat {
+        keyboard > 0 ? surfaceMargin : homeIndicator
     }
 
     /// The surface's outline. With the keyboard up the surface sits on the keyboard rather than
-    /// on the bezel, so the lower corners drop to the upper radius.
+    /// near the bezel, so the lower corners drop to the upper radius.
     public static func surfaceShape(keyboardUp: Bool,
-                                    bottomRadius: CGFloat = screenCornerRadius)
+                                    bottomRadius: CGFloat = surfaceBottomRadius)
         -> UnevenRoundedRectangle {
         let bottom = keyboardUp ? surfaceTopRadius : bottomRadius
         return UnevenRoundedRectangle(topLeadingRadius: surfaceTopRadius,
@@ -108,7 +120,7 @@ struct StatusBar: View {
 
 /// What the phone's buttons can ask for. One enum so the app and the stills share the bar.
 public enum PhoneAction: Sendable {
-    case back, forward, reload, address, keyboard, settings
+    case back, forward, reload, home, favorite, address, keyboard, settings
     case toggle(HudPanelKind)
 }
 
@@ -120,13 +132,17 @@ public struct HudToolBar: View {
     public var canGoBack: Bool
     public var canGoForward: Bool
     public var keyboardUp: Bool
+    /// The current site is a favourite. Nil on the start page, where there is nothing to star.
+    public var isFavorite: Bool?
     public var action: (PhoneAction) -> Void
 
     public init(canGoBack: Bool = true, canGoForward: Bool = false, keyboardUp: Bool = false,
+                isFavorite: Bool? = false,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.canGoBack = canGoBack
         self.canGoForward = canGoForward
         self.keyboardUp = keyboardUp
+        self.isFavorite = isFavorite
         self.action = action
     }
 
@@ -135,6 +151,9 @@ public struct HudToolBar: View {
             button("chevron.left", .back, enabled: canGoBack)
             button("chevron.right", .forward, enabled: canGoForward)
             button("arrow.clockwise", .reload)
+            button("house", .home)
+            button(isFavorite == true ? "star.fill" : "star", .favorite,
+                   enabled: isFavorite != nil, lit: isFavorite == true)
             button("magnifyingglass", .address)
             button(keyboardUp ? "keyboard.chevron.compact.down" : "keyboard", .keyboard,
                    lit: keyboardUp)
@@ -363,6 +382,9 @@ public struct PhoneScreen: View {
                             cornerPressed: cornerPressed,
                             keyboardUp: keyboardUp)
                 .frame(height: PhoneMetrics.trackpad)
+                .padding(.horizontal, PhoneMetrics.surfaceMargin)
+
+            Color.black.frame(height: PhoneMetrics.bottomGap(keyboard: keyboardHeight))
 
             if keyboardUp {
                 SystemKeyboardStandIn(showsPredictiveBar: predictiveBar)

@@ -10,7 +10,7 @@ func runLayoutTests() {
 
     let all = GlassesLayout()
     let frame = all.browserFrame!
-    let addressY = frame.minY + BrowserMetrics.tabHeight + BrowserMetrics.addressHeight / 2
+    let bar = all.barFrame!
 
     test("browser sits right of the column, inside the safe inset") {
         expectEqual(frame.minX, HudTheme.safeInset + GlassesLayout.columnWidth + GlassesLayout.gap)
@@ -29,24 +29,33 @@ func runLayoutTests() {
         expectEqual(glance.hitTest(CGPoint(x: 960, y: 540)), .none)
     }
 
-    test("address row: back, forward, field, reload") {
-        let left = frame.minX + BrowserMetrics.sidePadding
-        let nav = BrowserMetrics.navButtonWidth
-        expectEqual(all.hitTest(CGPoint(x: left + nav / 2, y: addressY)), .back)
-        expectEqual(all.hitTest(CGPoint(x: left + nav * 1.5, y: addressY)), .forward)
-        expectEqual(all.hitTest(CGPoint(x: frame.midX, y: addressY)), .address)
-        expectEqual(all.hitTest(CGPoint(x: frame.maxX - BrowserMetrics.sidePadding - 10,
-                                        y: addressY)), .reload)
+    test("the bar floats inside the panel") {
+        expectEqual(bar.minX, frame.minX + BrowserMetrics.barInset)
+        expectEqual(bar.minY, frame.minY + BrowserMetrics.barInset)
+        expectEqual(bar.maxX, frame.maxX - BrowserMetrics.barInset)
     }
 
-    test("tabs strip is inert") {
-        expectEqual(all.hitTest(CGPoint(x: frame.midX, y: frame.minY + 10)), .none)
+    test("bar: back, forward at the left end, reload at the right, title between") {
+        let y = bar.midY
+        let w = BrowserMetrics.buttonWidth
+        expectEqual(all.hitTest(CGPoint(x: bar.minX + w / 2, y: y)), .back)
+        expectEqual(all.hitTest(CGPoint(x: bar.minX + w * 1.5, y: y)), .forward)
+        expectEqual(all.hitTest(CGPoint(x: bar.midX, y: y)), .address)
+        expectEqual(all.hitTest(CGPoint(x: bar.maxX - 10, y: y)), .reload)
     }
 
-    test("page clicks arrive in the web view's own coordinates") {
-        let content = all.contentFrame!
-        let hit = all.hitTest(CGPoint(x: content.minX + 100, y: content.minY + 40))
-        expectEqual(hit, .page(CGPoint(x: 100, y: 40)))
+    test("hover is the bar and only the bar") {
+        expect(all.isOverBar(CGPoint(x: bar.midX, y: bar.midY)))
+        expect(!all.isOverBar(CGPoint(x: bar.midX, y: bar.maxY + 4)))
+        expect(!all.isOverBar(nil))
+    }
+
+    test("the page runs under the bar: clicks beside it reach the page") {
+        // The margin above the bar is page, not chrome.
+        expectEqual(all.hitTest(CGPoint(x: frame.minX + 4, y: frame.minY + 4)),
+                    .page(CGPoint(x: 4, y: 4)))
+        expectEqual(all.hitTest(CGPoint(x: frame.minX + 100, y: frame.minY + 300)),
+                    .page(CGPoint(x: 100, y: 300)))
     }
 
     test("outside the browser is nothing") {
@@ -59,7 +68,8 @@ func runLayoutTests() {
         expectEqual(AddressInput.url(from: "apple.com")?.absoluteString, "https://apple.com")
         expectEqual(AddressInput.url(from: " http://a.b/c ")?.absoluteString, "http://a.b/c")
         let search = AddressInput.url(from: "xreal air specs")
-        expect(search?.host?.contains("duckduckgo") == true, "spaces read as a search")
+        expectEqual(search?.host, "www.google.com", "spaces read as a Google search")
+        expect(search?.absoluteString.contains("q=xreal%20air%20specs") == true)
         expect(AddressInput.url(from: "   ") == nil, "blank goes nowhere")
     }
 
@@ -86,5 +96,27 @@ func runLayoutTests() {
     test("emoji count as one character") {
         let edit = TextEdit.between("hi \u{1F44B}\u{1F3FD}", "hi ")
         expectEqual(edit.deletes, 1)
+    }
+}
+
+func runHomePageTests() {
+    print("\nHomePage")
+
+    test("Google and YouTube by default") {
+        expectEqual(Favorite.defaults.map(\.site), ["google.com", "youtube.com"])
+    }
+
+    test("a favourite is the site, not the page") {
+        expectEqual(Favorite.site(of: "https://www.youtube.com/watch?v=abc"), "youtube.com")
+        expectEqual(Favorite.site(of: "m.youtube.com"), "m.youtube.com")
+    }
+
+    test("every favourite becomes a link, and titles cannot break the page") {
+        let html = HomePage.html([Favorite(title: "<b>Bad</b>", url: "https://a.example")]
+                                 + Favorite.defaults)
+        expect(html.contains("href=\"https://www.youtube.com\""))
+        expect(html.contains("href=\"https://www.google.com\""))
+        expect(html.contains("&lt;b&gt;Bad&lt;/b&gt;"))
+        expect(!html.contains("<b>Bad</b>"))
     }
 }
