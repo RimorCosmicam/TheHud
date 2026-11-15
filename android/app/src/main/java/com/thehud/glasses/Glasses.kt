@@ -22,6 +22,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableDoubleState
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,6 +47,8 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.thehud.HudController
 import com.thehud.R
 import com.thehud.core.HudTheme
+import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.min
 
 /**
@@ -54,6 +61,7 @@ fun GlassesRoot() {
         .background(if (HudController.snapshot.apps.running != null) Color.Transparent else Color.Black), contentAlignment = Alignment.Center) {
         val scale = min(constraints.maxWidth / HudTheme.CANVAS_WIDTH, constraints.maxHeight / HudTheme.CANVAS_HEIGHT)
             .takeIf { it > 0f } ?: 1f
+        val eased = easedHeading()
         CompositionLocalProvider(LocalDensity provides Density(scale, 1f)) {
             Box(Modifier.requiredSize(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
                 GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
@@ -63,7 +71,8 @@ fun GlassesRoot() {
                     mapGround = HudController.mapGround,
                     artwork = HudController.artwork,
                     appIcon = HudController::appIcon,
-                    standIn = false))
+                    standIn = false,
+                    heading = { eased.doubleValue }))
             }
         }
     }
@@ -72,6 +81,30 @@ fun GlassesRoot() {
         HudController.glassesAttached(context)
         onDispose { HudController.glassesDetached() }
     }
+}
+
+/**
+ * The compass, eased every frame toward the phone's latest reading, the way iOS animates the
+ * heading: the sensor's steps become one glide, and the way round is always the short one.
+ * Only the map's and the sky's drawing read it, so a turn redraws them and recomposes nothing.
+ */
+@Composable
+private fun easedHeading(): MutableDoubleState {
+    val eased = remember { mutableDoubleStateOf(HudController.heading.doubleValue) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        while (true) withFrameNanos { now ->
+            val dt = if (last == 0L) 0.0 else (now - last) / 1e9
+            last = now
+            val target = HudController.heading.doubleValue
+            val gap = ((target - eased.doubleValue) % 360 + 540) % 360 - 180
+            if (abs(gap) > 0.01) {
+                val step = gap * (1 - exp(-dt.coerceAtMost(0.1) * 12))
+                eased.doubleValue = ((eased.doubleValue + step) % 360 + 360) % 360
+            }
+        }
+    }
+    return eased
 }
 
 /** The active tab's web view, moved into the panel. */

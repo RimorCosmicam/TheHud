@@ -221,6 +221,8 @@ object HudController {
         private set
     var artwork by mutableStateOf<ImageBitmap?>(null)
         private set
+    /** Where the phone faces, unwrapped, at the sensor's own rate: read only where it is drawn. */
+    val heading = androidx.compose.runtime.mutableDoubleStateOf(0.0)
     var youtube: YouTubePlayer? = null
         private set
     val apps by lazy { AppsProvider(app) }
@@ -310,7 +312,7 @@ object HudController {
             youtube = snapshot.youtube.copy(showsSubscriptions = youtubeSubscriptions))
 
         overhead = OverheadProvider(scope)
-        location = LocationProvider(app) { minimap, at, _ -> located(minimap, at) }
+        location = LocationProvider(app, onHeading = { heading.doubleValue = it }) { minimap, at, _ -> located(minimap, at) }
         calendar = CalendarProvider(app)
         activity = ActivityProvider(app, prefs) { snapshot = snapshot.copy(activity = it) }.also { it.goal = stepGoal }
         music = MusicProvider(app) { playing, art -> musicChanged(playing, art) }
@@ -592,7 +594,7 @@ object HudController {
     /** The thing nearest a click on the chart, picked or let go. */
     private fun skyClick(p: Offset) {
         val v = snapshot.skyView
-        val pr = SkyProjection(com.thehud.glasses.skyFacing(snapshot.minimap.heading, v), v.fov, v.tilt)
+        val pr = SkyProjection(com.thehud.glasses.skyFacing(heading.doubleValue, v), v.fov, v.tilt)
         val best = SkyTarget.all(snapshot.sky, snapshot.overhead, v.layers).mapNotNull { t ->
             pr.project(t.az, t.alt)?.let { q -> t to hypot(q.x - p.x, q.y - p.y) }
         }.filter { it.second < 70 }.minByOrNull { it.second }?.first
@@ -802,13 +804,16 @@ object HudController {
         val display = GlassesPresenter.shownDisplay ?: return
         val frame = layout.appsFrame ?: return
         val content = AppsLayout.content(frame.size).translate(frame.topLeft)
-        if (apps.launch(entry.packageName, display, apps.mapping(display).rect(content))) {
+        val target = apps.mapping(display).rect(content)
+        if (apps.launch(entry.packageName, display, target)) {
             snapshot = snapshot.copy(apps = snapshot.apps.copy(running = entry))
+            HudAccessibility.instance?.fit(display.displayId, entry.packageName, target)
         }
     }
 
     private fun closeApp() {
         if (keyboardTarget == KeyboardTarget.apps) endTyping()
+        HudAccessibility.instance?.stopFitting()
         snapshot = snapshot.copy(apps = snapshot.apps.copy(running = null))
         GlassesPresenter.raise()
     }

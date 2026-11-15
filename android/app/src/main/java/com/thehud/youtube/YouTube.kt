@@ -180,7 +180,7 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
-        settings.userAgentString = WebTab.DESKTOP_UA
+        WebTab.desktop(settings)
         isFocusable = false
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
         val early = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)

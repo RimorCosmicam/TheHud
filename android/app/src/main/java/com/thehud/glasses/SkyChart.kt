@@ -80,19 +80,17 @@ private fun planetColour(name: String) = when (name) {
 fun skyFacing(heading: Double, view: SkyView) = (((heading + view.pan) % 360) + 360) % 360
 
 @Composable
-fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, heading: Double) {
-    val facing = skyFacing(heading, view)
-    val pr = SkyProjection(facing, view.fov, view.tilt)
+fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, heading: () -> Double) {
+    val facing = { skyFacing(heading(), view) }
     val selected = view.selected?.let { id -> SkyTarget.all(sky, overhead, view.layers).firstOrNull { it.id == id } }
     Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-        SkyCanvas(sky, overhead, view.layers, pr, view.fov, selected)
+        SkyCanvas(sky, overhead, view.layers, { SkyProjection(facing(), view.fov, view.tilt) }, view.fov, selected)
         Box(Modifier.size(1100.dp, 700.dp).background(Brush.radialGradient(
             0f to Color.Black.copy(alpha = 0.85f), 0.19f to Color.Black.copy(alpha = 0.85f), 1f to Color.Transparent,
             center = Offset.Zero, radius = 640f)))
         Column(Modifier.at(Rect(72f, 52f, 972f, 292f)), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                BasicText(SkyModel.compass(facing), style = HudTheme.mont(64f))
-                BasicText("${facing.roundToInt() % 360}°", style = HudTheme.mont(30f, color = HudTheme.inkDim), modifier = Modifier.padding(bottom = 8.dp))
+                SkyBearing(facing)
                 if (view.isAdjusted) BasicText("${view.fov.roundToInt()}° WIDE", style = HudTheme.mont(16f, tracking = 2.5f, color = HudTheme.inkFaint),
                     modifier = Modifier.padding(bottom = 12.dp))
             }
@@ -153,6 +151,14 @@ fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, 
     }
 }
 
+/** The compass word and degrees: the one piece of text that follows the heading, recomposed on its own. */
+@Composable
+private fun SkyBearing(facing: () -> Double) {
+    val degrees = facing().roundToInt() % 360
+    BasicText(SkyModel.compass(degrees.toDouble()), style = HudTheme.mont(64f))
+    BasicText("$degrees°", style = HudTheme.mont(30f, color = HudTheme.inkDim), modifier = Modifier.padding(bottom = 8.dp))
+}
+
 @Composable
 private fun SignFact(label: String, sign: Zodiac) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -164,17 +170,18 @@ private fun SignFact(label: String, sign: Zodiac) {
 }
 
 @Composable
-fun SkyCanvas(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, layers: Set<SkyLayer>, pr: SkyProjection, fov: Double, selected: SkyTarget?) {
+fun SkyCanvas(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, layers: Set<SkyLayer>, projection: () -> SkyProjection, fov: Double, selected: SkyTarget?) {
     val text = rememberTextMeasurer(cacheSize = 256)
     val plane = rememberVectorPainter(Icons.Rounded.Flight)
     val night = sky.sunAltitude < -6
     val light = if (night) 1f else if (sky.sunAltitude < 0) 0.6f else 0.35f
     val zoom = sqrt(110 / fov).coerceIn(0.8, 1.9).toFloat()
-    val radius = (pr.scale * 1.25 * PI / 180).toFloat()
-    Box(Modifier.size(pr.size.width.dp, pr.size.height.dp)) {
+    val radius = (projection().scale * 1.25 * PI / 180).toFloat()
+    Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
         if (SkyLayer.milkyWay in layers) {
             // Soft dots, blurred together into the band.
             Canvas(Modifier.fillMaxSize().blur((radius * 0.8f).dp)) {
+                val pr = projection()
                 val strength = floatArrayOf(0.07f, 0.1f, 0.13f, 0.17f, 0.22f)
                 val tint = Color(0.8f, 0.86f, 1f)
                 for (band in sky.milkyWay) {
@@ -188,6 +195,7 @@ fun SkyCanvas(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, layers: Set<
             }
         }
         Canvas(Modifier.fillMaxSize()) {
+            val pr = projection()
             if (SkyLayer.grid in layers) grid(pr, text)
             if (SkyLayer.zodiac in layers) ecliptic(sky, pr)
             if (SkyLayer.figures in layers) figures(sky, pr, light, SkyLayer.zodiac in layers)

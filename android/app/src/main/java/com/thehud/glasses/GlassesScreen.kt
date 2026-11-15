@@ -89,6 +89,8 @@ class GlassesContent(
     val artwork: ImageBitmap? = null,
     val appIcon: (String) -> ImageBitmap? = { null },
     val standIn: Boolean = true,
+    /** The heading as the glasses draw it, eased every frame; null uses the snapshot's. */
+    val heading: (() -> Double)? = null,
 ) {
     /** Set per widget while composing, for hover in the widget's own points. */
     var origin: Offset = Offset.Zero
@@ -115,11 +117,13 @@ fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesCon
         Box(Modifier.fillMaxSize().background(Color.Black))
         live.youtube?.let { v -> YouTubeVideoLayer(video?.first, video?.second ?: 0f) { v() } }
         val solo = layout.solo
+        val fixed = snapshot.minimap.heading
+        val heading: () -> Double = live.heading ?: { fixed }
         if (!layout.clearView && !layout.fullscreen && solo != null && !solo.isBig) {
             val safe = GlassesLayout.safeFrame
             when {
-                solo == HudPanelKind.map -> MapsApp(snapshot.minimap, snapshot.maps, live.mapGround, live.standIn, cursor)
-                solo == HudPanelKind.sky -> SkyApp(snapshot.sky, snapshot.overhead, snapshot.skyView, snapshot.minimap.heading)
+                solo == HudPanelKind.map -> MapsApp(snapshot.minimap, snapshot.maps, live.mapGround, live.standIn, cursor, heading)
+                solo == HudPanelKind.sky -> SkyApp(snapshot.sky, snapshot.overhead, snapshot.skyView, heading)
                 solo == HudPanelKind.youtube && snapshot.youtube.page == HudSnapshot.YouTube.Page.player ->
                     YouTubeFullscreen(snapshot.youtube, live.youtube != null, live.standIn)
                 else -> Box(Modifier.at(safe)) { SoloApp(solo, snapshot, live, cursor?.let { it - safe.topLeft }) }
@@ -192,7 +196,7 @@ fun Widget(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, size
         HudPanelKind.clock -> ClockWidget(snapshot.clock, snapshot.timer)
         HudPanelKind.weather -> WeatherWidget(snapshot.weather)
         HudPanelKind.note -> NoteWidget(snapshot.note)
-        HudPanelKind.map -> MapWidget(snapshot.minimap, live.mapGround, live.standIn)
+        HudPanelKind.map -> MapWidget(snapshot.minimap, live.mapGround, live.standIn, live.heading ?: { snapshot.minimap.heading })
         HudPanelKind.activity -> ActivityWidget(snapshot.activity)
         HudPanelKind.sky -> SkyWidget(snapshot.sky)
         HudPanelKind.music -> MusicWidget(snapshot.music, live.artwork, live.local(snapshot.cursor), size)

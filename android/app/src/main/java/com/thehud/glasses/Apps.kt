@@ -428,12 +428,13 @@ private fun Modifier.mapCard(highlighted: Boolean = false): Modifier {
 
 /** The map held up alone: the whole canvas is the map, with Maps' search and directions over it. */
 @Composable
-fun MapsApp(minimap: HudSnapshot.Minimap, maps: HudSnapshot.Maps, ground: ImageBitmap?, standIn: Boolean, hover: Offset?) {
+fun MapsApp(minimap: HudSnapshot.Minimap, maps: HudSnapshot.Maps, ground: ImageBitmap?, standIn: Boolean, hover: Offset?,
+            heading: () -> Double = { minimap.heading }) {
     val layout = MapsLayout(maps.results.size, maps.navigation != null)
     val hit = hover?.let { layout.hitTest(it) }
     fun hovered(t: MapsLayout.Target, i: Int = 0) = hit?.target == t && hit.index == i
     Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-        Box(Modifier.at(layout.panel)) { MinimapPanel(minimap, ground, standIn, showsHeader = false) }
+        Box(Modifier.at(layout.panel)) { MinimapPanel(minimap, ground, standIn, showsHeader = false, heading = heading) }
         val nav = maps.navigation
         if (nav != null) {
             Row(Modifier.at(layout.turnFrame).mapCard().padding(26.dp), verticalAlignment = Alignment.CenterVertically,

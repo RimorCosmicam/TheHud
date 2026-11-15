@@ -54,7 +54,8 @@ data class LatLon(val lat: Double, val lon: Double) {
  * Where the wearer is, which way the phone faces, and how fast they move. Heading rather than
  * course, as on the iPhone: standing still, a course of nought would snap the map north.
  */
-class LocationProvider(private val context: Context, private val onUpdate: (HudSnapshot.Minimap, LatLon, Location) -> Unit) :
+class LocationProvider(private val context: Context, private val onHeading: (Double) -> Unit = {},
+                       private val onUpdate: (HudSnapshot.Minimap, LatLon, Location) -> Unit) :
     SensorEventListener {
     private var started = false
     private var location: Location? = null
@@ -84,7 +85,7 @@ class LocationProvider(private val context: Context, private val onUpdate: (HudS
             true
         }.getOrDefault(false)
         context.getSystemService(SensorManager::class.java)?.let { s ->
-            s.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { s.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+            s.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { s.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
         }
         Whereabouts(context).last()?.let { location = it; geocode(it); publish() }
     }
@@ -102,8 +103,10 @@ class LocationProvider(private val context: Context, private val onUpdate: (HudS
         var degrees = Math.toDegrees(orientation[0].toDouble())
         location?.let { degrees += GeomagneticField(it.latitude.toFloat(), it.longitude.toFloat(), it.altitude.toFloat(), it.time).declination }
         setHeading(((degrees % 360) + 360) % 360)
+        onHeading(heading)
+        // The rest of the map (place, speed, the compass word) changes slowly: twice a second.
         val now = System.currentTimeMillis()
-        if (now - lastPublish > 100) publish()
+        if (now - lastPublish > 500) publish()
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -115,8 +118,8 @@ class LocationProvider(private val context: Context, private val onUpdate: (HudS
         var delta = degrees - current
         if (delta > 180) delta -= 360
         if (delta < -180) delta += 360
-        // A little smoothing: the rotation vector shivers in the hand.
-        heading += delta * 0.35
+        // A little smoothing against the hand's shiver; the glasses ease the rest every frame.
+        heading += delta * 0.5
     }
 
     private fun geocode(l: Location) {

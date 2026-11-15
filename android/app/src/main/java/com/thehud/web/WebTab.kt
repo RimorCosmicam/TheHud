@@ -9,9 +9,11 @@ import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.ui.geometry.Offset
+import androidx.webkit.UserAgentMetadata
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONArray
@@ -50,7 +52,7 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
         settings.loadWithOverviewMode = true
         settings.setSupportZoom(false)
         // The panel is a desktop's width; phone layouts stretched across it are mostly air.
-        settings.userAgentString = DESKTOP_UA
+        desktop(settings)
         // A white page is the brightest thing the glasses can show, and it blinds.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
@@ -192,7 +194,33 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
 
         private fun setActionButton(e: MotionEvent, button: Int) { runCatching { actionButton?.invoke(e, button) } }
 
-        const val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        /** The engine's real version: sites (Google's sign-in first) refuse a browser that claims an old one. */
+        private val engine: String = runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: "156.0.0.0"
+        private val major = engine.substringBefore('.')
+
+        val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$major.0.0.0 Safari/537.36"
+
+        /**
+         * Desktop Chrome, said the same way everywhere: the user agent, the client hints (which
+         * otherwise still say "Android WebView" on a phone) and no X-Requested-With naming this
+         * app. Google signs a browser in only when all of it agrees.
+         */
+        fun desktop(settings: WebSettings) {
+            desktop(settings)
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) runCatching {
+                fun brand(name: String, version: String) =
+                    UserAgentMetadata.BrandVersion.Builder().setBrand(name).setMajorVersion(version.substringBefore('.'))
+                        .setFullVersion(version).build()
+                WebSettingsCompat.setUserAgentMetadata(settings, UserAgentMetadata.Builder()
+                    .setBrandVersionList(listOf(brand("Google Chrome", engine), brand("Chromium", engine), brand("Not_A Brand", "24.0.0.0")))
+                    .setFullVersion(engine).setPlatform("Linux").setPlatformVersion("").setArchitecture("x86")
+                    .setModel("").setMobile(false).setBitness(64).setWow64(false).build())
+            }
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) runCatching {
+                WebSettingsCompat.setRequestedWithHeaderOriginAllowList(settings, emptySet())
+            }
+        }
     }
 }
 

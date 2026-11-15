@@ -41,6 +41,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -74,9 +75,9 @@ fun Int.grouped(): String = NumberFormat.getIntegerInstance().format(this)
 // ------------------------------------------------------------------ map
 
 @Composable
-fun MapWidget(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Boolean) {
+fun MapWidget(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Boolean, heading: () -> Double = { minimap.heading }) {
     Box(Modifier.fillMaxSize()) {
-        MinimapPanel(minimap, ground, standIn, showsHeader = false)
+        MinimapPanel(minimap, ground, standIn, showsHeader = false, heading = heading)
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = HudTheme.CORNER.dp, topEnd = HudTheme.CORNER.dp))
             .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)))
             .padding(start = 22.dp, end = 22.dp, top = 16.dp, bottom = 30.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -91,14 +92,16 @@ fun MapWidget(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Boole
  * it, the cone, the scale and the north needle on top.
  */
 @Composable
-fun MinimapPanel(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Boolean, showsHeader: Boolean = true) {
+fun MinimapPanel(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Boolean, showsHeader: Boolean = true,
+                 /** Read only while drawing, so turning redraws the map without recomposing it. */
+                 heading: () -> Double = { minimap.heading }) {
     val shape = RoundedCornerShape(HudTheme.CORNER.dp)
     val text = rememberTextMeasurer()
     BoxWithConstraints(Modifier.fillMaxSize().clip(shape).background(Color.Black).border(1.dp, HudTheme.edge, shape)) {
         val ppm = minimap.pointsPerMetre.toFloat()
         if (ground != null) {
             val side = (minimap.effectiveGroundSpan * ppm).toFloat()
-            Box(Modifier.fillMaxSize().rotate(-minimap.heading.toFloat()), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = -heading().toFloat() }, contentAlignment = Alignment.Center) {
                 Box(Modifier.requiredSize(side.dp).offset((-minimap.groundOffsetEast * ppm).toFloat().dp, (minimap.groundOffsetNorth * ppm).toFloat().dp)) {
                     Image(ground, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
                     Canvas(Modifier.fillMaxSize()) { route(minimap, ppm) }
@@ -106,7 +109,7 @@ fun MinimapPanel(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Bo
             }
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
         } else if (standIn) {
-            Canvas(Modifier.fillMaxSize()) { streets(minimap.heading) }
+            Canvas(Modifier.fillMaxSize()) { streets(heading()) }
         } else {
             Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.04f)))
         }
@@ -133,11 +136,12 @@ fun MinimapPanel(minimap: HudSnapshot.Minimap, ground: ImageBitmap?, standIn: Bo
 
             val n = Offset(size.width - 48, size.height - 48)
             drawCircle(Color.White.copy(alpha = 0.22f), 24f, n, style = Stroke(2f))
-            rotate(-minimap.heading.toFloat(), n) {
+            val facing = heading()
+            rotate(-facing.toFloat(), n) {
                 drawPath(Path().apply { moveTo(n.x, n.y - 19); lineTo(n.x - 7, n.y + 3); lineTo(n.x + 7, n.y + 3); close() },
                     Color.White.copy(alpha = 0.85f))
             }
-            val h = text.measure(minimap.headingLabel, HudTheme.mont(14f, color = HudTheme.inkDim))
+            val h = text.measure(com.thehud.core.SkyModel.compass(facing), HudTheme.mont(14f, color = HudTheme.inkDim))
             drawText(h, topLeft = Offset(n.x - h.size.width / 2, n.y + 34 - h.size.height / 2))
         }
     }
