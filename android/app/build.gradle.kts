@@ -32,7 +32,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 
     // The sky's stars, shared with the iPhone app rather than copied.
     sourceSets["main"].assets.srcDir("../../Sources/HudCore/Resources/Sky")

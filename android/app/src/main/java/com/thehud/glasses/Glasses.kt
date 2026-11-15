@@ -143,7 +143,8 @@ object GlassesPresenter {
         val phone = phoneDisplays() + Display.DEFAULT_DISPLAY
         // The cover screen (1 on the Flip 7) is flagged for presentations too: only what comes
         // after the phone's own two screens is the glasses.
-        val candidates = manager.displays.filter { it.displayId >= 2 && it.displayId !in phone && it.state != Display.STATE_OFF }
+        // DeX reports its display to apps as off, so the state is no guide.
+        val candidates = manager.displays.filter { it.displayId >= 2 && it.displayId !in phone }
         return candidates.firstOrNull { it.flags and Display.FLAG_PRESENTATION != 0 } ?: candidates.maxByOrNull { it.displayId }
     }
 

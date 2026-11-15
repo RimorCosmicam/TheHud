@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.outlined.AcUnit
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Dehaze
@@ -414,8 +415,9 @@ private fun Tab(browser: HudSnapshot.Browser, index: Int, count: Int, hovered: B
         Row(Modifier.padding(start = if (several) BrowserMetrics.CLOSE_WIDTH.dp else 16.dp, end = 16.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (active) {
-                val home = browser.url.isEmpty()
-                Icon(if (home) Icons.Rounded.Search else Icons.Rounded.Language, 24f, HudTheme.inkDim)
+                val home = browser.isHome
+                Icon(when { home -> Icons.Rounded.Search; browser.isFavorite -> Icons.Rounded.Star; else -> Icons.Rounded.Language }, 24f,
+                    if (browser.isFavorite && !home) HudTheme.accent else HudTheme.inkDim)
                 Spacer(Modifier.width(12.dp))
                 BasicText(when { home -> "Search or enter website name"; browser.title.isNotEmpty() -> browser.title; else -> browser.url },
                     style = HudTheme.mont(24f, FontWeight.SemiBold, color = HudTheme.ink.copy(alpha = if (home) 0.55f else 0.9f)),

@@ -43,6 +43,7 @@ sealed interface PhoneAction {
     data object Forward : PhoneAction
     data object Reload : PhoneAction
     data object Home : PhoneAction
+    data object Favorite : PhoneAction
     data object Address : PhoneAction
     data object Keyboard : PhoneAction
     data object Settings : PhoneAction
@@ -57,9 +58,32 @@ sealed interface PhoneAction {
     data class SelectTab(val index: Int) : PhoneAction
     data class CloseTab(val index: Int) : PhoneAction
     data object NewTab : PhoneAction
+    data class Pad(val pad: PhonePad) : PhoneAction
+    data class Timer(val action: TimerAction) : PhoneAction
+    data class Note(val action: NoteAction) : PhoneAction
 }
 
 enum class KeyboardTarget { address, page, note }
+
+/** What the lower half of the cover screen is: the touchpad, or the controls of the app shown alone. */
+enum class PhonePad { touchpad, app }
+
+sealed interface TimerAction {
+    data object Toggle : TimerAction
+    data object Reset : TimerAction
+    data class Set(val minutes: Int) : TimerAction
+    data class Add(val minutes: Int) : TimerAction
+}
+
+sealed interface NoteAction {
+    data object Write : NoteAction
+    data object Clear : NoteAction
+    /** Points to roll the note by on the glasses; negative infinity goes back to the top. */
+    data class Scroll(val by: Float) : NoteAction
+}
+
+/** The apps whose controls can take the cover screen's lower half. */
+val HudPanelKind.hasPhoneControls get() = this == HudPanelKind.clock || this == HudPanelKind.note
 
 /**
  * The app's one brain, as on the iPhone: what is on the glasses, where the cursor is, what the
@@ -93,8 +117,13 @@ object HudController {
     var glassesConnected by mutableStateOf(false)
         private set
     var showingSettings by mutableStateOf(false)
+    var pad by mutableStateOf(PhonePad.touchpad)
+        private set
     /** Fingers on the pad, for the halftone to ripple under. */
     val touches = mutableStateListOf<Offset>()
+
+    var favorites by mutableStateOf(HomePage.defaults)
+        private set
 
     val tabs = mutableStateListOf<WebTab>()
     var activeTab by mutableStateOf(0)
@@ -119,6 +148,9 @@ object HudController {
         app = context.applicationContext
         prefs = app.getSharedPreferences("hud", Context.MODE_PRIVATE)
         loadScenes()
+        prefs.getString("favorites", null)?.let {
+            runCatching { json.decodeFromString(ListSerializer(HomePage.Favorite.serializer()), it) }.getOrNull()
+        }?.let { favorites = it }
         snapshot = snapshot.copy(note = HudSnapshot.Note(prefs.getString("note", "") ?: ""))
         tick()
         refreshWeather()
@@ -155,19 +187,20 @@ object HudController {
         main.postDelayed(::tick, 1000L - System.currentTimeMillis() % 1000L)
     }
 
-    private var lastWeather = 0L
+    private val weatherRetry = Runnable { refreshWeather() }
 
+    /** Every fifteen minutes; every minute while there is no location or no answer yet. */
     fun refreshWeather() {
-        if (System.currentTimeMillis() - lastWeather < 15 * 60_000L) return
+        main.removeCallbacks(weatherRetry)
         val where = Whereabouts(app)
-        val location = where.last() ?: return
-        lastWeather = System.currentTimeMillis()
         scope.launch {
+            val location = where.last() ?: where.current()
+            if (location == null) { main.postDelayed(weatherRetry, 60_000L); return@launch }
             val place = where.placeName(location)
-            OpenMeteo.weather(location.latitude, location.longitude, place)?.let { snapshot = snapshot.copy(weather = it) }
-                ?: run { lastWeather = 0L }
+            val weather = OpenMeteo.weather(location.latitude, location.longitude, place)
+            if (weather != null) snapshot = snapshot.copy(weather = weather)
+            main.postDelayed(weatherRetry, if (weather != null) 15 * 60_000L else 60_000L)
         }
-        main.postDelayed({ refreshWeather() }, 15 * 60_000L)
     }
 
     // ------------------------------------------------------------------ scenes
@@ -204,18 +237,22 @@ object HudController {
             PhoneAction.Back -> browser?.back()
             PhoneAction.Forward -> browser?.forward()
             PhoneAction.Reload -> browser?.reload()
-            PhoneAction.Home -> browser?.goHome(HomePage.html(HomePage.defaults))
+            PhoneAction.Home -> browser?.goHome(HomePage.html(favorites))
             PhoneAction.NewTab -> openTab(null)
+            PhoneAction.Favorite -> toggleFavorite()
             PhoneAction.Address -> if (keyboardTarget == KeyboardTarget.address) endTyping() else beginAddress()
             PhoneAction.Keyboard -> if (keyboardTarget != null) endTyping() else beginPageTyping()
             PhoneAction.Settings -> showingSettings = true
-            PhoneAction.ClearView -> { solo = null; clearView = !clearView; panelsChanged() }
+            PhoneAction.ClearView -> { showAlone(null); clearView = !clearView; panelsChanged() }
             is PhoneAction.TapPanel -> {
-                if (solo != null) { solo = null; panelsChanged(); return }
+                if (solo != null) { showAlone(null); panelsChanged(); return }
                 if (clearView) clearView = false
                 arrange(arrangement.toggleHidden(action.kind))
             }
-            is PhoneAction.Solo -> { clearView = false; solo = action.kind; panelsChanged() }
+            is PhoneAction.Solo -> { clearView = false; showAlone(action.kind); panelsChanged() }
+            is PhoneAction.Pad -> pad = action.pad
+            is PhoneAction.Timer -> timerAction(action.action)
+            is PhoneAction.Note -> noteAction(action.action)
             is PhoneAction.Place -> arrange(arrangement.place(action.kind, action.spot))
             is PhoneAction.Scene -> switchScene(action.index)
             is PhoneAction.ResetScene -> {
@@ -229,8 +266,38 @@ object HudController {
         }
     }
 
+    /** Alone on the glasses, an app with controls brings them to the phone; leaving, the pad returns. */
+    private fun showAlone(kind: HudPanelKind?) {
+        solo = kind
+        pad = if (kind?.hasPhoneControls == true) PhonePad.app else PhonePad.touchpad
+    }
+
+    private fun timerAction(action: TimerAction) {
+        val now = System.currentTimeMillis()
+        timer = when (action) {
+            TimerAction.Toggle -> timer.toggle(now)
+            TimerAction.Reset -> timer.reset()
+            is TimerAction.Set -> timer.set(action.minutes)
+            is TimerAction.Add -> timer.add(action.minutes)
+        }
+        snapshot = snapshot.copy(timer = timer.reading(now))
+    }
+
+    private fun noteAction(action: NoteAction) {
+        when (action) {
+            NoteAction.Write -> if (keyboardTarget == KeyboardTarget.note) endTyping() else beginNote()
+            NoteAction.Clear -> {
+                snapshot = snapshot.copy(note = snapshot.note.copy(text = "", scroll = 0f))
+                if (keyboardTarget == KeyboardTarget.note) draft = ""
+                prefs.edit().putString("note", "").apply()
+            }
+            is NoteAction.Scroll -> snapshot = snapshot.copy(note = snapshot.note.copy(
+                scroll = if (action.by == Float.NEGATIVE_INFINITY) 0f else maxOf(snapshot.note.scroll + action.by, 0f)))
+        }
+    }
+
     private fun switchScene(index: Int) {
-        solo = null
+        showAlone(null)
         clearView = false
         sceneIndex = index
         arrange(scenes[index].arrangement)
@@ -249,7 +316,7 @@ object HudController {
         if (keyboardTarget != null) endTyping()
         tabs.add(tab)
         activeTab = tabs.size - 1
-        if (url != null) tab.load(url) else tab.goHome(HomePage.html(HomePage.defaults))
+        if (url != null) tab.load(url) else tab.goHome(HomePage.html(favorites))
         browserChanged()
     }
 
@@ -269,6 +336,17 @@ object HudController {
         browserChanged()
     }
 
+    private fun toggleFavorite() {
+        val s = browser?.state ?: return
+        if (s.isHome) return
+        favorites = if (favorites.any { it.url == s.address }) favorites.filter { it.url != s.address }
+        else favorites + HomePage.Favorite(s.title.ifEmpty { s.url }.take(40), s.address)
+        prefs.edit().putString("favorites", json.encodeToString(ListSerializer(HomePage.Favorite.serializer()), favorites)).apply()
+        browserChanged()
+        // Open start pages show the change.
+        tabs.filter { it.state.isHome }.forEach { it.goHome(HomePage.html(favorites)) }
+    }
+
     private fun tabTitles() = tabs.map { t ->
         val s = t.state
         when { s.isHome -> "New Tab"; s.title.isNotEmpty() -> s.title; s.url.isNotEmpty() -> s.url; else -> "Loading" }
@@ -282,6 +360,7 @@ object HudController {
             url = if (keyboardTarget == KeyboardTarget.address) snapshot.browser.url else s.url,
             title = s.title, canGoBack = s.canGoBack, canGoForward = s.canGoForward, loading = s.loading,
             tabs = tabTitles(), activeTab = activeTab,
+            isHome = s.isHome, isFavorite = !s.isHome && favorites.any { it.url == s.address },
         ))
     }
 

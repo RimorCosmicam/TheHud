@@ -34,6 +34,8 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
         val canGoForward: Boolean = false,
         val loading: Float? = null,
         val isHome: Boolean = true,
+        /** The whole address, for favourites. */
+        val address: String = "",
     )
 
     var state = State()
@@ -82,6 +84,7 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
             canGoForward = view.canGoForward(),
             loading = if (view.progress in 1..99) view.progress / 100f else null,
             isHome = home,
+            address = if (home) "" else url,
         )
         onChange(this)
     }
@@ -115,16 +118,25 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
             0, buttons, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
     }
 
+    /**
+     * A real mouse click: down, button press, button release, up. Chromium reads the button from
+     * the press and release, and ignores a bare down and up from a mouse.
+     */
     fun click(p: Offset, panelWidth: Float, right: Boolean = false) {
         val at = pixels(p, panelWidth)
         val button = if (right) MotionEvent.BUTTON_SECONDARY else MotionEvent.BUTTON_PRIMARY
         val down = SystemClock.uptimeMillis()
         view.requestFocus()
-        listOf(MotionEvent.ACTION_DOWN to button, MotionEvent.ACTION_UP to 0).forEach { (action, buttons) ->
+        fun send(action: Int, buttons: Int, generic: Boolean) {
             val e = mouse(action, at, buttons, down)
-            view.dispatchTouchEvent(e)
+            if (generic) setActionButton(e, button)
+            if (generic) view.dispatchGenericMotionEvent(e) else view.dispatchTouchEvent(e)
             e.recycle()
         }
+        send(MotionEvent.ACTION_DOWN, button, generic = false)
+        send(MotionEvent.ACTION_BUTTON_PRESS, button, generic = true)
+        send(MotionEvent.ACTION_BUTTON_RELEASE, 0, generic = true)
+        send(MotionEvent.ACTION_UP, 0, generic = false)
     }
 
     fun hover(p: Offset, panelWidth: Float) {
@@ -173,12 +185,20 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
     }
 
     companion object {
+        /** The button a press or release is about; settable only by reflection. */
+        private val actionButton = runCatching {
+            MotionEvent::class.java.getMethod("setActionButton", Int::class.javaPrimitiveType)
+        }.getOrNull()
+
+        private fun setActionButton(e: MotionEvent, button: Int) { runCatching { actionButton?.invoke(e, button) } }
+
         const val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 }
 
 /** The start page: favourites as tiles, in the HUD's own look. */
 object HomePage {
+    @kotlinx.serialization.Serializable
     data class Favorite(val title: String, val url: String)
 
     val defaults = listOf(
@@ -189,7 +209,7 @@ object HomePage {
     )
 
     fun html(favorites: List<Favorite>) = buildString {
-        append("""<!doctype html><html><head><meta name="viewport" content="width=device-width">
+        append("""<!doctype html><html><head><meta name="viewport" content="width=device-width"><meta name="color-scheme" content="dark">
 <style>html,body{background:#000;color:#fff;margin:0;font-family:sans-serif}
 .grid{display:flex;flex-wrap:wrap;gap:24px;padding:140px 72px}
 a{display:flex;flex-direction:column;justify-content:flex-end;width:220px;height:150px;padding:22px;box-sizing:border-box;

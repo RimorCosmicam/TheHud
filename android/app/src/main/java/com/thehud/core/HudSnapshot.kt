@@ -58,6 +58,8 @@ data class HudSnapshot(
         val loading: Float? = null,
         val isEditingAddress: Boolean = false,
         val isFullscreen: Boolean = false,
+        val isHome: Boolean = true,
+        val isFavorite: Boolean = false,
     )
 
     enum class TimerState { idle, running, paused, done }

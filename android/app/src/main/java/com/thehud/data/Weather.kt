@@ -94,6 +94,21 @@ class Whereabouts(private val context: Context) {
         }.getOrNull()
     }
 
+    /** A fresh coarse fix, when nothing recent is cached (after a restart, say). */
+    @SuppressLint("MissingPermission")
+    suspend fun current(): Location? {
+        val manager = context.getSystemService(LocationManager::class.java) ?: return null
+        val provider = listOf(LocationManager.FUSED_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+            .firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) } ?: return null
+        return kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+            kotlinx.coroutines.suspendCancellableCoroutine { done ->
+                runCatching {
+                    manager.getCurrentLocation(provider, null, context.mainExecutor) { done.resume(it) { } }
+                }.onFailure { done.resume(null) { } }
+            }
+        }
+    }
+
     @Suppress("DEPRECATION")
     suspend fun placeName(location: Location): String = withContext(Dispatchers.IO) {
         runCatching {
