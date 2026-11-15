@@ -121,6 +121,8 @@ public struct HudSnapshot: Sendable {
         public var isHome: Bool
         /// The current site is one of the favourites.
         public var isFavorite: Bool
+        /// The page asked for fullscreen: the browser has the whole canvas.
+        public var isFullscreen: Bool = false
 
         public init(url: String, title: String, tabs: [String], activeTab: Int,
                     loading: Double? = nil, canGoBack: Bool = true, canGoForward: Bool = false,

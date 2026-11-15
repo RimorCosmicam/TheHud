@@ -32,6 +32,30 @@ public enum BrowserMetrics {
 
     /// Where the page starts when scrolled to the top, so nothing begins hidden under the bar.
     public static var contentTopInset: CGFloat { barInset + barHeight + 10 }
+
+    /// More tabs than this and each one is too narrow to read or hit.
+    public static let maxTabs = 8
+    /// The close mark at the left end of a hovered tab.
+    public static let closeWidth: CGFloat = 52
+
+    /// Where each tab sits along the bar, in the bar's own coordinates.
+    ///
+    /// Back and forward take the left end, new tab and reload the right; the tabs share what is
+    /// between. The active tab gets two shares, as in Safari's compact layout, so its title stays
+    /// readable however many others there are. One tab takes the whole middle.
+    public static func tabSegments(barWidth: CGFloat, count: Int, active: Int)
+        -> [(x: CGFloat, width: CGFloat)] {
+        let left = buttonWidth * 2
+        let middle = max(barWidth - buttonWidth * 4, 0)
+        guard count > 1 else { return [(left, middle)] }
+        let unit = middle / CGFloat(count + 1)
+        var x = left
+        return (0..<count).map { index in
+            let width = unit * (index == active ? 2 : 1)
+            defer { x += width }
+            return (x, width)
+        }
+    }
 }
 
 /// What a click on the canvas landed on.
@@ -40,6 +64,9 @@ public enum GlassesHitTarget: Equatable, Sendable {
     case forward
     case reload
     case address
+    case newTab
+    case selectTab(Int)
+    case closeTab(Int)
     /// A point inside the page, in the web view's own coordinates.
     case page(CGPoint)
     case none
@@ -56,9 +83,18 @@ public struct GlassesLayout: Sendable {
     public static let gap: CGFloat = 24
 
     public var visible: Set<HudPanelKind>
+    public var tabCount: Int
+    public var activeTab: Int
+    /// A video (or any page element) has asked for fullscreen: the browser is the whole canvas,
+    /// with no bar and no panels.
+    public var fullscreen: Bool
 
-    public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases)) {
+    public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
+                tabCount: Int = 1, activeTab: Int = 0, fullscreen: Bool = false) {
         self.visible = visible
+        self.fullscreen = fullscreen && visible.contains(.browser)
+        self.tabCount = max(tabCount, 1)
+        self.activeTab = activeTab
     }
 
     /// The clock, weather and map share one column beside the browser.
@@ -66,6 +102,7 @@ public struct GlassesLayout: Sendable {
 
     public var browserFrame: CGRect? {
         guard visible.contains(.browser) else { return nil }
+        if fullscreen { return CGRect(origin: .zero, size: HudTheme.glassesSize) }
         let inset = HudTheme.safeInset
         let canvas = HudTheme.glassesSize
         let x = inset + (hasColumn ? Self.columnWidth + Self.gap : 0)
@@ -79,7 +116,7 @@ public struct GlassesLayout: Sendable {
 
     /// The glass bar.
     public var barFrame: CGRect? {
-        guard let frame = browserFrame else { return nil }
+        guard !fullscreen, let frame = browserFrame else { return nil }
         let inset = BrowserMetrics.barInset
         return CGRect(x: frame.minX + inset, y: frame.minY + inset,
                       width: frame.width - inset * 2, height: BrowserMetrics.barHeight)
@@ -91,6 +128,15 @@ public struct GlassesLayout: Sendable {
         return bar.contains(point)
     }
 
+    /// The tab under a point, if it is on the strip.
+    public func tab(at point: CGPoint?) -> Int? {
+        guard let point, let bar = barFrame, bar.contains(point) else { return nil }
+        let x = point.x - bar.minX
+        let segments = BrowserMetrics.tabSegments(barWidth: bar.width, count: tabCount,
+                                                  active: activeTab)
+        return segments.firstIndex { x >= $0.x && x < $0.x + $0.width }
+    }
+
     public func hitTest(_ point: CGPoint) -> GlassesHitTarget {
         guard let frame = browserFrame, frame.contains(point) else { return .none }
 
@@ -100,7 +146,17 @@ public struct GlassesLayout: Sendable {
             if x < button { return .back }
             if x < button * 2 { return .forward }
             if x >= bar.width - button { return .reload }
-            return .address
+            if x >= bar.width - button * 2 { return .newTab }
+
+            let segments = BrowserMetrics.tabSegments(barWidth: bar.width, count: tabCount,
+                                                      active: activeTab)
+            guard let index = segments.firstIndex(where: { x >= $0.x && x < $0.x + $0.width })
+            else { return .none }
+            // With one tab there is nothing to close it into.
+            if tabCount > 1, x < segments[index].x + BrowserMetrics.closeWidth {
+                return .closeTab(index)
+            }
+            return index == activeTab ? .address : .selectTab(index)
         }
 
         return .page(CGPoint(x: point.x - frame.minX, y: point.y - frame.minY))

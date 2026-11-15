@@ -24,12 +24,15 @@ public struct BrowserPanel: View {
     public var standIn: Bool
     /// The cursor is on the bar.
     public var hovering: Bool
+    /// The tab the cursor is over, which shows its close mark.
+    public var hoveredTab: Int?
     /// A real backdrop blur. Off for stills: `ImageRenderer` cannot sample what is behind a
     /// material, so the preview gets a tinted stand-in with the same weight.
     public var liveGlass: Bool
 
     public init(_ browser: HudSnapshot.Browser, content: AnyView? = nil, standIn: Bool = true,
-                hovering: Bool = false, liveGlass: Bool = false) {
+                hovering: Bool = false, hoveredTab: Int? = nil, liveGlass: Bool = false) {
+        self.hoveredTab = hoveredTab
         self.browser = browser
         self.content = content
         self.standIn = standIn
@@ -42,50 +45,70 @@ public struct BrowserPanel: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            Group {
-                if let content {
-                    content
-                } else if standIn {
-                    PageStandIn()
-                } else {
-                    Color.black
-                }
+        if browser.isFullscreen {
+            // The page's own fullscreen: nothing of ours on top of it, edge to edge.
+            page.background(Color.black)
+        } else {
+            ZStack(alignment: .top) {
+                page
+                bar
+                    .padding(.horizontal, BrowserMetrics.barInset)
+                    .padding(.top, BrowserMetrics.barInset)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            bar
-                .padding(.horizontal, BrowserMetrics.barInset)
-                .padding(.top, BrowserMetrics.barInset)
+            .background(Color.black)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(.white.opacity(0.10), lineWidth: 1.5))
         }
-        .background(Color.black)
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(.white.opacity(0.10), lineWidth: 1.5))
+    }
+
+    private var page: some View {
+        Group {
+            if let content {
+                content
+            } else if standIn {
+                PageStandIn()
+            } else {
+                Color.black
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // ------------------------------------------------------------------ bar
 
     private var showsButtons: Bool { hovering && !browser.isEditingAddress }
+    private var tabCount: Int { max(browser.tabs.count, 1) }
 
     private var bar: some View {
-        ZStack {
-            if browser.isEditingAddress {
-                field
-            } else {
-                titleLabel
-                    // Room for the buttons either side, so they fade in over empty glass
-                    // rather than on top of the words.
-                    .padding(.horizontal, BrowserMetrics.buttonWidth * 2)
-            }
+        GeometryReader { geometry in
+            let button = BrowserMetrics.buttonWidth
+            let segments = BrowserMetrics.tabSegments(barWidth: geometry.size.width,
+                                                      count: tabCount,
+                                                      active: browser.activeTab)
+            ZStack(alignment: .topLeading) {
+                if browser.isEditingAddress {
+                    field
+                        .frame(width: max(geometry.size.width - button * 4, 0),
+                               height: BrowserMetrics.barHeight)
+                        .offset(x: button * 2)
+                } else {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                        tab(index, width: segment.width)
+                            .offset(x: segment.x)
+                    }
+                }
 
-            HStack(spacing: 0) {
-                navIcon("chevron.left", enabled: browser.canGoBack)
-                navIcon("chevron.right", enabled: browser.canGoForward)
-                Spacer(minLength: 0)
-                navIcon(browser.loading == nil ? "arrow.clockwise" : "xmark", enabled: true)
+                HStack(spacing: 0) {
+                    navIcon("chevron.left", enabled: browser.canGoBack)
+                    navIcon("chevron.right", enabled: browser.canGoForward)
+                    Spacer(minLength: 0)
+                    navIcon("plus", enabled: tabCount < BrowserMetrics.maxTabs)
+                    navIcon(browser.loading == nil ? "arrow.clockwise" : "xmark", enabled: true)
+                }
+                .frame(width: geometry.size.width, height: BrowserMetrics.barHeight)
+                .opacity(showsButtons ? 1 : 0)
+                .animation(.easeOut(duration: 0.18), value: showsButtons)
             }
-            .opacity(showsButtons ? 1 : 0)
-            .animation(.easeOut(duration: 0.18), value: showsButtons)
         }
         .frame(height: BrowserMetrics.barHeight)
         .background { glass }
@@ -97,6 +120,48 @@ public struct BrowserPanel: View {
                                startPoint: .top, endPoint: .bottom),
                 lineWidth: 1.5))
         .shadow(color: .black.opacity(0.55), radius: 20, y: 8)
+    }
+
+    /// One tab. The active one is the page's title (or the start page's invitation to type);
+    /// the others are dimmer, and whichever the cursor is on shows its close mark.
+    private func tab(_ index: Int, width: CGFloat) -> some View {
+        let active = index == browser.activeTab
+        let several = tabCount > 1
+        let showsClose = several && hoveredTab == index
+
+        return ZStack(alignment: .leading) {
+            if several && active {
+                Capsule().fill(.white.opacity(0.11))
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 4)
+            }
+            if several && !active && index > 0 && index - 1 != browser.activeTab {
+                Rectangle().fill(.white.opacity(0.14)).frame(width: 1, height: 26)
+            }
+
+            Group {
+                if active {
+                    titleLabel
+                } else {
+                    Text(index < browser.tabs.count ? browser.tabs[index] : "")
+                        .font(HudTheme.mont(20, .semibold))
+                        .foregroundStyle(HudTheme.ink.opacity(hoveredTab == index ? 0.85 : 0.5))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.leading, several ? BrowserMetrics.closeWidth : 16)
+            .padding(.trailing, 16)
+            .frame(width: width, alignment: several ? .leading : .center)
+
+            if showsClose {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(HudTheme.ink.opacity(0.8))
+                    .frame(width: BrowserMetrics.closeWidth)
+            }
+        }
+        .frame(width: width, height: BrowserMetrics.barHeight)
+        .animation(.easeOut(duration: 0.15), value: showsClose)
     }
 
     @ViewBuilder

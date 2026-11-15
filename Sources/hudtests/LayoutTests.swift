@@ -120,3 +120,54 @@ func runHomePageTests() {
         expect(!html.contains("<b>Bad</b>"))
     }
 }
+
+func runTabTests() {
+    print("\nTabs")
+
+    let three = GlassesLayout(tabCount: 3, activeTab: 1)
+    let bar = three.barFrame!
+    let segments = BrowserMetrics.tabSegments(barWidth: bar.width, count: 3, active: 1)
+
+    test("tabs fill the middle, the active one twice as wide") {
+        let middle = bar.width - BrowserMetrics.buttonWidth * 4
+        expectEqual(segments.count, 3)
+        expectEqual(segments[0].x, BrowserMetrics.buttonWidth * 2)
+        expect(abs(segments.map(\.width).reduce(0, +) - middle) < 0.001, "no gaps, no overlap")
+        expect(abs(segments[1].width - segments[0].width * 2) < 0.001)
+    }
+
+    test("one tab takes the whole middle and cannot be closed") {
+        let one = GlassesLayout()
+        let b = one.barFrame!
+        let left = b.minX + BrowserMetrics.buttonWidth * 2 + 5
+        expectEqual(one.hitTest(CGPoint(x: left, y: b.midY)), .address)
+    }
+
+    test("click a tab to switch, its left end to close, the active one to type") {
+        let y = bar.midY
+        let first = bar.minX + segments[0].x
+        let third = bar.minX + segments[2].x
+        let active = bar.minX + segments[1].x
+        expectEqual(three.hitTest(CGPoint(x: first + segments[0].width - 10, y: y)), .selectTab(0))
+        expectEqual(three.hitTest(CGPoint(x: third + 10, y: y)), .closeTab(2))
+        expectEqual(three.hitTest(CGPoint(x: active + segments[1].width / 2, y: y)), .address)
+        expectEqual(three.tab(at: CGPoint(x: active + 5, y: y)), 1)
+    }
+
+    test("new tab sits just left of reload") {
+        let x = bar.maxX - BrowserMetrics.buttonWidth * 1.5
+        expectEqual(three.hitTest(CGPoint(x: x, y: bar.midY)), .newTab)
+    }
+
+    test("fullscreen: the whole canvas is page, no bar") {
+        let full = GlassesLayout(tabCount: 2, activeTab: 0, fullscreen: true)
+        expect(full.barFrame == nil)
+        expectEqual(full.hitTest(CGPoint(x: 100, y: 50)), .page(CGPoint(x: 100, y: 50)))
+        expectEqual(full.hitTest(CGPoint(x: 1900, y: 1070)), .page(CGPoint(x: 1900, y: 1070)))
+    }
+
+    test("fullscreen needs the browser on") {
+        let none = GlassesLayout(visible: [.clock], fullscreen: true)
+        expect(!none.fullscreen)
+    }
+}

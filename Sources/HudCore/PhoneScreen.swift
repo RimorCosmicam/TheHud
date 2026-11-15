@@ -121,6 +121,8 @@ struct StatusBar: View {
 /// What the phone's buttons can ask for. One enum so the app and the stills share the bar.
 public enum PhoneAction: Sendable {
     case back, forward, reload, home, favorite, address, keyboard, settings
+    case newTab, fullscreen
+    case selectTab(Int), closeTab(Int)
     case toggle(HudPanelKind)
 }
 
@@ -268,13 +270,22 @@ public struct SystemKeyboardStandIn: View {
 public struct SettingsArea: View {
     public var visible: Set<HudPanelKind>
     public var glassesConnected: Bool
+    public var tabs: [String]
+    public var activeTab: Int
+    public var fullscreen: Bool
     public var action: (PhoneAction) -> Void
 
     public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
                 glassesConnected: Bool = true,
+                tabs: [String] = ["New Tab"],
+                activeTab: Int = 0,
+                fullscreen: Bool = false,
                 action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.visible = visible
         self.glassesConnected = glassesConnected
+        self.tabs = tabs
+        self.activeTab = activeTab
+        self.fullscreen = fullscreen
         self.action = action
     }
 
@@ -298,11 +309,94 @@ public struct SettingsArea: View {
                     tile(kind)
                 }
             }
+
+            HStack {
+                Text("TABS").hudLabel()
+                Spacer()
+                Button { action(.fullscreen) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: fullscreen
+                              ? "arrow.down.right.and.arrow.up.left"
+                              : "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 12, weight: .bold))
+                        Text(fullscreen ? "EXIT FULLSCREEN" : "FULLSCREEN")
+                            .font(HudTheme.mont(9, .black)).tracking(1.5)
+                    }
+                    .foregroundStyle(fullscreen ? HudTheme.accent : HudTheme.inkDim)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+
+            tabStrip
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .top)
         .background(.black)
+    }
+
+    /// The glasses' tabs, as chips: tap to switch, the cross to close, the last chip for a new
+    /// one. Steering the cursor onto a tab works too; this is the quick way.
+    private var tabStrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(tabs.enumerated()), id: \.offset) { index, title in
+                        tabChip(index, title)
+                            .id(index)
+                    }
+                    Button { action(.newTab) } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(HudTheme.ink)
+                            .frame(width: 44, height: 44)
+                            .background(HudTheme.surface)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(tabs.count >= BrowserMetrics.maxTabs)
+                }
+            }
+            .onChange(of: activeTab) { _, index in
+                withAnimation { proxy.scrollTo(index, anchor: .center) }
+            }
+        }
+    }
+
+    private func tabChip(_ index: Int, _ title: String) -> some View {
+        let active = index == activeTab
+        return HStack(spacing: 0) {
+            Button { action(.selectTab(index)) } label: {
+                Text(title)
+                    .font(HudTheme.mont(12, .semibold))
+                    .lineLimit(1)
+                    .frame(maxWidth: 150, alignment: .leading)
+                    .padding(.leading, 12)
+                    .frame(height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if tabs.count > 1 {
+                Button { action(.closeTab(index)) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 36, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 12, height: 44)
+            }
+        }
+        .foregroundStyle(active ? HudTheme.ink : HudTheme.inkDim)
+        .background(active ? Color.white.opacity(0.10) : HudTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(active ? HudTheme.accent : .clear).frame(height: 2)
+        }
     }
 
     private func tile(_ kind: HudPanelKind) -> some View {
@@ -371,7 +465,8 @@ public struct PhoneScreen: View {
             // collapses rather than leaving a clipped sliver of a heading behind.
             let settings = max(0, PhoneMetrics.settingsHeight(keyboard: keyboardHeight))
             if settings >= 44 {
-                SettingsArea(visible: [.browser, .map, .clock])
+                SettingsArea(visible: [.browser, .map, .clock],
+                             tabs: ["YouTube", "Google", "Xreal Air 2 Ultra"], activeTab: 0)
                     .frame(height: settings, alignment: .top).clipped()
             } else {
                 Color.black.frame(height: settings)

@@ -35,13 +35,19 @@ public struct GlassesScreen: View {
         self.placeholders = placeholders
     }
 
-    private var layout: GlassesLayout { GlassesLayout(visible: visible) }
+    private var layout: GlassesLayout {
+        GlassesLayout(visible: visible, tabCount: snapshot.browser.tabs.count,
+                      activeTab: snapshot.browser.activeTab,
+                      fullscreen: snapshot.browser.isFullscreen)
+    }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black
 
-            if visible.contains(.browser) {
+            if layout.fullscreen {
+                browserPanel
+            } else if visible.contains(.browser) {
                 browserLayout
             } else {
                 glanceLayout
@@ -57,6 +63,12 @@ public struct GlassesScreen: View {
 
     private func minimap() -> MinimapPanel {
         MinimapPanel(snapshot.minimap, ground: mapGround, proceduralGround: placeholders)
+    }
+
+    private var browserPanel: BrowserPanel {
+        BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders,
+                     hovering: layout.isOverBar(snapshot.cursor),
+                     hoveredTab: layout.tab(at: snapshot.cursor), liveGlass: liveGlass)
     }
 
     private var browserLayout: some View {
@@ -76,8 +88,7 @@ public struct GlassesScreen: View {
                 .frame(width: GlassesLayout.columnWidth)
             }
 
-            BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders,
-                         hovering: layout.isOverBar(snapshot.cursor), liveGlass: liveGlass)
+            browserPanel
         }
         .padding(HudTheme.safeInset)
     }

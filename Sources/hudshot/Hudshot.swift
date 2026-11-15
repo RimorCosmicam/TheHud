@@ -81,6 +81,24 @@ struct Hudshot {
                                 browserContent: AnyView(PageStandIn(scrolled: 150))),
                   to: outDir, "glasses-hover", scale: 1)
 
+        // Three tabs, the cursor on an inactive one: its close mark is up, the buttons are out.
+        var tabbed = HudSnapshot(cursor: nil)
+        tabbed.browser.tabs = ["YouTube", "UIKit | Apple Developer Documentation",
+                               "xreal air 2 ultra - Google Search"]
+        tabbed.browser.activeTab = 1
+        let tabLayout = GlassesLayout(tabCount: 3, activeTab: 1)
+        let tabBar = tabLayout.barFrame!
+        let segments = BrowserMetrics.tabSegments(barWidth: tabBar.width, count: 3, active: 1)
+        tabbed.cursor = CGPoint(x: tabBar.minX + segments[2].x + 120, y: tabBar.midY)
+        try write(GlassesScreen(snapshot: tabbed), to: outDir, "glasses-tabs", scale: 1)
+
+        // Fullscreen: the page has the canvas, nothing of ours on it.
+        var full = HudSnapshot(cursor: nil)
+        full.browser.isFullscreen = true
+        try write(GlassesScreen(snapshot: full,
+                                browserContent: AnyView(FullscreenStandIn())),
+                  to: outDir, "glasses-fullscreen", scale: 1)
+
         // The start page, drawn by WebKit from the same HTML the phone serves.
         var editing = HudSnapshot(cursor: nil)
         editing.browser.isEditingAddress = true
@@ -170,6 +188,33 @@ struct Hudshot {
         }
         print("live map: \(ground.map { "\($0.width)x\($0.height)" } ?? "none")")
         return (snapshot, ground.map { Image(decorative: $0, scale: 2) })
+    }
+
+    /// A video frame's worth of stand-in, for the fullscreen still.
+    struct FullscreenStandIn: View {
+        var body: some View {
+            ZStack(alignment: .bottomLeading) {
+                LinearGradient(colors: [Color(red: 0.16, green: 0.12, blue: 0.05), .black],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                Image(systemName: "play.fill")
+                    .font(.system(size: 120))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 18) {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.3))
+                            Capsule().fill(Color.red).frame(width: g.size.width * 0.34)
+                        }
+                    }
+                    .frame(height: 6)
+                    Text("12:41 / 37:02")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .padding(48)
+            }
+        }
     }
 
     /// The start page through a real WebKit, at the size the browser panel gives it. Favicons

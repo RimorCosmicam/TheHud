@@ -36,7 +36,13 @@ final class HudController: ObservableObject {
     /// page it is a proxy that is diffed into insertions and deletions.
     @Published private(set) var draft = ""
 
-    let browser = WebBrowser()
+    /// One web view per tab, so each keeps its page, scroll position and history.
+    private(set) var tabs: [WebBrowser] = []
+    @Published private(set) var activeTab = 0
+    var browser: WebBrowser { tabs[activeTab] }
+
+    private var cursorHideTimer: Timer?
+    private var lastHover: Date = .distantPast
 
     // Real data. Each panel degrades on its own: no calendar access drops one line, no location
     // leaves the map blank, a failed weather fetch keeps the last reading. None of them can take
@@ -87,8 +93,7 @@ final class HudController: ObservableObject {
         snapshot.clock = .now()
         loadSettings()
 
-        browser.onChange = { [weak self] state in self?.browserChanged(state) }
-        browser.homeHTML = { [weak self] in HomePage.html(self?.favorites ?? Favorite.defaults) }
+        tabs = [makeTab()]
     }
 
     private static let visibleKey = "visiblePanels"
@@ -184,8 +189,76 @@ final class HudController: ObservableObject {
 
     // ------------------------------------------------------------------ browser
 
+    private func makeTab() -> WebBrowser {
+        let tab = WebBrowser()
+        tab.homeHTML = { [weak self] in HomePage.html(self?.favorites ?? Favorite.defaults) }
+        tab.onChange = { [weak self, weak tab] state in
+            guard let self, let tab else { return }
+            if tab === self.browser {
+                self.browserChanged(state)
+            } else {
+                self.snapshot.browser.tabs = self.tabTitles
+            }
+        }
+        tab.onOpenInNewTab = { [weak self] request in
+            guard let self, let url = request.url else { return }
+            self.openTab(url)
+        }
+        return tab
+    }
+
+    private var tabTitles: [String] {
+        tabs.map { tab in
+            let state = tab.state
+            if state.isHome { return "New Tab" }
+            return state.title.isEmpty ? (state.url.isEmpty ? "Loading" : state.url) : state.title
+        }
+    }
+
+    /// A new tab, at the start page with the address field open as Safari does, or at a link.
+    func openTab(_ url: URL? = nil) {
+        guard tabs.count < BrowserMetrics.maxTabs else {
+            if let url { browser.load(url) }
+            return
+        }
+        if keyboardTarget != nil { endTyping() }
+        tabs.append(makeTab())
+        activeTab = tabs.count - 1
+        if let url {
+            browser.load(url)
+        } else {
+            browser.goHome()
+            beginAddressEditing()
+        }
+        browserChanged(browser.state)
+    }
+
+    func selectTab(_ index: Int) {
+        guard tabs.indices.contains(index), index != activeTab else { return }
+        if keyboardTarget != nil { endTyping() }
+        activeTab = index
+        browserChanged(browser.state)
+    }
+
+    func closeTab(_ index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        if keyboardTarget != nil { endTyping() }
+        let closing = tabs.remove(at: index)
+        closing.webView.removeFromSuperview()
+        if tabs.isEmpty {
+            tabs = [makeTab()]
+            activeTab = 0
+            browser.goHome()
+        } else if index < activeTab || activeTab >= tabs.count {
+            activeTab = max(activeTab - 1, 0)
+        }
+        browserChanged(browser.state)
+    }
+
     private func browserChanged(_ state: WebBrowser.State) {
         var browser = snapshot.browser
+        if browser.isFullscreen && !state.isFullscreen { snapshot.cursor = pointer.position }
+        browser.isFullscreen = state.isFullscreen
         browser.isHome = state.isHome
         browser.isFavorite = !state.isHome && favorites.contains {
             $0.site == Favorite.site(of: state.absoluteURL)
@@ -195,9 +268,8 @@ final class HudController: ObservableObject {
         browser.canGoBack = state.canGoBack
         browser.canGoForward = state.canGoForward
         browser.loading = state.loading
-        // One tab for now: it carries the page's title.
-        browser.tabs = [state.title.isEmpty ? "New tab" : state.title]
-        browser.activeTab = 0
+        browser.tabs = tabTitles
+        browser.activeTab = activeTab
         snapshot.browser = browser
     }
 
@@ -208,6 +280,10 @@ final class HudController: ObservableObject {
         case .forward: browser.forward()
         case .reload: browser.reload()
         case .home: browser.goHome()
+        case .newTab: openTab()
+        case let .selectTab(index): selectTab(index)
+        case let .closeTab(index): closeTab(index)
+        case .fullscreen: browser.toggleFullscreen()
         case .favorite: toggleFavorite()
         case .address: keyboardTarget == .address ? endTyping() : beginAddressEditing()
         case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
@@ -252,16 +328,22 @@ final class HudController: ObservableObject {
         return title.count > 18 ? (site.split(separator: ".").first.map(String.init)?.capitalized ?? title) : title
     }
 
-    private var layout: GlassesLayout { GlassesLayout(visible: visible) }
+    private var layout: GlassesLayout {
+        GlassesLayout(visible: visible, tabCount: tabs.count, activeTab: activeTab,
+                      fullscreen: snapshot.browser.isFullscreen)
+    }
 
     /// A left click wherever the cursor is. The glasses take no touches, so this is arithmetic
-    /// against the layout the canvas was drawn with.
+    /// against the layout the canvas was drawn with. The pointer's own position, not the drawn
+    /// cursor, which hides itself over a fullscreen video.
     private func click() {
-        guard let cursor = snapshot.cursor else { return }
-        switch layout.hitTest(cursor) {
+        switch layout.hitTest(pointer.position) {
         case .back: browser.back()
         case .forward: browser.forward()
         case .reload: browser.reload()
+        case .newTab: openTab()
+        case let .selectTab(index): selectTab(index)
+        case let .closeTab(index): closeTab(index)
         case .address: beginAddressEditing()
         case let .page(point):
             if keyboardTarget == .address { endTyping() }
@@ -277,7 +359,7 @@ final class HudController: ObservableObject {
     private func scrollPage(_ ticks: Int) {
         guard ticks != 0, let content = layout.contentFrame else { return }
         let point: CGPoint
-        if let cursor = snapshot.cursor, case let .page(p) = layout.hitTest(cursor) {
+        if case let .page(p) = layout.hitTest(pointer.position) {
             point = p
         } else {
             point = CGPoint(x: content.width / 2, y: content.height / 2)
@@ -403,13 +485,38 @@ final class HudController: ObservableObject {
 
         switch event {
         case let .scrollFling(vx, vy): startMomentum(vx: vx, vy: vy)
-        case .move: momentum.stop()
+        case .move:
+            momentum.stop()
+            pointerMoved()
         case .tapClick: click()
         default: break
         }
 
         scrollPage(pointer.drainScroll())
         snapshot.cursor = pointer.position
+        scheduleCursorHide()
+    }
+
+    /// Mouse movement reaches the page, a few dozen times a second rather than on every
+    /// sample: enough for hover menus and for video controls to wake, without flooding WebKit.
+    private func pointerMoved() {
+        guard Date().timeIntervalSince(lastHover) > 0.05,
+              case let .page(point) = layout.hitTest(pointer.position) else { return }
+        lastHover = Date()
+        browser.hover(at: point)
+    }
+
+    /// Over a fullscreen video the cursor gets out of the way once it stops, as it does on a
+    /// desktop. Anywhere else it stays: it is the only way to know where a click will land.
+    private func scheduleCursorHide() {
+        cursorHideTimer?.invalidate()
+        guard snapshot.browser.isFullscreen else { return }
+        cursorHideTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.snapshot.browser.isFullscreen else { return }
+                self.snapshot.cursor = nil
+            }
+        }
     }
 
     /// MiniMate ran the fling on a coroutine. A timer is the same shape; the scroller itself is
