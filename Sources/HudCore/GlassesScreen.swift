@@ -17,14 +17,18 @@ public struct GlassesScreen: View {
 
     public var snapshot: HudSnapshot
     public var mode: Mode
-    public var browserContent: Image?
+    public var browserContent: AnyView?
+    /// The map raster, when one has arrived.
+    public var mapGround: Image?
 
     public init(snapshot: HudSnapshot = HudSnapshot(),
                 mode: Mode = .browser,
-                browserContent: Image? = nil) {
+                browserContent: AnyView? = nil,
+                mapGround: Image? = nil) {
         self.snapshot = snapshot
         self.mode = mode
         self.browserContent = browserContent
+        self.mapGround = mapGround
     }
 
     private static let columnWidth: CGFloat = 470
@@ -52,7 +56,7 @@ public struct GlassesScreen: View {
             VStack(spacing: Self.gap) {
                 ClockPanel(snapshot.clock)
                 WeatherPanel(snapshot.weather)
-                MinimapPanel(snapshot.minimap).frame(maxHeight: .infinity)
+                MinimapPanel(snapshot.minimap, ground: mapGround).frame(maxHeight: .infinity)
             }
             .frame(width: Self.columnWidth)
 
@@ -68,7 +72,7 @@ public struct GlassesScreen: View {
             VStack(alignment: .leading, spacing: Self.gap) {
                 ClockPanel(snapshot.clock).frame(width: 620)
                 Spacer(minLength: 0)
-                MinimapPanel(snapshot.minimap).frame(width: 520, height: 340)
+                MinimapPanel(snapshot.minimap, ground: mapGround).frame(width: 520, height: 340)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 

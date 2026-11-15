@@ -70,7 +70,10 @@ struct GlassesHost: View {
             let canvas = HudTheme.glassesSize
             let scale = min(geometry.size.width / canvas.width,
                             geometry.size.height / canvas.height)
-            GlassesScreen(snapshot: controller.snapshot, mode: controller.mode)
+            GlassesScreen(snapshot: controller.snapshot,
+                          mode: controller.mode,
+                          browserContent: controller.browserContent,
+                          mapGround: controller.mapGround)
                 .scaleEffect(scale)
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }

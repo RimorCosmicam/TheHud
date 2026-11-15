@@ -97,13 +97,18 @@ public struct WeatherPanel: View {
 
 /// A moving map.
 ///
-/// The streets are drawn procedurally here so the preview needs no network and CI stays
-/// deterministic. In the app this same panel takes an `MKMapSnapshotter` raster underneath and
-/// keeps every overlay below — the route, the heading cone, the scale and the north mark — so the
-/// chrome is identical either way.
+/// `ground` is an `MKMapSnapshotter` raster when one has arrived. Without it the streets are
+/// drawn procedurally, which keeps the preview working offline and CI deterministic. Either way
+/// the overlays above are the same — the route, the heading cone, the scale and the north mark —
+/// so a slow or failed snapshot costs detail, not the panel.
 public struct MinimapPanel: View {
     public var minimap: HudSnapshot.Minimap
-    public init(_ minimap: HudSnapshot.Minimap) { self.minimap = minimap }
+    public var ground: Image?
+
+    public init(_ minimap: HudSnapshot.Minimap, ground: Image? = nil) {
+        self.minimap = minimap
+        self.ground = ground
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -119,7 +124,18 @@ public struct MinimapPanel: View {
 
             GeometryReader { geometry in
                 ZStack {
-                    streets(size: geometry.size)
+                    if let ground {
+                        ground.resizable().aspectRatio(contentMode: .fill)
+                        // The snapshot is brighter than the rest of the HUD, and on a birdbath
+                        // display brightness is what you see through. Knock it back.
+                        Color.black.opacity(0.45)
+                    } else {
+                        streets(size: geometry.size)
+                        // The route is decorative, and only honest over decorative streets. Over
+                        // a real map a made-up line cuts through real buildings, so it waits
+                        // until there is actual routing to draw.
+                        route(size: geometry.size)
+                    }
                     marks(size: geometry.size)
                 }
                 // Canvas does not clip to its own bounds, and the street grid is deliberately
@@ -179,7 +195,13 @@ public struct MinimapPanel: View {
                 context.stroke(horizontal, with: .color(.white.opacity(alpha)), lineWidth: weight)
             }
 
-            // The route, in the accent, so it is the only coloured thing on the canvas.
+        }
+    }
+
+    /// The route, in the accent, so it is the only coloured thing on the panel.
+    private func route(size: CGSize) -> some View {
+        Canvas { context, size in
+            context.translateBy(x: size.width / 2, y: size.height / 2)
             var route = Path()
             route.move(to: CGPoint(x: -260, y: 300))
             route.addCurve(to: CGPoint(x: -40, y: 40),

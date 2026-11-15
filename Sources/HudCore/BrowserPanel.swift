@@ -13,9 +13,11 @@ import CoreGraphics
 /// wearable. The app forces a dark colour scheme and offers reader mode for pages that fight it.
 public struct BrowserPanel: View {
     public var browser: HudSnapshot.Browser
-    public var content: Image?
+    /// The live `WKWebView` on the device, a still in the preview, nothing at all before the
+    /// first page loads. Type-erased because those are genuinely different views.
+    public var content: AnyView?
 
-    public init(_ browser: HudSnapshot.Browser, content: Image? = nil) {
+    public init(_ browser: HudSnapshot.Browser, content: AnyView? = nil) {
         self.browser = browser
         self.content = content
     }
@@ -27,7 +29,7 @@ public struct BrowserPanel: View {
             Divider().overlay(.white.opacity(0.12))
             Group {
                 if let content {
-                    content.resizable().aspectRatio(contentMode: .fill)
+                    content
                 } else {
                     PageStandIn()
                 }

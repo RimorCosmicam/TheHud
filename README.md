@@ -52,6 +52,39 @@ brew install xcodegen && xcodegen
 This machine has no Xcode, so CI is the first place the app is compiled at all. See the note in
 `Scenes.swift` about the scene-accessory registration iOS 27 may require.
 
+## Where the data comes from
+
+| Panel | Source | Needs |
+|---|---|---|
+| Clock | Foundation | nothing |
+| Next event | EventKit | one permission prompt |
+| Weather | Open-Meteo | network |
+| Minimap ground | MKMapSnapshotter | network, location |
+| Position, heading, speed | CoreLocation | one permission prompt |
+| Browser | WKWebView | network |
+
+Each panel degrades on its own. No calendar access drops one line, no location leaves the map
+blank, a failed weather fetch keeps the last reading — none of them can take the HUD down.
+
+**Weather is Open-Meteo, not WeatherKit, and that is a trade.** WeatherKit is the native option
+but needs a paid Apple Developer account, an App ID with the capability, an entitlement and
+display attribution; none of which a free account or an unsigned CI build has. Open-Meteo needs no
+account and no key, so the HUD works today and the preview tool can fetch the same data on a Mac.
+The cost is privacy: WeatherKit keeps the request inside Apple's privacy policy, Open-Meteo means
+the device's coordinates go to a third party. Fine for a personal build; swap to WeatherKit before
+this reaches anyone else. The provider is behind `WeatherProviding` so that is one type.
+
+The preview renders real weather and a real map with `--live`:
+
+```
+swift run hudshot --live
+```
+
+It uses a fixed Lisbon coordinate rather than CoreLocation — a command line tool has no good way
+to ask for location permission, and sending a real location to a third party to make a preview
+would be a poor trade. Without `--live` nothing leaves the machine, which is what keeps CI
+deterministic.
+
 ## Layout
 
 The surface is exactly half the display and pinned to the bottom edge. Icons and settings sit

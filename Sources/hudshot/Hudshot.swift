@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import HudCore
 import simd
+import CoreLocation
 
 // hudshot — renders HudCore surfaces to PNG on a Mac, with no device and no simulator.
 //
@@ -23,6 +24,10 @@ struct Hudshot {
     static func run() throws {
         let outDir = parseOutDir()
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        // --live fetches real weather and a real map. Off by default so CI stays deterministic
+        // and the tool works with no network.
+        let live = CommandLine.arguments.contains("--live")
 
         let renderer = try HalftoneRenderer()
         print("device: \(renderer.device.name)")
@@ -66,6 +71,12 @@ struct Hudshot {
         let driven = HudSnapshot(cursor: cursorAfterSwipe())
         try write(GlassesScreen(snapshot: driven, mode: .browser),
                   to: outDir, "glasses-pointer", scale: 1)
+
+        if live {
+            let (snapshot, ground) = try liveSnapshot()
+            try write(GlassesScreen(snapshot: snapshot, mode: .browser, mapGround: ground),
+                      to: outDir, "glasses-live", scale: 1)
+        }
         try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), mode: .glance),
                   to: outDir, "glasses-glance", scale: 1)
 
@@ -89,6 +100,51 @@ struct Hudshot {
         let path = dir.appendingPathComponent("\(name).png").path
         let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
         print("wrote \(name).png  \(w)x\(h)  \(bytes / 1024) KB")
+    }
+
+    /// Real weather and a real map, for a fixed coordinate.
+    ///
+    /// The coordinate is hard-coded rather than read from CoreLocation: a command line tool has
+    /// no reasonable way to ask for location permission, and sending a real location to a third
+    /// party to make a preview would be a poor trade.
+    @MainActor
+    private static func liveSnapshot() throws -> (HudSnapshot, Image?) {
+        let lisbon = CLLocationCoordinate2D(latitude: 38.7139, longitude: -9.1334)
+        var snapshot = HudSnapshot(cursor: nil)
+
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var weather: HudSnapshot.Weather?
+        nonisolated(unsafe) var ground: CGImage?
+        nonisolated(unsafe) var failure: Error?
+
+        Task.detached {
+            do {
+                weather = try await OpenMeteoWeatherProvider()
+                    .weather(at: lisbon, placeName: "Lisbon")
+                ground = try await MapSnapshotProvider()
+                    .snapshot(centre: lisbon, spanMetres: 600,
+                              size: CGSize(width: 470, height: 492))
+            } catch {
+                failure = error
+            }
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + 30) == .timedOut {
+            print("live: timed out")
+            return (snapshot, nil)
+        }
+        if let failure {
+            print("live: \(failure)")
+            return (snapshot, nil)
+        }
+
+        if let weather {
+            snapshot.weather = weather
+            print("live weather: \(weather.temperature)\u{00B0} \(weather.condition)")
+        }
+        print("live map: \(ground.map { "\($0.width)x\($0.height)" } ?? "none")")
+        return (snapshot, ground.map { Image(decorative: $0, scale: 2) })
     }
 
     /// Drives the engine with a diagonal swipe and reports where the cursor ends up.

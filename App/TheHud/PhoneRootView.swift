@@ -31,6 +31,7 @@ struct PhoneRootView: View {
                 .allowsHitTesting(false)
         }
         .preferredColorScheme(.dark)
+        .onAppear { controller.start() }
     }
 
     private var surface: some View {
