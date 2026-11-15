@@ -3,10 +3,6 @@ import UIKit
 
 /// Turns UIKit touches into `TouchFrame`s for the recogniser.
 ///
-/// NOTE: there is no iOS target in this package yet, so this file has never been compiled. It is
-/// here because the mapping is the non-obvious part and it belongs next to the engine, not
-/// because it has been verified.
-///
 /// Two things matter. First, UIKit has no stable pointer index, so identity is kept by
 /// `ObjectIdentifier` and handed out as small integers the way Android numbers its pointers.
 /// Second, `coalescedTouches` is the direct analogue of Android's historical events: the digitiser
@@ -16,6 +12,9 @@ public final class UIKitTouchBridge {
     private var ids: [ObjectIdentifier: Int] = [:]
     private var nextId = 0
     private let recognizer: GestureRecognizer
+    /// Touches the pad does not own — the rail and the corner take theirs before the recogniser
+    /// sees them, so a thumb on the rail and a finger on the pad never merge into one gesture.
+    public var owns: (UITouch) -> Bool = { _ in true }
 
     public init(recognizer: GestureRecognizer) {
         self.recognizer = recognizer
@@ -37,13 +36,15 @@ public final class UIKitTouchBridge {
 
     /// Every pointer currently down, in a stable order so index 0 stays index 0.
     private func ordered(_ event: UIEvent?, in view: UIView) -> [TouchPoint] {
-        let all = (event?.touches(for: view) ?? []).filter { $0.phase != .cancelled }
+        let all = (event?.touches(for: view) ?? []).filter { $0.phase != .cancelled && owns($0) }
         return all.map { point($0, in: view) }.sorted { $0.id < $1.id }
     }
 
     private static func ms(_ timestamp: TimeInterval) -> Double { timestamp * 1000 }
 
     public func began(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
+        let touches = touches.filter(owns)
+        guard !touches.isEmpty else { return }
         let all = ordered(event, in: view)
         let action: TouchAction = all.count == touches.count ? .down : .pointerDown
         recognizer.handle(TouchFrame(action: action, touches: all,
@@ -51,6 +52,8 @@ public final class UIKitTouchBridge {
     }
 
     public func moved(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
+        let touches = touches.filter(owns)
+        guard !touches.isEmpty else { return }
         let all = ordered(event, in: view)
         guard let primary = all.first else { return }
 
@@ -70,6 +73,8 @@ public final class UIKitTouchBridge {
     }
 
     public func ended(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
+        let touches = touches.filter(owns)
+        guard !touches.isEmpty else { return }
         let all = ordered(event, in: view)
         let lifting = Set(touches.map { id(for: $0) })
         let remaining = all.filter { !lifting.contains($0.id) }
@@ -82,6 +87,7 @@ public final class UIKitTouchBridge {
     }
 
     public func cancelled(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
+        guard touches.contains(where: owns) else { return }
         recognizer.handle(TouchFrame(action: .cancel, touches: ordered(event, in: view),
                                      timeMs: Self.ms(touches.first?.timestamp ?? 0)))
         ids.removeAll()

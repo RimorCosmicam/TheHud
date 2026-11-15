@@ -29,7 +29,8 @@ final class PhoneSceneDelegate: UIResponder, UIWindowSceneDelegate {
                options: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = UIHostingController(rootView: PhoneRootView())
+        window.rootViewController = UIHostingController(
+            rootView: PhoneRootView(screenHeight: windowScene.screen.bounds.height))
         window.makeKeyAndVisible()
         self.window = window
     }
@@ -58,6 +59,12 @@ final class GlassesSceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = UIHostingController(rootView: GlassesHost())
         window.isHidden = false
         self.window = window
+        HudController.shared.glassesConnected = true
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        window = nil
+        HudController.shared.glassesConnected = false
     }
 }
 
@@ -71,9 +78,10 @@ struct GlassesHost: View {
             let scale = min(geometry.size.width / canvas.width,
                             geometry.size.height / canvas.height)
             GlassesScreen(snapshot: controller.snapshot,
-                          mode: controller.mode,
-                          browserContent: controller.browserContent,
-                          mapGround: controller.mapGround)
+                          visible: controller.visible,
+                          browserContent: AnyView(WebBrowserView(controller.browser)),
+                          mapGround: controller.mapGround,
+                          placeholders: false)
                 .scaleEffect(scale)
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }

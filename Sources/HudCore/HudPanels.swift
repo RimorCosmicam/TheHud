@@ -20,11 +20,16 @@ public struct ClockPanel: View {
                     Text(meridiem).font(HudTheme.mont(38, .black)).tracking(1)
                 }
             }
+            .lineLimit(1)
+            // The time is the one thing on the HUD that must never reflow.
+            .minimumScaleFactor(0.5)
             .foregroundStyle(HudTheme.ink)
 
             Text("\(clock.weekday)  \u{00B7}  \(clock.date)")
                 .font(HudTheme.mont(24, .black))
                 .tracking(3.5)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
                 .foregroundStyle(HudTheme.inkDim)
                 .padding(.top, 6)
 
@@ -104,10 +109,14 @@ public struct WeatherPanel: View {
 public struct MinimapPanel: View {
     public var minimap: HudSnapshot.Minimap
     public var ground: Image?
+    /// Draw made-up streets while there is no raster. Right for a still, wrong on a face.
+    public var proceduralGround: Bool
 
-    public init(_ minimap: HudSnapshot.Minimap, ground: Image? = nil) {
+    public init(_ minimap: HudSnapshot.Minimap, ground: Image? = nil,
+                proceduralGround: Bool = true) {
         self.minimap = minimap
         self.ground = ground
+        self.proceduralGround = proceduralGround
     }
 
     public var body: some View {
@@ -129,6 +138,8 @@ public struct MinimapPanel: View {
                         // The snapshot is brighter than the rest of the HUD, and on a birdbath
                         // display brightness is what you see through. Knock it back.
                         Color.black.opacity(0.45)
+                    } else if !proceduralGround {
+                        Color.white.opacity(0.04)
                     } else {
                         streets(size: geometry.size)
                         // The route is decorative, and only honest over decorative streets. Over

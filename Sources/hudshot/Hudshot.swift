@@ -64,20 +64,21 @@ struct Hudshot {
 
         // The glasses canvas: 1080p, the mode the Air reports over DisplayPort. Rendered at
         // scale 1, because 1920x1080 is what the glasses are actually handed.
-        try write(GlassesScreen(mode: .browser), to: outDir, "glasses-browser", scale: 1)
+        try write(GlassesScreen(), to: outDir, "glasses-browser", scale: 1)
 
         // End to end: a real swipe through the real recogniser, driving the real cursor. If the
         // pointer in this image is not where the swipe should have put it, the engine is wrong.
         let driven = HudSnapshot(cursor: cursorAfterSwipe())
-        try write(GlassesScreen(snapshot: driven, mode: .browser),
+        try write(GlassesScreen(snapshot: driven),
                   to: outDir, "glasses-pointer", scale: 1)
 
         if live {
             let (snapshot, ground) = try liveSnapshot()
-            try write(GlassesScreen(snapshot: snapshot, mode: .browser, mapGround: ground),
+            try write(GlassesScreen(snapshot: snapshot, mapGround: ground),
                       to: outDir, "glasses-live", scale: 1)
         }
-        try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil), mode: .glance),
+        try write(GlassesScreen(snapshot: HudSnapshot(cursor: nil),
+                                visible: [.clock, .weather, .map]),
                   to: outDir, "glasses-glance", scale: 1)
 
         print("\nimages in \(outDir.path)")

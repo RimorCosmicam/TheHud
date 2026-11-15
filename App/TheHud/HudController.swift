@@ -12,10 +12,25 @@ import HudCore
 final class HudController: ObservableObject {
     static let shared = HudController()
 
-    @Published private(set) var snapshot = HudSnapshot(cursor: nil)
+    @Published private(set) var snapshot = HudSnapshot.blank
     @Published private(set) var contacts: [TouchPoint] = []
-    @Published var mode: GlassesScreen.Mode = .browser
+    @Published private(set) var visible: Set<HudPanelKind>
     @Published var config: HalftoneConfig = .miniMateDefault
+    @Published var trackpad = TouchpadSettings()
+
+    @Published var glassesConnected = false
+    @Published var showingSettings = false
+    @Published private(set) var railActive = false
+    @Published var cornerPressed = false
+
+    /// Where keystrokes go while the keyboard is up.
+    enum KeyboardTarget { case address, page }
+    @Published private(set) var keyboardTarget: KeyboardTarget?
+    /// The invisible text field's contents. For the address bar it is the draft itself; for the
+    /// page it is a proxy that is diffed into insertions and deletions.
+    @Published private(set) var draft = ""
+
+    let browser = WebBrowser()
 
     // Real data. Each panel degrades on its own: no calendar access drops one line, no location
     // leaves the map blank, a failed weather fetch keeps the last reading. None of them can take
@@ -27,7 +42,6 @@ final class HudController: ObservableObject {
     private let maps = MapSnapshotProvider()
 
     @Published private(set) var mapGround: Image?
-    @Published private(set) var browserContent: AnyView?
 
     private var clockTimer: Timer?
     private var lastWeatherFetch: Date = .distantPast
@@ -50,9 +64,17 @@ final class HudController: ObservableObject {
     }()
 
     private init() {
+        let stored = UserDefaults.standard.stringArray(forKey: Self.visibleKey)
+        visible = stored.map { Set($0.compactMap(HudPanelKind.init(rawValue:))) }
+            ?? Set(HudPanelKind.allCases)
         snapshot.cursor = pointer.position
         snapshot.clock = .now()
+        loadSettings()
+
+        browser.onChange = { [weak self] state in self?.browserChanged(state) }
     }
+
+    private static let visibleKey = "visiblePanels"
 
     /// Called once the phone scene is on screen.
     func start() {
@@ -70,7 +92,7 @@ final class HudController: ObservableObject {
         }
         location.start()
 
-        openBrowser(URL(string: "https://developer.apple.com/documentation/uikit")!)
+        browser.load(URL(string: "https://duckduckgo.com")!)
     }
 
     private func tickClock() {
@@ -122,31 +144,176 @@ final class HudController: ObservableObject {
         }
     }
 
-    func openBrowser(_ url: URL) {
-        snapshot.browser = HudSnapshot.Browser(
-            url: (url.host ?? "") + url.path,
-            title: "",
-            tabs: snapshot.browser.tabs.isEmpty ? ["New tab"] : snapshot.browser.tabs,
-            activeTab: snapshot.browser.activeTab)
+    // ------------------------------------------------------------------ browser
 
-        browserContent = AnyView(
-            WebContentView(
-                url: url,
-                onTitleChange: { [weak self] title in
-                    MainActor.assumeIsolated {
-                        self?.snapshot.browser.title = title
-                        guard let self else { return }
-                        var tabs = self.snapshot.browser.tabs
-                        if tabs.indices.contains(self.snapshot.browser.activeTab) {
-                            tabs[self.snapshot.browser.activeTab] = title
-                            self.snapshot.browser.tabs = tabs
-                        }
-                    }
-                },
-                onURLChange: { [weak self] shown in
-                    MainActor.assumeIsolated { self?.snapshot.browser.url = shown }
-                })
-        )
+    private func browserChanged(_ state: WebBrowser.State) {
+        var browser = snapshot.browser
+        if keyboardTarget != .address { browser.url = state.url }
+        browser.title = state.title
+        browser.canGoBack = state.canGoBack
+        browser.canGoForward = state.canGoForward
+        browser.loading = state.loading
+        // One tab for now: it carries the page's title.
+        browser.tabs = [state.title.isEmpty ? "New tab" : state.title]
+        browser.activeTab = 0
+        snapshot.browser = browser
+    }
+
+    /// Every button on the phone lands here.
+    func perform(_ action: PhoneAction) {
+        switch action {
+        case .back: browser.back()
+        case .forward: browser.forward()
+        case .reload: browser.reload()
+        case .address: keyboardTarget == .address ? endTyping() : beginAddressEditing()
+        case .keyboard: keyboardTarget == nil ? beginPageTyping() : endTyping()
+        case .settings: showingSettings = true
+        case let .toggle(kind):
+            if visible.contains(kind) { visible.remove(kind) } else { visible.insert(kind) }
+            UserDefaults.standard.set(visible.map(\.rawValue), forKey: Self.visibleKey)
+        }
+    }
+
+    private var layout: GlassesLayout { GlassesLayout(visible: visible) }
+
+    /// A left click wherever the cursor is. The glasses take no touches, so this is arithmetic
+    /// against the layout the canvas was drawn with.
+    private func click() {
+        guard let cursor = snapshot.cursor else { return }
+        switch layout.hitTest(cursor) {
+        case .back: browser.back()
+        case .forward: browser.forward()
+        case .reload: browser.reload()
+        case .address: beginAddressEditing()
+        case let .page(point):
+            if keyboardTarget == .address { endTyping() }
+            Task {
+                if await browser.click(at: point) { beginPageTyping() }
+            }
+        case .none: break
+        }
+    }
+
+    /// Scrolls the page under the cursor, or the page as a whole when the cursor is elsewhere:
+    /// the rail should scroll the page wherever the pointer happens to be parked.
+    private func scrollPage(_ ticks: Int) {
+        guard ticks != 0, let content = layout.contentFrame else { return }
+        let point: CGPoint
+        if let cursor = snapshot.cursor, case let .page(p) = layout.hitTest(cursor) {
+            point = p
+        } else {
+            point = CGPoint(x: content.width / 2, y: content.height / 2)
+        }
+        browser.scroll(ticks: ticks, at: point)
+    }
+
+    // ------------------------------------------------------------------ keyboard
+
+    /// Starts the page proxy with one invisible character, so a backspace on an empty field
+    /// still reaches the page as a deletion instead of being swallowed by an empty text field.
+    private static let sentinel = "\u{200B}"
+
+    func beginAddressEditing() {
+        keyboardTarget = .address
+        draft = ""
+        snapshot.browser.url = ""
+        snapshot.browser.isEditingAddress = true
+    }
+
+    func beginPageTyping() {
+        if keyboardTarget == .address { snapshot.browser.isEditingAddress = false }
+        keyboardTarget = .page
+        draft = Self.sentinel
+    }
+
+    func endTyping() {
+        if keyboardTarget == .address {
+            snapshot.browser.isEditingAddress = false
+            snapshot.browser.url = browser.state.url
+        }
+        keyboardTarget = nil
+        draft = ""
+    }
+
+    /// The text field changed. Called by its binding.
+    func draftChanged(_ new: String) {
+        switch keyboardTarget {
+        case .address:
+            draft = new
+            snapshot.browser.url = new
+        case .page:
+            let sentinel = Self.sentinel
+            let old = draft.hasPrefix(sentinel) ? String(draft.dropFirst()) : draft
+            if new.hasPrefix(sentinel) {
+                send(from: old, to: String(new.dropFirst()))
+                draft = new
+            } else {
+                // The sentinel went: one backspace past everything typed here.
+                send(from: old, to: new)
+                browser.deleteBackward(1)
+                draft = sentinel + new
+            }
+        case nil:
+            draft = new
+        }
+    }
+
+    private func send(from old: String, to new: String) {
+        let edit = TextEdit.between(old, new)
+        browser.deleteBackward(edit.deletes)
+        if !edit.insert.isEmpty { browser.insert(edit.insert) }
+    }
+
+    func submitTyping() {
+        switch keyboardTarget {
+        case .address:
+            if let url = AddressInput.url(from: draft) { browser.load(url) }
+            endTyping()
+        case .page:
+            browser.submit()
+            endTyping()
+        case nil:
+            break
+        }
+    }
+
+    // ------------------------------------------------------------------ settings
+
+    func settingsChanged() {
+        recognizer.settings = trackpad
+        rail.scrollSpeed = trackpad.scrollSpeed
+        rail.naturalScrolling = trackpad.naturalScrolling
+        let defaults = UserDefaults.standard
+        defaults.set(trackpad.trackingSpeed, forKey: "trackingSpeed")
+        defaults.set(trackpad.scrollSpeed, forKey: "scrollSpeed")
+        defaults.set(trackpad.naturalScrolling, forKey: "naturalScrolling")
+        defaults.set(trackpad.tapToClick, forKey: "tapToClick")
+        defaults.set(trackpad.momentumScrolling, forKey: "momentumScrolling")
+        defaults.set(config.colorway.label, forKey: "palette")
+        defaults.set(config.pitch, forKey: "pitch")
+        defaults.set(config.contrast, forKey: "contrast")
+    }
+
+    static let palettes: [Colorway] = [.mustardFlat, .mono, .paperFlat, .signal]
+
+    private func loadSettings() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "trackingSpeed") != nil {
+            trackpad.trackingSpeed = defaults.float(forKey: "trackingSpeed")
+            trackpad.scrollSpeed = defaults.float(forKey: "scrollSpeed")
+            trackpad.naturalScrolling = defaults.bool(forKey: "naturalScrolling")
+            trackpad.tapToClick = defaults.bool(forKey: "tapToClick")
+            trackpad.momentumScrolling = defaults.bool(forKey: "momentumScrolling")
+            config.pitch = defaults.float(forKey: "pitch")
+            config.contrast = defaults.float(forKey: "contrast")
+            if let label = defaults.string(forKey: "palette"),
+               let palette = Self.palettes.first(where: { $0.label == label }) {
+                config.colorway = palette
+            }
+        }
+        recognizer.settings = trackpad
+        rail.scrollSpeed = trackpad.scrollSpeed
+        rail.naturalScrolling = trackpad.naturalScrolling
     }
 
     func surfaceSizeChanged(to size: CGSize) {
@@ -156,12 +323,14 @@ final class HudController: ObservableObject {
     private func handle(_ event: GestureEvent) {
         pointer.apply(event)
 
-        if case let .scrollFling(vx, vy) = event {
-            startMomentum(vx: vx, vy: vy)
-        } else if case .move = event {
-            momentum.stop()
+        switch event {
+        case let .scrollFling(vx, vy): startMomentum(vx: vx, vy: vy)
+        case .move: momentum.stop()
+        case .tapClick: click()
+        default: break
         }
 
+        scrollPage(pointer.drainScroll())
         snapshot.cursor = pointer.position
     }
 
@@ -181,6 +350,7 @@ final class HudController: ObservableObject {
                 guard let self else { return timer.invalidate() }
                 if let step = self.momentum.step() {
                     self.pointer.apply(.scroll(v: step.v, h: step.h))
+                    self.scrollPage(self.pointer.drainScroll())
                 }
                 if !self.momentum.isRunning { timer.invalidate() }
             }
@@ -192,15 +362,20 @@ final class HudController: ObservableObject {
     func railBegan(at y: CGFloat) {
         momentum.stop()
         rail.begin(at: y)
+        railActive = true
     }
 
     func railMoved(to y: CGFloat) {
         if let ticks = rail.move(to: y) {
             pointer.apply(.scroll(v: ticks, h: 0))
+            scrollPage(pointer.drainScroll())
         }
     }
 
-    func railEnded() { rail.end() }
+    func railEnded() {
+        rail.end()
+        railActive = false
+    }
 
     func cornerTapped() { pointer.apply(.rightClick) }
 }

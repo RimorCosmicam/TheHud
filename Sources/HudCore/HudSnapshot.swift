@@ -8,14 +8,15 @@ import CoreGraphics
 /// a still honest about what the device will show.
 public struct HudSnapshot: Sendable {
     public var clock: Clock
-    public var weather: Weather
+    /// Nil until a reading has actually arrived; the panel is dropped rather than faked.
+    public var weather: Weather?
     public var minimap: Minimap
     public var browser: Browser
     /// Where the trackpad has put the pointer, in canvas points. Nil hides it.
     public var cursor: CGPoint?
 
     public init(clock: Clock = .preview,
-                weather: Weather = .preview,
+                weather: Weather? = .preview,
                 minimap: Minimap = .preview,
                 browser: Browser = .preview,
                 cursor: CGPoint? = CGPoint(x: 1180, y: 520)) {
@@ -100,19 +101,39 @@ public struct HudSnapshot: Sendable {
         public var tabs: [String]
         public var activeTab: Int
         public var loading: Double?
+        public var canGoBack: Bool
+        public var canGoForward: Bool
+        /// The address bar is taking keystrokes, so `url` is a draft rather than where we are.
+        public var isEditingAddress: Bool
 
         public init(url: String, title: String, tabs: [String], activeTab: Int,
-                    loading: Double? = nil) {
+                    loading: Double? = nil, canGoBack: Bool = true, canGoForward: Bool = false,
+                    isEditingAddress: Bool = false) {
             self.url = url
             self.title = title
             self.tabs = tabs
             self.activeTab = activeTab
             self.loading = loading
+            self.canGoBack = canGoBack
+            self.canGoForward = canGoForward
+            self.isEditingAddress = isEditingAddress
         }
 
         public static let preview = Browser(url: "developer.apple.com/documentation/uikit",
                                             title: "UIKit | Apple Developer Documentation",
                                             tabs: ["UIKit", "Metal Shading Language", "Xreal"],
                                             activeTab: 0)
+    }
+
+    /// What the device starts from: the time, and nothing it has not actually been told. The
+    /// default initialiser is preview data, which must never reach the glasses.
+    public static var blank: HudSnapshot {
+        HudSnapshot(clock: .now(),
+                    weather: nil,
+                    minimap: Minimap(place: "LOCATING", heading: 0, headingLabel: "",
+                                     speed: "", spanMetres: 300),
+                    browser: Browser(url: "", title: "", tabs: ["New tab"], activeTab: 0,
+                                     canGoBack: false, canGoForward: false),
+                    cursor: nil)
     }
 }

@@ -8,39 +8,39 @@ import CoreGraphics
 /// looking at and burn battery doing it. The halftone belongs on the phone, where it is a surface
 /// a thumb rests on; here the rule is sparse bright marks on black.
 public struct GlassesScreen: View {
-    public enum Mode: Sendable {
-        /// The browser takes the canvas, with the panels in a column beside it.
-        case browser
-        /// No browser. The middle is left clear, because the middle is where the world is.
-        case glance
-    }
-
     public var snapshot: HudSnapshot
-    public var mode: Mode
+    /// Which panels are on. With the browser off the middle is left clear, because the middle is
+    /// where the world is.
+    public var visible: Set<HudPanelKind>
     public var browserContent: AnyView?
     /// The map raster, when one has arrived.
     public var mapGround: Image?
+    /// Stand-in page and procedural streets. True for stills; the device passes false, because a
+    /// made-up map on someone's face is worse than an empty one.
+    public var placeholders: Bool
 
     public init(snapshot: HudSnapshot = HudSnapshot(),
-                mode: Mode = .browser,
+                visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
                 browserContent: AnyView? = nil,
-                mapGround: Image? = nil) {
+                mapGround: Image? = nil,
+                placeholders: Bool = true) {
         self.snapshot = snapshot
-        self.mode = mode
+        self.visible = visible
         self.browserContent = browserContent
         self.mapGround = mapGround
+        self.placeholders = placeholders
     }
 
-    private static let columnWidth: CGFloat = 470
-    private static let gap: CGFloat = 24
+    private var layout: GlassesLayout { GlassesLayout(visible: visible) }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black
 
-            switch mode {
-            case .browser: browserLayout
-            case .glance: glanceLayout
+            if visible.contains(.browser) {
+                browserLayout
+            } else {
+                glanceLayout
             }
 
             if let cursor = snapshot.cursor {
@@ -51,16 +51,28 @@ public struct GlassesScreen: View {
         .environment(\.colorScheme, .dark)
     }
 
-    private var browserLayout: some View {
-        HStack(alignment: .top, spacing: Self.gap) {
-            VStack(spacing: Self.gap) {
-                ClockPanel(snapshot.clock)
-                WeatherPanel(snapshot.weather)
-                MinimapPanel(snapshot.minimap, ground: mapGround).frame(maxHeight: .infinity)
-            }
-            .frame(width: Self.columnWidth)
+    private func minimap() -> MinimapPanel {
+        MinimapPanel(snapshot.minimap, ground: mapGround, proceduralGround: placeholders)
+    }
 
-            BrowserPanel(snapshot.browser, content: browserContent)
+    private var browserLayout: some View {
+        HStack(alignment: .top, spacing: GlassesLayout.gap) {
+            if layout.hasColumn {
+                VStack(spacing: GlassesLayout.gap) {
+                    if visible.contains(.clock) { ClockPanel(snapshot.clock) }
+                    if visible.contains(.weather), let weather = snapshot.weather {
+                        WeatherPanel(weather)
+                    }
+                    if visible.contains(.map) {
+                        minimap().frame(maxHeight: .infinity)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                }
+                .frame(width: GlassesLayout.columnWidth)
+            }
+
+            BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders)
         }
         .padding(HudTheme.safeInset)
     }
@@ -69,16 +81,18 @@ public struct GlassesScreen: View {
     /// inside the safe inset rather than against the edge, and the centre is left alone.
     private var glanceLayout: some View {
         ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: Self.gap) {
-                ClockPanel(snapshot.clock).frame(width: 620)
+            VStack(alignment: .leading, spacing: GlassesLayout.gap) {
+                if visible.contains(.clock) { ClockPanel(snapshot.clock).frame(width: 620) }
                 Spacer(minLength: 0)
-                MinimapPanel(snapshot.minimap, ground: mapGround).frame(width: 520, height: 340)
+                if visible.contains(.map) { minimap().frame(width: 520, height: 340) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            WeatherPanel(snapshot.weather)
-                .frame(width: 430)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            if visible.contains(.weather), let weather = snapshot.weather {
+                WeatherPanel(weather)
+                    .frame(width: 430)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
         }
         .padding(HudTheme.safeInset)
     }

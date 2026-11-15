@@ -10,10 +10,17 @@ public enum PhoneMetrics {
 
     /// Status bar, around the Dynamic Island.
     public static let statusBar: CGFloat = 59
-    /// The icon and settings row.
+    /// The icon row.
     public static let toolBar: CGFloat = 56
     /// Exactly half the display, as asked, and anchored to the bottom edge.
     public static var trackpad: CGFloat { size.height / 2 }
+
+    /// The display's own corner radius on the Pro phones, so the surface's lower corners run
+    /// parallel to the glass instead of being cut off by it.
+    public static let screenCornerRadius: CGFloat = 55
+    /// The surface's upper corners: rounded to match, but tighter, because they sit mid-screen
+    /// rather than against the bezel.
+    public static let surfaceTopRadius: CGFloat = 30
 
     /// iOS gives the portrait keyboard about 291pt at this width, about 336pt with the
     /// predictive bar on.
@@ -24,6 +31,19 @@ public enum PhoneMetrics {
     /// pushes everything up and this is what gets spent.
     public static func settingsHeight(keyboard: CGFloat) -> CGFloat {
         size.height - statusBar - toolBar - trackpad - keyboard
+    }
+
+    /// The surface's outline. With the keyboard up the surface sits on the keyboard rather than
+    /// on the bezel, so the lower corners drop to the upper radius.
+    public static func surfaceShape(keyboardUp: Bool,
+                                    bottomRadius: CGFloat = screenCornerRadius)
+        -> UnevenRoundedRectangle {
+        let bottom = keyboardUp ? surfaceTopRadius : bottomRadius
+        return UnevenRoundedRectangle(topLeadingRadius: surfaceTopRadius,
+                                      bottomLeadingRadius: bottom,
+                                      bottomTrailingRadius: bottom,
+                                      topTrailingRadius: surfaceTopRadius,
+                                      style: .continuous)
     }
 }
 
@@ -36,24 +56,27 @@ public struct TrackpadSurface: View {
     public var surface: Image
     public var railActive: Bool
     public var cornerPressed: Bool
+    public var keyboardUp: Bool
 
-    public init(surface: Image, railActive: Bool = false, cornerPressed: Bool = false) {
+    public init(surface: Image, railActive: Bool = false, cornerPressed: Bool = false,
+                keyboardUp: Bool = false) {
         self.surface = surface
         self.railActive = railActive
         self.cornerPressed = cornerPressed
+        self.keyboardUp = keyboardUp
     }
 
     public init(surface cgImage: CGImage, scale: CGFloat = PhoneMetrics.scale,
-                railActive: Bool = false, cornerPressed: Bool = false) {
+                railActive: Bool = false, cornerPressed: Bool = false, keyboardUp: Bool = false) {
         self.init(surface: Image(decorative: cgImage, scale: scale),
-                  railActive: railActive, cornerPressed: cornerPressed)
+                  railActive: railActive, cornerPressed: cornerPressed, keyboardUp: keyboardUp)
     }
 
     public var body: some View {
         surface
             .resizable()
             .overlay(EdgeControlsOverlay(railActive: railActive, cornerPressed: cornerPressed))
-            .clipped()
+            .clipShape(PhoneMetrics.surfaceShape(keyboardUp: keyboardUp))
     }
 }
 
@@ -83,59 +106,63 @@ struct StatusBar: View {
     }
 }
 
-/// What the HUD is showing, and the way into settings. Above the surface, where it is out of the
-/// thumb's way: everything below this line is swept blind, so nothing tappable belongs there.
+/// What the phone's buttons can ask for. One enum so the app and the stills share the bar.
+public enum PhoneAction: Sendable {
+    case back, forward, reload, address, keyboard, settings
+    case toggle(HudPanelKind)
+}
+
+/// The icon row: the browser's own controls, the keyboard, and the gear.
+///
+/// The browser's chrome is on the glasses too, but steering a cursor onto a 52pt back arrow is
+/// slow; a thumb on a button is not. So the commands you reach for constantly live here as well.
 public struct HudToolBar: View {
-    public struct Item: Identifiable, Sendable {
-        public let id: String
-        public let symbol: String
-        public let active: Bool
-        public init(id: String, symbol: String, active: Bool = false) {
-            self.id = id
-            self.symbol = symbol
-            self.active = active
-        }
-    }
+    public var canGoBack: Bool
+    public var canGoForward: Bool
+    public var keyboardUp: Bool
+    public var action: (PhoneAction) -> Void
 
-    public var items: [Item]
-
-    public init(items: [Item] = Item.defaults) {
-        self.items = items
+    public init(canGoBack: Bool = true, canGoForward: Bool = false, keyboardUp: Bool = false,
+                action: @escaping (PhoneAction) -> Void = { _ in }) {
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
+        self.keyboardUp = keyboardUp
+        self.action = action
     }
 
     public var body: some View {
         HStack(spacing: 0) {
-            ForEach(items) { item in
-                Image(systemName: item.symbol)
-                    .font(.system(size: 19, weight: .medium))
-                    // State by brightness alone, as the Mont material asks.
-                    .foregroundStyle(item.active ? HudTheme.ink : HudTheme.inkFaint)
-                    .frame(maxWidth: .infinity)
-            }
+            button("chevron.left", .back, enabled: canGoBack)
+            button("chevron.right", .forward, enabled: canGoForward)
+            button("arrow.clockwise", .reload)
+            button("magnifyingglass", .address)
+            button(keyboardUp ? "keyboard.chevron.compact.down" : "keyboard", .keyboard,
+                   lit: keyboardUp)
 
             Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 22)
                 .padding(.horizontal, 6)
 
-            Image(systemName: "gearshape")
-                .font(.system(size: 19, weight: .medium))
-                .foregroundStyle(HudTheme.inkDim)
-                .frame(width: 52)
+            button("gearshape", .settings).frame(width: 52)
         }
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HudTheme.surface)
     }
-}
 
-public extension HudToolBar.Item {
-    /// Browser, map, weather, clock, panels — the HUD's own surfaces, not other apps.
-    static let defaults: [HudToolBar.Item] = [
-        .init(id: "browser", symbol: "globe", active: true),
-        .init(id: "map", symbol: "map"),
-        .init(id: "weather", symbol: "cloud.sun"),
-        .init(id: "clock", symbol: "clock"),
-        .init(id: "panels", symbol: "square.grid.2x2"),
-    ]
+    private func button(_ symbol: String, _ kind: PhoneAction, enabled: Bool = true,
+                        lit: Bool = false) -> some View {
+        Button { action(kind) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 19, weight: .medium))
+                // State by brightness alone, as the Mont material asks.
+                .foregroundStyle(lit ? HudTheme.accent
+                                 : enabled ? HudTheme.ink : HudTheme.inkFaint)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
 }
 
 /// A stand-in for the system keyboard, for previews only.
@@ -213,45 +240,44 @@ public struct SystemKeyboardStandIn: View {
     }
 }
 
-/// The icons and settings that live above the surface.
+/// What is on the glasses, and whether the glasses are there at all.
 ///
 /// This is also the slack in the layout: the surface is pinned to the bottom edge at exactly half
 /// the display, so when the keyboard rises it pushes everything up and this is the area that pays
 /// for it. Nothing here is needed while the thumb is on the trackpad, which is what makes it the
 /// right thing to lose.
 public struct SettingsArea: View {
-    public var items: [HudToolBar.Item]
+    public var visible: Set<HudPanelKind>
+    public var glassesConnected: Bool
+    public var action: (PhoneAction) -> Void
 
-    public init(items: [HudToolBar.Item] = HudToolBar.Item.defaults) {
-        self.items = items
+    public init(visible: Set<HudPanelKind> = Set(HudPanelKind.allCases),
+                glassesConnected: Bool = true,
+                action: @escaping (PhoneAction) -> Void = { _ in }) {
+        self.visible = visible
+        self.glassesConnected = glassesConnected
+        self.action = action
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("ON THE GLASSES").hudLabel()
-
-            HStack(spacing: 10) {
-                ForEach(items.prefix(4)) { item in
-                    VStack(spacing: 8) {
-                        Image(systemName: item.symbol)
-                            .font(.system(size: 22, weight: .medium))
-                        Text(item.id.uppercased())
-                            .font(HudTheme.mont(9, .black))
-                            .tracking(1.5)
-                    }
-                    .foregroundStyle(item.active ? HudTheme.ink : HudTheme.inkDim)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 74)
-                    .background(HudTheme.surface)
+            HStack {
+                Text("ON THE GLASSES").hudLabel()
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(glassesConnected ? HudTheme.accent : HudTheme.inkFaint)
+                        .frame(width: 6, height: 6)
+                    Text(glassesConnected ? "CONNECTED" : "NOT CONNECTED")
+                        .font(HudTheme.mont(9, .black)).tracking(1.5)
+                        .foregroundStyle(glassesConnected ? HudTheme.inkDim : HudTheme.inkFaint)
                 }
             }
 
-            Text("SURFACE").hudLabel().padding(.top, 2)
-
-            VStack(spacing: 1) {
-                settingRow("SCENE", "HALFTONE")
-                settingRow("PALETTE", "MUSTARD")
-                settingRow("POINTER", "1.00\u{00D7}")
+            HStack(spacing: 10) {
+                ForEach(HudPanelKind.allCases) { kind in
+                    tile(kind)
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -260,24 +286,31 @@ public struct SettingsArea: View {
         .background(.black)
     }
 
-    private func settingRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(HudTheme.mont(11, .black)).tracking(2)
-                .foregroundStyle(HudTheme.inkDim)
-            Spacer()
-            Text(value)
-                .font(HudTheme.mont(13, .black)).tracking(1.5)
-                .foregroundStyle(HudTheme.ink)
+    private func tile(_ kind: HudPanelKind) -> some View {
+        let on = visible.contains(kind)
+        return Button { action(.toggle(kind)) } label: {
+            VStack(spacing: 8) {
+                Image(systemName: kind.symbol)
+                    .font(.system(size: 22, weight: .medium))
+                Text(kind.rawValue.uppercased())
+                    .font(HudTheme.mont(9, .black))
+                    .tracking(1.5)
+            }
+            .foregroundStyle(on ? HudTheme.ink : HudTheme.inkFaint)
+            .frame(maxWidth: .infinity)
+            .frame(height: 74)
+            .background(on ? Color.white.opacity(0.07) : HudTheme.surface)
+            .overlay(alignment: .top) {
+                Rectangle().fill(on ? HudTheme.accent : .clear).frame(height: 2)
+            }
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 14)
-        .frame(height: 38)
-        .background(HudTheme.surface)
+        .buttonStyle(.plain)
     }
 }
 
-/// The whole phone: status bar, the icon and settings row, the settings area, then the surface
-/// pinned to the bottom edge at exactly half the display.
+/// The whole phone: status bar, the icon row, the settings area, then the surface pinned to the
+/// bottom edge at exactly half the display.
 ///
 /// The keyboard is not a region of this layout. It rises from the lower edge and pushes
 /// everything above it up, the way it does in any other app, so the surface stays whole and the
@@ -313,20 +346,22 @@ public struct PhoneScreen: View {
         VStack(spacing: 0) {
             StatusBar(time: time).frame(height: PhoneMetrics.statusBar)
 
-            HudToolBar().frame(height: PhoneMetrics.toolBar)
+            HudToolBar(keyboardUp: keyboardUp).frame(height: PhoneMetrics.toolBar)
 
             // Below a row's worth of space there is nothing legible left to show, so it
             // collapses rather than leaving a clipped sliver of a heading behind.
             let settings = max(0, PhoneMetrics.settingsHeight(keyboard: keyboardHeight))
             if settings >= 44 {
-                SettingsArea().frame(height: settings, alignment: .top).clipped()
+                SettingsArea(visible: [.browser, .map, .clock])
+                    .frame(height: settings, alignment: .top).clipped()
             } else {
                 Color.black.frame(height: settings)
             }
 
             TrackpadSurface(surface: surface,
                             railActive: railActive,
-                            cornerPressed: cornerPressed)
+                            cornerPressed: cornerPressed,
+                            keyboardUp: keyboardUp)
                 .frame(height: PhoneMetrics.trackpad)
 
             if keyboardUp {
@@ -336,5 +371,8 @@ public struct PhoneScreen: View {
         }
         .frame(width: PhoneMetrics.size.width, height: PhoneMetrics.size.height)
         .background(.black)
+        // The display's own outline, so the still shows what the bezel actually cuts.
+        .clipShape(RoundedRectangle(cornerRadius: PhoneMetrics.screenCornerRadius,
+                                    style: .continuous))
     }
 }

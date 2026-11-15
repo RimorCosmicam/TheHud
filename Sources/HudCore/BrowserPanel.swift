@@ -16,22 +16,27 @@ public struct BrowserPanel: View {
     /// The live `WKWebView` on the device, a still in the preview, nothing at all before the
     /// first page loads. Type-erased because those are genuinely different views.
     public var content: AnyView?
+    /// Draw the stand-in page when there is no content. Stills only.
+    public var standIn: Bool
 
-    public init(_ browser: HudSnapshot.Browser, content: AnyView? = nil) {
+    public init(_ browser: HudSnapshot.Browser, content: AnyView? = nil, standIn: Bool = true) {
         self.browser = browser
         self.content = content
+        self.standIn = standIn
     }
 
     public var body: some View {
         VStack(spacing: 0) {
             tabs
             addressBar
-            Divider().overlay(.white.opacity(0.12))
+            Rectangle().fill(.white.opacity(0.12)).frame(height: BrowserMetrics.dividerHeight)
             Group {
                 if let content {
                     content
-                } else {
+                } else if standIn {
                     PageStandIn()
+                } else {
+                    Color(red: 0.07, green: 0.07, blue: 0.08)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -50,52 +55,63 @@ public struct BrowserPanel: View {
                     .foregroundStyle(active ? HudTheme.ink : HudTheme.inkFaint)
                     .lineLimit(1)
                     .padding(.horizontal, 26)
-                    .frame(height: 54)
+                    .frame(maxWidth: 620)
+                    .frame(height: BrowserMetrics.tabHeight)
                     .background(active ? Color.white.opacity(0.08) : .clear)
                     .overlay(alignment: .bottom) {
                         // State by brightness, and one accent rule under the live tab.
                         Rectangle().fill(active ? HudTheme.accent : .clear).frame(height: 3)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
             }
             Spacer(minLength: 0)
-            Image(systemName: "plus")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(HudTheme.inkFaint)
-                .frame(width: 54, height: 54)
         }
-        .frame(height: 54)
+        .frame(height: BrowserMetrics.tabHeight)
     }
 
+    /// Every control here is a fixed-width cell, in the order and at the widths `GlassesLayout`
+    /// hit-tests against. A click is the phone's cursor landing on a canvas the phone cannot see,
+    /// so what is drawn and what is clickable have to be the same arithmetic.
     private var addressBar: some View {
-        HStack(spacing: 18) {
-            HStack(spacing: 16) {
-                Image(systemName: "chevron.left")
-                Image(systemName: "chevron.right").foregroundStyle(HudTheme.inkFaint)
-            }
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(HudTheme.inkDim)
+        HStack(spacing: 0) {
+            navIcon("chevron.left", enabled: browser.canGoBack)
+                .frame(width: BrowserMetrics.navButtonWidth)
+            navIcon("chevron.right", enabled: browser.canGoForward)
+                .frame(width: BrowserMetrics.navButtonWidth)
 
             HStack(spacing: 12) {
-                Image(systemName: "lock.fill")
+                Image(systemName: browser.isEditingAddress ? "magnifyingglass" : "lock.fill")
                     .font(.system(size: 15))
                     .foregroundStyle(HudTheme.inkDim)
-                Text(browser.url)
-                    .font(HudTheme.mont(22, .black))
-                    .tracking(0.5)
-                    .foregroundStyle(HudTheme.ink)
-                    .lineLimit(1)
+                if browser.isEditingAddress {
+                    // The caret is the accent, so it is obvious from across the canvas that the
+                    // keyboard is talking to this field and not to the page.
+                    (Text(browser.url).foregroundColor(HudTheme.ink)
+                        + Text("\u{258F}").foregroundColor(HudTheme.accent))
+                        .font(HudTheme.mont(22, .black))
+                        .tracking(0.5)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                } else {
+                    Text(browser.url)
+                        .font(HudTheme.mont(22, .black))
+                        .tracking(0.5)
+                        .foregroundStyle(HudTheme.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 20)
-            .frame(height: 50)
-            .background(.white.opacity(0.08))
+            .frame(height: BrowserMetrics.fieldHeight)
+            .background(.white.opacity(browser.isEditingAddress ? 0.14 : 0.08))
+            .padding(.horizontal, BrowserMetrics.fieldGap)
 
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(HudTheme.inkDim)
+            navIcon("arrow.clockwise", enabled: true)
+                .frame(width: BrowserMetrics.reloadWidth)
         }
-        .padding(.horizontal, 24)
-        .frame(height: 76)
+        .padding(.horizontal, BrowserMetrics.sidePadding)
+        .frame(height: BrowserMetrics.addressHeight)
         .overlay(alignment: .bottom) {
             if let progress = browser.loading {
                 GeometryReader { geometry in
@@ -105,6 +121,13 @@ public struct BrowserPanel: View {
                 .frame(height: 3)
             }
         }
+    }
+
+    private func navIcon(_ symbol: String, enabled: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(enabled ? HudTheme.inkDim : HudTheme.inkFaint)
+            .frame(maxHeight: .infinity)
     }
 }
 

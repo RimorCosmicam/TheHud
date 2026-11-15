@@ -10,5 +10,6 @@ runImpulseTests()
 runMomentumTests()
 runRailTests()
 runGestureTests()
+runLayoutTests()
 
 exit(TestKit.summarise())

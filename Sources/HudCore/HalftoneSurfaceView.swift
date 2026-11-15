@@ -130,6 +130,10 @@ public struct HalftoneSurfaceView: HudViewRepresentable {
         view.isPaused = false
         view.enableSetNeedsDisplay = false
         view.preferredFramesPerSecond = 60
+#if os(iOS)
+        // Drawing only. Touches belong to the capture view laid over it.
+        view.isUserInteractionEnabled = false
+#endif
         return view
     }
 
