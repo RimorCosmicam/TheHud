@@ -207,7 +207,7 @@ class WebTab(context: Context, private val onChange: (WebTab) -> Unit) {
          * app. Google signs a browser in only when all of it agrees.
          */
         fun desktop(settings: WebSettings) {
-            desktop(settings)
+            settings.userAgentString = DESKTOP_UA
             if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) runCatching {
                 fun brand(name: String, version: String) =
                     UserAgentMetadata.BrandVersion.Builder().setBrand(name).setMajorVersion(version.substringBefore('.'))
