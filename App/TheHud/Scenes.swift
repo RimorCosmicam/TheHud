@@ -79,10 +79,7 @@ struct GlassesHost: View {
                             geometry.size.height / canvas.height)
             GlassesScreen(snapshot: controller.snapshot,
                           visible: controller.visible,
-                          browserContent: AnyView(WebBrowserView(
-                              controller.browser,
-                              topInset: controller.snapshot.browser.isFullscreen
-                                  ? 0 : BrowserMetrics.contentTopInset)),
+                          browserContent: AnyView(WebBrowserView(controller.browser)),
                           mapGround: controller.mapGround,
                           placeholders: false,
                           liveGlass: true)

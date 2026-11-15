@@ -69,6 +69,9 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         configuration.userContentController.addUserScript(
             WKUserScript(source: Self.fullscreenShim, injectionTime: .atDocumentStart,
                          forMainFrameOnly: true))
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: PageScripts.bridge(inset: BrowserMetrics.contentTopInset),
+                         injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let relay = MessageRelay()
         configuration.userContentController.add(relay, name: "hudFullscreen")
 
@@ -88,13 +91,11 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         // The glasses take no touches; the phone's cursor is the only way in.
         webView.isUserInteractionEnabled = false
 
-        // The page starts below the glass bar and scrolls up underneath it. That is done with
-        // the safe area, not by hand: `WebBrowserView` gives the web view a top safe-area inset
-        // the height of the bar, and WebKit treats a safe area as covered — the content starts
-        // below it, scrolls up beneath it, and fixed headers (YouTube's search bar) stay below
-        // it rather than hiding behind the glass. It is the mechanism that keeps pages clear of
-        // the notch, which is exactly this problem.
-        webView.scrollView.contentInsetAdjustmentBehavior = .always
+        // The page starts below the glass bar and scrolls up underneath it: a plain content
+        // inset, which WebKit honours everywhere. Fixed headers are the page's business, and
+        // `PageScripts.bridge` moves them down to meet the bar.
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        applyChromeInset(BrowserMetrics.contentTopInset)
 
         observations = [
             webView.observe(\.title) { [weak self] _, _ in self?.refresh() },
@@ -132,10 +133,24 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     // ------------------------------------------------------------------ fullscreen
 
-    /// No bar over a fullscreen video, so `WebBrowserView` drops the safe area with it.
+    /// No bar over a fullscreen video, so nothing to keep the page clear of.
     fileprivate func fullscreenChanged(_ on: Bool) {
         guard on != state.isFullscreen else { return }
         state.isFullscreen = on
+        applyChromeInset(on ? 0 : BrowserMetrics.contentTopInset)
+    }
+
+    /// How much of the top the bar covers: the scroll view starts the page below it, and the
+    /// page's own fixed bars are told to sit below it too.
+    private func applyChromeInset(_ top: CGFloat) {
+        let scrollView = webView.scrollView
+        let atTop = scrollView.contentOffset.y <= -scrollView.contentInset.top + 1
+        let insets = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
+        scrollView.contentInset = insets
+        scrollView.verticalScrollIndicatorInsets = insets
+        if atTop { scrollView.contentOffset = CGPoint(x: scrollView.contentOffset.x, y: -top) }
+        webView.evaluateJavaScript("window.__hudSetTopInset && window.__hudSetTopInset(\(Double(top)));",
+                                   completionHandler: nil)
     }
 
     /// From the phone: leave fullscreen, or put the page's video (the player around it, where
@@ -330,6 +345,7 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         var el = current;
         current = null;
         if (saved === null) el.removeAttribute('style'); else el.setAttribute('style', saved);
+        el.removeAttribute('data-hud-top');
         document.documentElement.style.overflow = savedRoot;
         post(false);
         fire(el);
@@ -465,17 +481,11 @@ private final class HomeSchemeHandler: NSObject, WKURLSchemeHandler {
 }
 
 /// Puts the active tab's web view on the canvas.
-///
-/// A view controller rather than a plain view, because a view controller is what can add to the
-/// safe area: `topInset` becomes the web view's top safe-area inset, which is how the page knows
-/// the glass bar is there (see `WebBrowser`).
 public struct WebBrowserView: UIViewControllerRepresentable {
     public let browser: WebBrowser
-    public var topInset: CGFloat
 
-    public init(_ browser: WebBrowser, topInset: CGFloat = BrowserMetrics.contentTopInset) {
+    public init(_ browser: WebBrowser) {
         self.browser = browser
-        self.topInset = topInset
     }
 
     public func makeUIViewController(context: Context) -> WebHostController {
@@ -483,8 +493,6 @@ public struct WebBrowserView: UIViewControllerRepresentable {
     }
 
     public func updateUIViewController(_ host: WebHostController, context: Context) {
-        let insets = UIEdgeInsets(top: topInset, left: 0, bottom: 0, right: 0)
-        if host.additionalSafeAreaInsets != insets { host.additionalSafeAreaInsets = insets }
         host.show(browser.webView)
     }
 }
