@@ -294,7 +294,7 @@ public struct SettingsArea: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(solo == nil ? "ON THE GLASSES" : "FULLSCREEN · TAP TO EXIT").hudLabel()
+                Text(solo == nil ? "ON THE GLASSES" : "FULLSCREEN").hudLabel()
                 Spacer()
                 HStack(spacing: 6) {
                     Circle()
