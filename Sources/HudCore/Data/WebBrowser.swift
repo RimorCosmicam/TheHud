@@ -88,13 +88,13 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         // The glasses take no touches; the phone's cursor is the only way in.
         webView.isUserInteractionEnabled = false
 
-        // The page starts below the glass bar and scrolls up underneath it.
-        let top = BrowserMetrics.contentTopInset
-        let scrollView = webView.scrollView
-        scrollView.contentInsetAdjustmentBehavior = .never
-        scrollView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
-        scrollView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
-        Self.setObscuredInsets(UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0), on: webView)
+        // The page starts below the glass bar and scrolls up underneath it. That is done with
+        // the safe area, not by hand: `WebBrowserView` gives the web view a top safe-area inset
+        // the height of the bar, and WebKit treats a safe area as covered — the content starts
+        // below it, scrolls up beneath it, and fixed headers (YouTube's search bar) stay below
+        // it rather than hiding behind the glass. It is the mechanism that keeps pages clear of
+        // the notch, which is exactly this problem.
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
 
         observations = [
             webView.observe(\.title) { [weak self] _, _ in self?.refresh() },
@@ -132,21 +132,10 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     // ------------------------------------------------------------------ fullscreen
 
+    /// No bar over a fullscreen video, so `WebBrowserView` drops the safe area with it.
     fileprivate func fullscreenChanged(_ on: Bool) {
         guard on != state.isFullscreen else { return }
         state.isFullscreen = on
-        // No bar over a fullscreen video, so nothing to keep the page clear of.
-        setChromeInset(on ? 0 : BrowserMetrics.contentTopInset)
-    }
-
-    private func setChromeInset(_ top: CGFloat) {
-        let insets = UIEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
-        let scrollView = webView.scrollView
-        let atTop = scrollView.contentOffset.y <= -scrollView.contentInset.top + 1
-        scrollView.contentInset = insets
-        scrollView.verticalScrollIndicatorInsets = insets
-        Self.setObscuredInsets(insets, on: webView)
-        if atTop { scrollView.contentOffset.y = -top }
     }
 
     /// From the phone: leave fullscreen, or put the page's video (the player around it, where
@@ -379,17 +368,6 @@ public final class WebBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     })();
     """
 
-    /// Tells WebKit the top of the view is covered, the way Safari does for its own bar, so fixed
-    /// headers sit below the glass instead of behind it. Private, so only if it is there.
-    private static func setObscuredInsets(_ insets: UIEdgeInsets, on webView: WKWebView) {
-        let selector = NSSelectorFromString("_setObscuredInsets:")
-        guard webView.responds(to: selector),
-              let method = class_getInstanceMethod(type(of: webView), selector) else { return }
-        typealias Setter = @convention(c) (AnyObject, Selector, UIEdgeInsets) -> Void
-        let set = unsafeBitCast(method_getImplementation(method), to: Setter.self)
-        set(webView, selector, insets)
-    }
-
     // ------------------------------------------------------------------ keyboard
 
     /// Text typed on the phone, into whatever the page has focused.
@@ -486,31 +464,63 @@ private final class HomeSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
-/// Puts the browser's one web view on the canvas.
-public struct WebBrowserView: UIViewRepresentable {
+/// Puts the active tab's web view on the canvas.
+///
+/// A view controller rather than a plain view, because a view controller is what can add to the
+/// safe area: `topInset` becomes the web view's top safe-area inset, which is how the page knows
+/// the glass bar is there (see `WebBrowser`).
+public struct WebBrowserView: UIViewControllerRepresentable {
     public let browser: WebBrowser
+    public var topInset: CGFloat
 
-    public init(_ browser: WebBrowser) { self.browser = browser }
-
-    public func makeUIView(context: Context) -> UIView {
-        let host = UIView()
-        host.backgroundColor = .black
-        host.isUserInteractionEnabled = false
-        return host
+    public init(_ browser: WebBrowser, topInset: CGFloat = BrowserMetrics.contentTopInset) {
+        self.browser = browser
+        self.topInset = topInset
     }
 
-    // The web view is re-parented rather than recreated, so unplugging the glasses and plugging
-    // them back in finds the page where it was left.
-    public func updateUIView(_ host: UIView, context: Context) {
-        let webView = browser.webView
-        if webView.superview !== host {
-            // Switching tabs: the previous tab's view leaves, this one takes its place.
-            host.subviews.forEach { $0.removeFromSuperview() }
-            webView.removeFromSuperview()
-            webView.frame = host.bounds
-            webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            host.addSubview(webView)
-        }
+    public func makeUIViewController(context: Context) -> WebHostController {
+        WebHostController()
     }
+
+    public func updateUIViewController(_ host: WebHostController, context: Context) {
+        let insets = UIEdgeInsets(top: topInset, left: 0, bottom: 0, right: 0)
+        if host.additionalSafeAreaInsets != insets { host.additionalSafeAreaInsets = insets }
+        host.show(browser.webView)
+    }
+}
+
+public final class WebHostController: UIViewController {
+    public override func loadView() {
+        let view = UIView()
+        view.backgroundColor = .black
+        view.isUserInteractionEnabled = false
+        self.view = view
+    }
+
+    /// The web view is re-parented rather than recreated, so switching tabs or unplugging the
+    /// glasses finds each page where it was left.
+    func show(_ webView: WKWebView) {
+        guard webView.superview !== view else { return }
+        view.subviews.forEach { $0.removeFromSuperview() }
+        webView.removeFromSuperview()
+        webView.frame = view.bounds
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(webView)
+    }
+}
+
+/// The glass under the browser's bar: UIKit's own blur, the same one Safari puts over its pages.
+/// It samples the web view's layers directly, which a SwiftUI material over a hosted view does
+/// not reliably do.
+public struct GlassBackdrop: UIViewRepresentable {
+    public init() {}
+
+    public func makeUIView(context: Context) -> UIVisualEffectView {
+        let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    public func updateUIView(_ view: UIVisualEffectView, context: Context) {}
 }
 #endif

@@ -49,11 +49,13 @@ public struct BrowserPanel: View {
             // The page's own fullscreen: nothing of ours on top of it, edge to edge.
             page.background(Color.black)
         } else {
-            ZStack(alignment: .top) {
-                page
-                bar
-                    .padding(.horizontal, BrowserMetrics.barInset)
-                    .padding(.top, BrowserMetrics.barInset)
+            GeometryReader { geometry in
+                ZStack(alignment: .top) {
+                    page
+                    bar(panel: geometry.size)
+                        .padding(.horizontal, BrowserMetrics.barInset)
+                        .padding(.top, BrowserMetrics.barInset)
+                }
             }
             .background(Color.black)
             .clipShape(shape)
@@ -79,7 +81,7 @@ public struct BrowserPanel: View {
     private var showsButtons: Bool { hovering && !browser.isEditingAddress }
     private var tabCount: Int { max(browser.tabs.count, 1) }
 
-    private var bar: some View {
+    private func bar(panel: CGSize) -> some View {
         GeometryReader { geometry in
             let button = BrowserMetrics.buttonWidth
             let segments = BrowserMetrics.tabSegments(barWidth: geometry.size.width,
@@ -111,15 +113,17 @@ public struct BrowserPanel: View {
             }
         }
         .frame(height: BrowserMetrics.barHeight)
-        .background { glass }
+        // Words over moving content: a soft shadow keeps them legible over a white page
+        // without tinting the glass itself.
+        .shadow(color: .black.opacity(0.55), radius: 3)
+        .background { glass(panel: panel) }
         .overlay(alignment: .bottom) { progress }
         .clipShape(Capsule())
         .overlay(
             Capsule().strokeBorder(
-                LinearGradient(colors: [.white.opacity(hovering ? 0.38 : 0.26), .white.opacity(0.06)],
+                LinearGradient(colors: [.white.opacity(hovering ? 0.42 : 0.30), .white.opacity(0.08)],
                                startPoint: .top, endPoint: .bottom),
                 lineWidth: 1.5))
-        .shadow(color: .black.opacity(0.55), radius: 20, y: 8)
     }
 
     /// One tab. The active one is the page's title (or the start page's invitation to type);
@@ -164,17 +168,32 @@ public struct BrowserPanel: View {
         .animation(.easeOut(duration: 0.15), value: showsClose)
     }
 
+    /// Glass: the page shows through, blurred. No tint and no drop shadow — both read as a
+    /// solid bar the moment anything dark is behind it, which on a web page is most of the time.
     @ViewBuilder
-    private var glass: some View {
+    private func glass(panel: CGSize) -> some View {
+        #if os(iOS)
         if liveGlass {
-            ZStack {
-                Rectangle().fill(.thinMaterial)
-                // Material alone reads grey on a birdbath; a little black keeps it a tint.
-                Color.black.opacity(0.3)
-            }
+            GlassBackdrop()
         } else {
-            Color(white: 0.10).opacity(0.94)
+            stillGlass(panel: panel)
         }
+        #else
+        stillGlass(panel: panel)
+        #endif
+    }
+
+    /// `ImageRenderer` cannot sample a backdrop, so a still blurs its own copy of the page,
+    /// lined up under the bar. Same look, arrived at the long way round.
+    private func stillGlass(panel: CGSize) -> some View {
+        GeometryReader { _ in
+            page
+                .frame(width: panel.width, height: panel.height)
+                .offset(x: -BrowserMetrics.barInset, y: -BrowserMetrics.barInset)
+        }
+        // Roughly UIKit's ultra-thin dark material: a light blur, a slight darkening.
+        .blur(radius: 12, opaque: true)
+        .overlay(Color.black.opacity(0.2))
     }
 
     private var titleText: String {
