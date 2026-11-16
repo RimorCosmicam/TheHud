@@ -3,10 +3,18 @@ import ApplicationServices
 import HudCore
 
 /// Ties the pieces together and keeps the menu bar honest about what is happening.
+///
+/// The menu has the two choices: sharing on or off, and Mirror (the Mac's main screen) or Extend
+/// (a screen of the glasses' own, above the main one, there only while a phone is connected).
 @MainActor
 final class CastController: NSObject, NSApplicationDelegate {
+    enum Mode: String { case mirror, extend }
+
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "Starting\u{2026}", action: nil, keyEquivalent: "")
+    private let shareItem = NSMenuItem(title: "", action: #selector(toggleSharing), keyEquivalent: "s")
+    private let mirrorItem = NSMenuItem(title: "Mirror", action: #selector(chooseMirror), keyEquivalent: "m")
+    private let extendItem = NSMenuItem(title: "Extend", action: #selector(chooseExtend), keyEquivalent: "e")
     private let accessLine = NSMenuItem(title: "Allow control of this Mac\u{2026}",
                                         action: #selector(openAccessibility), keyEquivalent: "")
     private var server: CastServer!
@@ -14,17 +22,31 @@ final class CastController: NSObject, NSApplicationDelegate {
     private let input = InputInjector()
     private var windowTimer: Timer?
     private var lastWindows: [DesktopWindow] = []
+    private var connected = false
+    private var virtualDisplay: VirtualDisplay?
+    private var serverState = "Starting\u{2026}"
+
+    private var sharing = UserDefaults.standard.object(forKey: "sharing") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(sharing, forKey: "sharing") }
+    }
+    private var mode = Mode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .mirror {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mode") }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "eyeglasses",
-                                           accessibilityDescription: "HudCast")
         let menu = NSMenu()
         statusLine.isEnabled = false
         menu.addItem(statusLine)
+        menu.addItem(.separator())
+        for item in [shareItem, mirrorItem, extendItem] {
+            item.target = self
+            menu.addItem(item)
+            if item === shareItem { menu.addItem(.separator()) }
+        }
+        menu.addItem(.separator())
         accessLine.target = self
         menu.addItem(accessLine)
-        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit HudCast", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
@@ -56,19 +78,59 @@ final class CastController: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { self?.handle(command) }
         }
         server.onState = { [weak self] text in
-            DispatchQueue.main.async { self?.statusLine.title = text }
+            DispatchQueue.main.async {
+                self?.serverState = text
+                self?.refreshMenu()
+            }
         }
-        server.start()
+        if sharing { server.start() }
+        refreshMenu()
     }
 
+    // ------------------------------------------------------------------ the menu
+
+    private func refreshMenu() {
+        shareItem.title = sharing ? "Stop Sharing" : "Start Sharing"
+        mirrorItem.state = mode == .mirror ? .on : .off
+        extendItem.state = mode == .extend ? .on : .off
+        let what = mode == .mirror ? "mirroring this Mac" : "extending this Mac"
+        statusLine.title = !sharing ? "Not sharing"
+            : connected ? "Streaming to iPhone, \(what)" : serverState
+        let symbol = connected ? "eyeglasses.circle.fill" : "eyeglasses"
+        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "HudCast")
+        statusItem.button?.appearsDisabled = !sharing
+    }
+
+    @objc private func toggleSharing() {
+        sharing.toggle()
+        if sharing {
+            serverState = "Starting\u{2026}"
+            server.start()
+        } else {
+            server.stop()
+        }
+        refreshMenu()
+    }
+
+    @objc private func chooseMirror() { choose(.mirror) }
+    @objc private func chooseExtend() { choose(.extend) }
+
+    private func choose(_ new: Mode) {
+        guard new != mode else { return }
+        mode = new
+        refreshMenu()
+        if connected { Task { await showScreen() } }
+    }
+
+    // ------------------------------------------------------------------ the phone
+
     private func phoneConnected() {
-        statusLine.title = "Streaming to iPhone"
-        statusItem.button?.image = NSImage(systemSymbolName: "eyeglasses.circle.fill",
-                                           accessibilityDescription: "HudCast, streaming")
+        connected = true
         lastWindows = []
+        refreshMenu()
         Task {
+            await showScreen()
             await sendWindows()
-            await capture.start(window: input.source?.window)
         }
         windowTimer?.invalidate()
         windowTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
@@ -78,11 +140,38 @@ final class CastController: NSObject, NSApplicationDelegate {
     }
 
     private func phoneDisconnected() {
-        statusLine.title = "Waiting for iPhone"
-        statusItem.button?.image = NSImage(systemSymbolName: "eyeglasses",
-                                           accessibilityDescription: "HudCast")
+        connected = false
         windowTimer?.invalidate()
-        Task { await capture.stop() }
+        refreshMenu()
+        Task {
+            await capture.stop()
+            guard !connected else { return }   // a phone came straight back
+            // Unplugged with the phone: macOS moves its windows back to the Mac's own screens.
+            virtualDisplay = nil
+            input.displayID = CGMainDisplayID()
+        }
+    }
+
+    /// Streams the whole screen the mode asks for: the main one, or the glasses' own, plugged in
+    /// above the main one first.
+    private func showScreen() async {
+        let id: CGDirectDisplayID
+        if mode == .extend {
+            if virtualDisplay == nil {
+                virtualDisplay = VirtualDisplay()
+                // A moment for macOS to lay the new screen out before it is moved.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                virtualDisplay?.placeAboveMain()
+            }
+            id = virtualDisplay?.id ?? CGMainDisplayID()
+        } else {
+            virtualDisplay = nil
+            id = CGMainDisplayID()
+        }
+        capture.displayID = id
+        input.displayID = id
+        guard connected else { return }
+        await capture.start(window: nil)
     }
 
     private func sendWindows() async {

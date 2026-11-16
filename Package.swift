@@ -33,6 +33,9 @@ let package = Package(
         // macOS: HudCast, the Mac side of the desktop panel. It streams the screen, or one
         // window, to the phone over the local network and plays the phone's cursor and keys
         // back as real input. `scripts/build-hudcast.sh` wraps it as an app.
-        .executableTarget(name: "hudcast", dependencies: ["HudCore"]),
+        .executableTarget(name: "hudcast", dependencies: ["HudCore", "CVirtualDisplay"]),
+
+        // macOS: CoreGraphics' virtual display, declared for Swift. HudCast's Extend mode.
+        .target(name: "CVirtualDisplay"),
     ]
 )

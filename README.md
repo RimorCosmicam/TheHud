@@ -80,6 +80,15 @@ HudCast runs in the Mac's menu bar. It finds the phone on the local network, str
 H.264, and takes the phone's clicks and typing. It needs Screen Recording and Accessibility
 permissions the first time.
 
+Its menu has:
+
+- **Start Sharing / Stop Sharing**: stopping hides HudCast from the phone and drops any phone
+  connected to it.
+- **Mirror**: the glasses show the Mac's main screen.
+- **Extend**: the glasses get a 1920×1080 screen of their own, placed directly above the main
+  one, so you move the pointer up to reach it. macOS treats it like a real monitor. It's plugged
+  in while a phone is connected, and its windows come back to the Mac when the phone goes.
+
 ```bash
 scripts/build-hudcast.sh
 ```

@@ -4,12 +4,14 @@ import HudCore
 
 /// Plays the phone's cursor and keys back on the Mac as real events.
 ///
-/// Positions arrive as fractions of the streamed picture. For the whole display that is the main
-/// display's bounds; for one window it is that window's bounds, looked up each time because a
+/// Positions arrive as fractions of the streamed picture. For the whole display that is that
+/// display's bounds (the main one, or the virtual one in Extend); for one window it is that window's bounds, looked up each time because a
 /// window can be moved while it is being streamed.
 @MainActor
 final class InputInjector {
     var source: DesktopSource?
+    /// The screen a whole-display stream shows: the main one, or the glasses' virtual one.
+    var displayID: CGDirectDisplayID = CGMainDisplayID()
     private var pressed = false
     private var lastClick: (time: Date, point: CGPoint, count: Int) = (.distantPast, .zero, 0)
 
@@ -66,7 +68,7 @@ final class InputInjector {
            let rect = CGRect(dictionaryRepresentation: bounds) {
             return rect
         }
-        return CGDisplayBounds(CGMainDisplayID())
+        return CGDisplayBounds(displayID)
     }
 
     /// Clicking into a streamed window that is behind others brings it forward first, so the

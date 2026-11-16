@@ -41,18 +41,28 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             }
     }
 
-    /// Starts streaming the whole main display, or one window. Replaces whatever was streaming.
+    /// The screen streamed when no window is picked: the main one (Mirror), or the glasses' own
+    /// virtual screen (Extend).
+    var displayID: CGDirectDisplayID = CGMainDisplayID()
+
+    /// Starts streaming the whole display, or one window. Replaces whatever was streaming.
     func start(window windowID: UInt32?) async {
         await stop()
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(
+            var content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: false)
+            // A virtual screen just plugged in takes a moment to be offered for capture.
+            for _ in 0..<20 where windowID == nil && !content.displays.contains(where: { $0.displayID == displayID }) {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            }
             let filter: SCContentFilter
             if let windowID, let window = content.windows.first(where: { $0.windowID == windowID }) {
                 filter = SCContentFilter(desktopIndependentWindow: window)
             } else {
-                let main = CGMainDisplayID()
-                guard let display = content.displays.first(where: { $0.displayID == main })
+                let wanted = displayID
+                guard let display = content.displays.first(where: { $0.displayID == wanted })
+                        ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() })
                         ?? content.displays.first else { return }
                 filter = SCContentFilter(display: display, excludingApplications: [],
                                          exceptingWindows: [])

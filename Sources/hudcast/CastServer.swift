@@ -42,9 +42,23 @@ final class CastServer: @unchecked Sendable {
                 self?.accept(connection)
             }
             listener.start(queue: queue)
-            self.listener = listener
+            queue.async { self.listener = listener }
         } catch {
             onState?("Could not listen: \(error)")
+        }
+    }
+
+    /// Stops advertising and lets the phone go. `start()` opens up again.
+    func stop() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.listener?.cancel()
+            self.listener = nil
+            if let connection = self.connection {
+                self.connection = nil
+                connection.cancel()
+                self.onDisconnect?()
+            }
         }
     }
 
