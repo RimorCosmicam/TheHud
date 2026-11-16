@@ -246,8 +246,16 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
 
     private fun run(body: String) = view.evaluateJavascript("(function(){$body})();", null)
 
+    /** Host mode with the sound on the iPhone: this one plays the picture only. */
+    var muted = false
+        set(value) { if (value != field) { field = value; applyMuted() } }
+
+    private fun applyMuted() = run("document.querySelectorAll('video').forEach(function(v){v.muted=$muted})")
+
     private fun poll() {
         if (!polling) return
+        // A new video starts with its own sound: kept as it should be.
+        if (muted) applyMuted()
         readPage()
         main.postDelayed(::poll, 1000)
     }

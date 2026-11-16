@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import CoreLocation
+import AVFoundation
 import HudCore
 
 /// The one piece of state both scenes read.
@@ -91,6 +92,17 @@ final class HudController: ObservableObject {
     /// phone's glasses; otherwise this phone is the Android phone's remote. Saved.
     @Published private(set) var remoteHosting = UserDefaults.standard.bool(forKey: "remoteHosting")
     private var hostStreamer: HostStreamer?
+    /// Host mode: YouTube's sound from this phone (for headphones) instead of the glasses. Saved.
+    @Published var hostSoundHere = UserDefaults.standard.bool(forKey: "hostSoundHere") {
+        didSet {
+            UserDefaults.standard.set(hostSoundHere, forKey: "hostSoundHere")
+            hostSoundChanged()
+        }
+    }
+    /// The Android phone's player as it last said, and when.
+    private var androidVideo: (id: String, time: Double, playing: Bool, at: Date)?
+    /// Back from the lock, the Android phone's video leads a moment longer while this one catches up.
+    private var hostHoldUntil = Date.distantPast
     /// The Android phone's state, while connected. Everything the phone's screen draws comes
     /// from here then, and its buttons go there; this phone's own scenes are left alone.
     @Published private(set) var remoteState: RemoteState?
@@ -1830,6 +1842,10 @@ final class HudController: ObservableObject {
     private func startRemoteConnect() {
         remoteLink.hosting = remoteHosting
         remoteLink.onKeyframe = { [weak self] in self?.hostStreamer?.requestKeyframe() }
+        remoteLink.onHostVideo = { [weak self] o in
+            self?.androidVideo = (o["id"] as? String ?? "", (o["time"] as? NSNumber)?.doubleValue ?? 0,
+                                  o["playing"] as? Bool ?? false, Date())
+        }
         remoteLink.onStatus = { [weak self] status in
             guard let self else { return }
             self.remoteStatus = status
@@ -1895,11 +1911,37 @@ final class HudController: ObservableObject {
         streamer.overlay = { [weak self] in self?.hostOverlay() ?? ([:], nil) }
         streamer.macPicture = { [weak self] in self?.desktopLink.latestPicture }
         desktopLink.decodesPictures = true
-        // The Android phone plays the video, and its sound goes to the glasses: this one is silent.
-        youtubePlayer.muted = true
         streamer.start(in: scene)
         hostStreamer = streamer
+        hostSoundChanged()
         glassesConnected = true
+    }
+
+    /// The Android phone plays the video either way, for the picture; the sound is the glasses'
+    /// unless it is asked for here. Here, it plays on with the phone locked, as a music app would.
+    private func hostSoundChanged() {
+        guard hostStreamer != nil else { return }
+        youtubePlayer.muted = !hostSoundHere
+        if hostSoundHere {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
+    }
+
+    /// Whether the Android phone's video goes its own way for now: while this phone is locked its
+    /// silent player may stop, and that must not stop the one with the sound.
+    private var hostVideoHeld: Bool {
+        !hostSoundHere && (UIApplication.shared.applicationState != .active || Date() < hostHoldUntil)
+    }
+
+    /// Unlocked again: this phone's silent player jumps to where the Android phone's has got to.
+    private func hostCatchUp() {
+        guard hostStreamer != nil, !hostSoundHere, let a = androidVideo,
+              a.id == youtubePlayer.state.videoId, Date().timeIntervalSince(a.at) < 5 else { return }
+        let target = a.time + (a.playing ? Date().timeIntervalSince(a.at) : 0)
+        youtubePlayer.seek(by: target - youtubePlayer.state.elapsed)
+        if youtubePlayer.state.isPlaying != a.playing { youtubePlayer.togglePlay() }
+        hostHoldUntil = Date().addingTimeInterval(3)
     }
 
     /// What the film of the glasses cannot hold, in the canvas's points.
@@ -1910,7 +1952,8 @@ final class HudController: ObservableObject {
         if let cursor = snapshot.cursor { o["cursor"] = [Double(cursor.x), Double(cursor.y)] }
         let y = snapshot.youtube
         if y.hasVideo, !y.videoId.isEmpty {
-            var video: [String: Any] = ["id": y.videoId, "t": y.elapsed, "playing": y.isPlaying, "ad": y.isAd]
+            var video: [String: Any] = ["id": y.videoId, "t": y.elapsed, "playing": y.isPlaying, "ad": y.isAd,
+                                        "muted": hostSoundHere, "hold": hostVideoHeld]
             if let place = screen.videoPlace {
                 video["box"] = rect(place.box)
                 video["corner"] = Double(place.corner)
@@ -2106,6 +2149,7 @@ final class HudController: ObservableObject {
 
     private func phoneCameBack() {
         if pad == .remote { remote.start() }
+        hostCatchUp()
     }
 
     /// Off the glasses until the trackpad is next touched.

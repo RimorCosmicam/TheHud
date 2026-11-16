@@ -5,7 +5,7 @@ import VideoToolbox
 import HudCore
 
 /// Host mode: this phone's glasses, drawn in a window behind the phone's own screen, filmed up to
-/// thirty times a second and sent as H.264 (the same encoder and framing HudCast uses for the
+/// sixty times a second and sent as H.264 (the same encoder and framing HudCast uses for the
 /// Mac) to the Android phone, which only shows them on its glasses.
 @MainActor
 final class HostStreamer: NSObject {
@@ -29,6 +29,9 @@ final class HostStreamer: NSObject {
     var macPicture: () -> CVPixelBuffer? = { nil }
     private var lastOverlay = Data()
     private var lastOverlayAt = Date.distantPast
+    /// Locked, iOS draws nothing and the display link stops; this keeps the overlay going, so
+    /// the video on the Android phone plays on.
+    private var heartbeat: Timer?
 
     init(link: RemoteLink) {
         self.link = link
@@ -46,7 +49,7 @@ final class HostStreamer: NSObject {
         window.isHidden = false
         self.window = window
 
-        encoder = DesktopEncoder(width: Self.width, height: Self.height, bitrate: 8_000_000, fps: 30) {
+        encoder = DesktopEncoder(width: Self.width, height: Self.height, bitrate: 14_000_000, fps: 60) {
             [weak self] keyframe, avcc, sps, pps in
             var packets = Data()
             if let sps, let pps {
@@ -65,14 +68,22 @@ final class HostStreamer: NSObject {
         CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
 
         let displayLink = CADisplayLink(target: self, selector: #selector(film))
-        displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+        displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         displayLink.add(to: .main, forMode: .common)
         self.displayLink = displayLink
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, Date().timeIntervalSince(self.lastOverlayAt) > 0.5 else { return }
+                self.sendOverlay(self.overlay().json)
+            }
+        }
     }
 
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
+        heartbeat?.invalidate()
+        heartbeat = nil
         encoder?.flush()
         encoder = nil
         pool = nil
@@ -123,7 +134,7 @@ final class HostStreamer: NSObject {
     /// When it changes, and once a second anyway: the video's time keeps the two players together.
     private func sendOverlay(_ json: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]) else { return }
-        guard data != lastOverlay || Date().timeIntervalSince(lastOverlayAt) > 1 else { return }
+        guard data != lastOverlay || Date().timeIntervalSince(lastOverlayAt) > 0.5 else { return }
         lastOverlay = data
         lastOverlayAt = Date()
         link.sendPacket(DesktopWire.pack(.overlay, data))

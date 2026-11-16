@@ -220,6 +220,14 @@ struct SettingsSheet: View {
                     Text("Adds your subscriptions feed next to Home and search.")
                 }
 
+                Section {
+                    Toggle("Sound on this iPhone", isOn: $controller.hostSoundHere)
+                } header: {
+                    Text("Host mode")
+                } footer: {
+                    Text("YouTube's sound plays here, for headphones, instead of on the glasses. It keeps playing with the iPhone locked.")
+                }
+
                 Section("Surface") {
                     Picker("Palette", selection: Binding(
                         get: { controller.config.colorway.label },

@@ -88,7 +88,11 @@ import java.util.Locale
 
 /** Host mode: the iPhone's YouTube video, played here in the box it gives, in step with its time. */
 data class HostVideo(val id: String, val time: Double, val playing: Boolean, val ad: Boolean,
-                     val box: androidx.compose.ui.geometry.Rect?, val corner: Float)
+                     val box: androidx.compose.ui.geometry.Rect?, val corner: Float,
+                     /** The sound is on the iPhone. */
+                     val muted: Boolean = false,
+                     /** The iPhone is locked: this video goes its own way until it is back. */
+                     val hold: Boolean = false)
 
 /** Host mode: what a film of the iPhone's glasses cannot hold. */
 data class HostOverlay(val cursor: Offset? = null, val video: HostVideo? = null,
@@ -406,6 +410,7 @@ object HudController {
             if (hosted != wasHosted) {
                 // This phone's own video stops either way: hosting, the iPhone's plays here instead.
                 if (youtube?.state?.hasVideo == true) youtube?.stop()
+                youtube?.muted = false
                 hostVideoId = ""
                 hostOverlay = HostOverlay()
                 if (hosted) endTyping()
@@ -442,7 +447,7 @@ object HudController {
         val cursor = o.optJSONArray("cursor")?.let { Offset(it.optDouble(0).toFloat(), it.optDouble(1).toFloat()) }
         val video = o.optJSONObject("video")?.let { v ->
             HostVideo(v.optString("id"), v.optDouble("t", 0.0), v.optBoolean("playing"), v.optBoolean("ad"),
-                rect(v.optJSONArray("box")), v.optDouble("corner", 0.0).toFloat())
+                rect(v.optJSONArray("box")), v.optDouble("corner", 0.0).toFloat(), v.optBoolean("muted"), v.optBoolean("hold"))
         }
         hostOverlay = HostOverlay(cursor, video, rect(o.optJSONArray("mac")))
         syncHostVideo(video)
@@ -455,6 +460,7 @@ object HudController {
             if (hostVideoId.isNotEmpty()) { player.stop(); hostVideoId = "" }
             return
         }
+        player.muted = v.muted
         val now = System.currentTimeMillis()
         if (v.id != hostVideoId) {
             hostVideoId = v.id
@@ -464,7 +470,7 @@ object HudController {
         }
         val s = player.state
         // Ads come and go on each phone by themselves: only the film itself is kept in step.
-        if (!s.hasVideo || s.isAd || v.ad) return
+        if (!s.hasVideo || s.isAd || v.ad || v.hold) return
         // Both players report once a second, so only a real gap is closed, and not twice running.
         if (now - hostSeekedAt > 3000 && kotlin.math.abs(s.elapsed - v.time) > 2.5) { player.seek(v.time - s.elapsed); hostSeekedAt = now }
         if (s.isPlaying != v.playing && now - hostToggledAt > 2500) { player.togglePlay(); hostToggledAt = now }
@@ -574,6 +580,11 @@ object HudController {
         snapshot = snapshot.copy(clock = clock, timer = reading)
         if (reading.state == HudSnapshot.TimerState.done && previous != HudSnapshot.TimerState.done) timerDone()
         agendaTick(now, is24)
+        // Host mode: the iPhone hears where this phone's video is, to catch up after its lock.
+        if (hosted && hostVideoId.isNotEmpty()) youtube?.state?.let { s ->
+            connect.send(org.json.JSONObject().put("t", "hostVideo").put("id", s.videoId).put("time", s.elapsed)
+                .put("playing", s.isPlaying).toString())
+        }
         slideshow()
         music.tick()
         captions.tick()

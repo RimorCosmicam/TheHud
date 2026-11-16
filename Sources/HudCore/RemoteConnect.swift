@@ -347,6 +347,8 @@ public final class RemoteLink {
     public var onState: ((RemoteState) -> Void)?
     /// Host mode: the Android phone asks for a keyframe (its picture starts or restarts).
     public var onKeyframe: (() -> Void)?
+    /// Host mode: the Android phone's own player, once a second (its id, time, and whether it plays).
+    public var onHostVideo: (([String: Any]) -> Void)?
     public private(set) var pairing: RemotePairing?
     /// Host mode, set before connecting: this phone runs the apps and sends its glasses' picture;
     /// the Android phone only shows it. Otherwise this phone is the Android phone's remote.
@@ -517,6 +519,9 @@ public final class RemoteLink {
         case "keyframe":
             guard authed, hosting else { return }
             onKeyframe?()
+        case "hostVideo":
+            guard authed, hosting else { return }
+            onHostVideo?(o)
         default:
             break
         }
