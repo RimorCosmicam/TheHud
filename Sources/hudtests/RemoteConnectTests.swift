@@ -199,3 +199,22 @@ func runRemoteConnectTests() {
         }
     }
 }
+
+func runStandInTests() {
+    print("\nHost mode stand-in")
+    test("locked, the iPhone sends its layout for the Android phone to draw") {
+        var a = HudArrangement.standard
+        a.setCentre(.sky)
+        let m = RemoteWire.standIn(true, arrangement: a, solo: .map, clearView: false)
+        expectEqual(m["t"] as? String, "standIn")
+        expectEqual(m["on"] as? Bool, true)
+        expectEqual(m["solo"] as? String, "map")
+        let data = try! JSONSerialization.data(withJSONObject: m["arrangement"]!)
+        expectEqual(try? JSONDecoder().decode(HudArrangement.self, from: data), a)
+    }
+    test("back, nothing but the word") {
+        let m = RemoteWire.standIn(false)
+        expectEqual(m.count, 2)
+        expectEqual(m["on"] as? Bool, false)
+    }
+}

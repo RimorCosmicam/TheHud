@@ -184,6 +184,21 @@ public enum RemoteWire {
         }
     }
 
+    /// Host mode, this phone locked: it cannot film, so the Android phone draws the glasses
+    /// itself, laid out as here, until `on` is false again.
+    public static func standIn(_ on: Bool, arrangement: HudArrangement? = nil, solo: HudPanelKind? = nil,
+                               clearView: Bool = false) -> [String: Any] {
+        var m: [String: Any] = ["t": "standIn", "on": on]
+        guard on else { return m }
+        if let arrangement, let data = try? JSONEncoder().encode(arrangement),
+           let object = try? JSONSerialization.jsonObject(with: data) {
+            m["arrangement"] = object
+        }
+        m["solo"] = solo?.rawValue ?? NSNull()
+        m["clearView"] = clearView
+        return m
+    }
+
     /// The theme colour, sent on connecting and whenever it changes: the Android phone takes it
     /// as its own.
     public static func theme(_ color: ThemeColor) -> [String: Any] {

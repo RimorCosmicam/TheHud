@@ -64,7 +64,7 @@ fun GlassesRoot() {
         val eased = easedHeading()
         CompositionLocalProvider(LocalDensity provides Density(scale, 1f)) {
             Box(Modifier.requiredSize(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-                if (HudController.hosted) HostedGlasses() else GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
+                if (HudController.hosted && !HudController.hostStandIn) HostedGlasses() else GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
                     page = { LivePage() },
                     youtube = HudController.youtube?.let { player -> { LiveVideo(player) } },
                     mac = { LiveMac() },

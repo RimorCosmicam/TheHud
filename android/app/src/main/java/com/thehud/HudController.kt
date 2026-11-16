@@ -278,6 +278,14 @@ object HudController {
     var remotePeer by mutableStateOf<String?>(null)
     /** Host mode: the paired iPhone runs the apps and this phone only shows its picture on the glasses. */
     var hosted by mutableStateOf(false)
+    /**
+     * Host mode with the iPhone locked: it cannot film, so this phone draws the glasses itself, laid
+     * out as the iPhone had them, with its own clock, widgets and Mac, until the iPhone is back.
+     */
+    var hostStandIn by mutableStateOf(false)
+        private set
+    /** This phone's own layout, put back when the iPhone takes the glasses again. */
+    private var ownView: Triple<HudArrangement, HudPanelKind?, Boolean>? = null
         private set
     var hostOverlay by mutableStateOf(HostOverlay())
         private set
@@ -351,7 +359,7 @@ object HudController {
         }
 
     fun isOnGlasses(kind: HudPanelKind): Boolean =
-        if (clearView || hosted) false else solo?.let { it == kind } ?: arrangement.isShown(kind)
+        if (clearView || (hosted && !hostStandIn)) false else solo?.let { it == kind } ?: arrangement.isShown(kind)
 
     fun start(context: Context) {
         if (::app.isInitialized) return
@@ -411,6 +419,7 @@ object HudController {
             val wasHosted = hosted
             hosted = name != null && hosting
             if (hosted != wasHosted) {
+                if (hostStandIn) { restoreOwnView(); hostStandIn = false }
                 // This phone's own video stops either way: hosting, the iPhone's plays here instead.
                 if (youtube?.state?.hasVideo == true) youtube?.stop()
                 youtube?.muted = false
@@ -439,6 +448,30 @@ object HudController {
                     delay(100)
                 }
         }
+    }
+
+    private fun standIn(o: org.json.JSONObject) {
+        if (!hosted) return
+        val on = o.optBoolean("on")
+        if (on == hostStandIn) return
+        if (on) {
+            ownView = Triple(arrangement, solo, clearView)
+            o.optJSONObject("arrangement")?.let { a ->
+                runCatching { json.decodeFromString(HudArrangement.serializer(), a.toString()) }.getOrNull()
+            }?.let { arrangement = it }
+            solo = HudPanelKind.entries.firstOrNull { it.name == o.optString("solo") }
+            clearView = o.optBoolean("clearView")
+        } else {
+            restoreOwnView()
+        }
+        hostStandIn = on
+        panelsChanged()
+        sensorsChanged()
+    }
+
+    private fun restoreOwnView() {
+        ownView?.let { (a, s, c) -> arrangement = a; solo = s; clearView = c }
+        ownView = null
     }
 
     private fun hostOverlayArrived(o: org.json.JSONObject) {
@@ -506,6 +539,7 @@ object HudController {
                 "centre" -> { pointer = Pointer(); showCursor(); hover() }
                 else -> RemoteWire.gesture(o)?.let { gesture(it) }
             }
+            "standIn" -> standIn(o)
             "theme" -> ThemeColor.named(o.optString("color"))?.let { changeTheme(it) }
             "draft" -> draftChanged(o.optString("text"))
             "submit" -> submitTyping()

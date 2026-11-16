@@ -406,6 +406,17 @@ final class HudController: ObservableObject {
                 MainActor.assumeIsolated { self?.phoneWentAway() }
             }
         }
+        // Host mode: locked, nothing here can be filmed, so the Android phone takes over the glasses
+        // until this phone is back.
+        for name in [UIApplication.didEnterBackgroundNotification,
+                     UIApplication.protectedDataWillBecomeUnavailableNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.hostStandIn(true) }
+            }
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hostStandIn(false) }
+        }
         center.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
                 guard (note.object as? UIScene)?.session.role == .windowApplication else { return }
@@ -585,7 +596,7 @@ final class HudController: ObservableObject {
     private func panelsChanged() {
         stopTypingIntoHidden()
         startWidgetSources()
-        if isOnGlasses(.mac) {
+        if isOnGlasses(.mac) && !hostStandingIn {
             desktopLink.start()
         } else {
             desktopLink.stop()
@@ -1945,6 +1956,20 @@ final class HudController: ObservableObject {
         !hostSoundHere && (UIApplication.shared.applicationState != .active || Date() < hostHoldUntil)
     }
 
+    /// Locked in Host mode: the Android phone draws the glasses itself meanwhile.
+    private var hostStandingIn = false
+
+    private func hostStandIn(_ on: Bool) {
+        guard hostStreamer != nil, on != hostStandingIn else { return }
+        hostStandingIn = on
+        remoteLink.send(on ? RemoteWire.standIn(true, arrangement: arrangement, solo: solo, clearView: clearView)
+                           : RemoteWire.standIn(false))
+        if !on { hostStreamer?.requestKeyframe() }
+        // The Mac: the Android phone connects to it while it stands in, so this phone lets go, or
+        // the two would keep taking it from each other.
+        panelsChanged()
+    }
+
     /// Unlocked again: this phone's silent player jumps to where the Android phone's has got to.
     private func hostCatchUp() {
         guard hostStreamer != nil, !hostSoundHere, let a = androidVideo,
@@ -1981,6 +2006,7 @@ final class HudController: ObservableObject {
         guard let streamer = hostStreamer else { return }
         streamer.stop()
         hostStreamer = nil
+        hostStandingIn = false
         desktopLink.decodesPictures = false
         youtubePlayer.muted = false
         glassesConnected = glassesScene

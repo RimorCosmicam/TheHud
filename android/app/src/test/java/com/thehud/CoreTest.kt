@@ -156,6 +156,18 @@ class CoreTest {
     }
 
     @Test
+    fun theIPhonesLayoutReadsHereForTheStandIn() {
+        // Exactly what the iPhone's RemoteWire.standIn sends for the standard layout with the sky
+        // in the centre: strip left out, as Swift leaves out nil.
+        val sent = """{"bigs":[{"kind":"sky"}],"hidden":[],"left":["clock","weather","map"],"right":[null,null,null],"row":[null,null,null,null]}"""
+        val a = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString(HudArrangement.serializer(), sent)
+        assertEquals(HudPanelKind.sky, a.centre?.kind)
+        assertEquals(listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.map), a.left)
+        assertTrue(a.isShown(HudPanelKind.map))
+        assertFalse(a.isRow)
+    }
+
+    @Test
     fun themeAccentsMatchTheIPhone() {
         val expected = listOf(0xFFD8A628, 0xFF9ABE50, 0xFF00CBA9, 0xFF36BCFC, 0xFFA6A2FF, 0xFFE18BDA, 0xFFF985A2, 0xFFFA8C66)
         assertEquals(expected, com.thehud.core.ThemeColor.entries.map { com.thehud.core.OKLCH.rotate(0xFFD8A628, it.shift) })

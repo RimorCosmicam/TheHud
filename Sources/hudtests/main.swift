@@ -20,6 +20,7 @@ runSkyTests()
 runYouTubeTests()
 runRemoteConnectTests()
 runThemeTests()
+runStandInTests()
 MainActor.assumeIsolated { runPageScriptTests() }
 
 exit(TestKit.summarise())
