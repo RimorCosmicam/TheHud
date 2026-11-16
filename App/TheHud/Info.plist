@@ -61,10 +61,25 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Shows your photos on the glasses, one at a time or as a gallery.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>The desktop panel finds HudCast on your Mac over the local network to show its screen.</string>
+	<string>The Mac panel finds HudCast on your Mac, and Remote Connect finds your Android phone, over the local network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_thehud._tcp</string>
+		<string>_thehud-remote._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Remote Connect scans the code on your Android phone to pair with it.</string>
+	<!-- Remote Connect's QR code is a thehud:// link, so the Camera app can open it here too. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>thehud</string>
+			</array>
+		</dict>
 	</array>
 	<key>NSMotionUsageDescription</key>
 	<string>The activity widget counts your steps, distance and floors today.</string>

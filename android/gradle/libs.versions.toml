@@ -13,6 +13,7 @@ robolectric = "4.14.1"
 roborazzi = "1.39.0"
 astronomy = "v2.1.19"
 coil = "3.0.4"
+zxing = "3.5.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -32,6 +33,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 astronomy = { group = "com.github.cosinekitty", name = "astronomy", version.ref = "astronomy" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }

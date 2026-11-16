@@ -11,7 +11,9 @@ struct PhoneRootView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let keyboardUp = controller.keyboardTarget != nil
+            let keyboardUp = controller.shownKeyboardTarget != nil
+            // Working the Android phone's glasses, everything here is drawn from its state.
+            let snapshot = controller.shownSnapshot
             let gap = keyboardUp ? PhoneMetrics.surfaceMargin : 0
             // A little over half the glass, unless the keyboard (with its predictive bar)
             // leaves less than that under the icon row. Then the surface gives up the
@@ -20,27 +22,27 @@ struct PhoneRootView: View {
                                            geometry.size.height - PhoneMetrics.toolBar - gap))
 
             VStack(spacing: 0) {
-                HudToolBar(canGoBack: controller.snapshot.browser.canGoBack,
-                           canGoForward: controller.snapshot.browser.canGoForward,
+                HudToolBar(canGoBack: snapshot.browser.canGoBack,
+                           canGoForward: snapshot.browser.canGoForward,
                            keyboardUp: keyboardUp,
-                           isFavorite: controller.snapshot.browser.isHome
-                               ? nil : controller.snapshot.browser.isFavorite,
+                           isFavorite: snapshot.browser.isHome
+                               ? nil : snapshot.browser.isFavorite,
                            action: controller.perform)
                     .frame(height: PhoneMetrics.toolBar)
 
                 // The slack. The keyboard takes the height it needs from here, because
                 // everything else in the stack is fixed.
-                SettingsArea(arrangement: controller.arrangement,
-                             solo: controller.solo,
-                             clearView: controller.clearView,
+                SettingsArea(arrangement: controller.shownArrangement,
+                             solo: controller.shownSolo,
+                             clearView: controller.shownClearView,
                              editing: controller.editingGlasses,
-                             glassesConnected: controller.glassesConnected,
-                             tabs: controller.snapshot.browser.tabs,
-                             activeTab: controller.snapshot.browser.activeTab,
-                             desktop: controller.snapshot.desktop,
+                             glassesConnected: controller.shownGlassesConnected,
+                             tabs: snapshot.browser.tabs,
+                             activeTab: snapshot.browser.activeTab,
+                             desktop: snapshot.desktop,
                              showsWindows: controller.stripShowsWindows,
-                             scenes: controller.scenes.map(\.name),
-                             currentScene: controller.sceneIndex,
+                             scenes: controller.shownScenes,
+                             currentScene: controller.shownSceneIndex,
                              action: controller.perform)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .clipped()
@@ -66,19 +68,23 @@ struct PhoneRootView: View {
             SettingsSheet(controller: controller)
                 .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $controller.showingRemoteConnect) {
+            RemoteConnectView(controller: controller)
+                .presentationDetents([.large])
+        }
         .sheet(isPresented: $controller.showingCaptionSessions) {
             NavigationStack { CaptionsSessionsView() }
                 .presentationDetents([.medium, .large])
         }
         .preferredColorScheme(.dark)
         .onAppear { controller.start() }
-        .onChange(of: controller.keyboardTarget) { _, target in typing = target != nil }
+        .onChange(of: controller.shownKeyboardTarget) { _, target in typing = target != nil }
         .onChange(of: typing) { _, isTyping in
             guard !isTyping else { return }
             // A tick later: Return on the Mac takes the focus back straight after the field
             // gives it up, and that should not count as putting the keyboard away.
             DispatchQueue.main.async {
-                if !typing, controller.keyboardTarget != nil { controller.endTyping() }
+                if !typing, controller.shownKeyboardTarget != nil { controller.endTyping() }
             }
         }
     }
@@ -104,19 +110,20 @@ struct PhoneRootView: View {
     /// one. Autocorrect, dictation, swipe typing, every installed language and the emoji picker
     /// all arrive with it, and what is typed is forwarded to the address bar or the page.
     private var keyboardProxy: some View {
-        TextField("", text: Binding(get: { controller.draft },
+        let target = controller.shownKeyboardTarget
+        return TextField("", text: Binding(get: { controller.shownDraft },
                                     set: { controller.draftChanged($0) }))
             .focused($typing)
-            .keyboardType(controller.keyboardTarget == .page || controller.keyboardTarget == .mac
-                          || controller.keyboardTarget == .note ? .default : .webSearch)
-            .textInputAutocapitalization(controller.keyboardTarget == .address ? .never : .sentences)
-            .autocorrectionDisabled(controller.keyboardTarget == .address)
-            .submitLabel(controller.keyboardTarget == .address ? .go
-                         : controller.keyboardTarget == .mapSearch || controller.keyboardTarget == .youtubeSearch
+            .keyboardType(target == .page || target == .mac
+                          || target == .note ? .default : .webSearch)
+            .textInputAutocapitalization(target == .address ? .never : .sentences)
+            .autocorrectionDisabled(target == .address)
+            .submitLabel(target == .address ? .go
+                         : target == .mapSearch || target == .youtubeSearch
                          ? .search : .return)
             .onSubmit {
                 controller.submitTyping()
-                if controller.keyboardTarget == .mac { typing = true }
+                if target == .mac { typing = true }
             }
             .frame(width: 1, height: 1)
             .opacity(0.01)
@@ -134,9 +141,9 @@ struct PhoneRootView: View {
                 case .touchpad: touchpad(padSize)
                 case .remote: remote(padSize)
                 case .app:
-                    AppPad(kind: controller.padApp ?? .sky, snapshot: controller.snapshot,
+                    AppPad(kind: controller.padApp ?? .sky, snapshot: controller.shownSnapshot,
                            captionsLanguage: controller.captionsLanguage,
-                           fullscreen: controller.solo != nil, action: controller.perform)
+                           fullscreen: controller.shownSolo != nil, action: controller.perform)
                 }
             }
             .frame(height: padSize.height)

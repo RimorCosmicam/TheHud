@@ -18,6 +18,7 @@ runDesktopTests()
 runGridTests()
 runSkyTests()
 runYouTubeTests()
+runRemoteConnectTests()
 MainActor.assumeIsolated { runPageScriptTests() }
 
 exit(TestKit.summarise())

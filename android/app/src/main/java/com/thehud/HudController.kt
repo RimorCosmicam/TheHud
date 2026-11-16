@@ -9,6 +9,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.geometry.Offset
 import android.graphics.Bitmap
 import android.view.TextureView
@@ -39,6 +41,8 @@ import com.thehud.data.NavigationTracker
 import com.thehud.data.OverheadProvider
 import com.thehud.data.RoutePlan
 import com.thehud.data.WorldClocks
+import com.thehud.connect.RemoteServer
+import com.thehud.connect.RemoteWire
 import com.thehud.desktop.DesktopLink
 import com.thehud.desktop.DesktopWire
 import com.thehud.glasses.GlassesPresenter
@@ -237,6 +241,14 @@ object HudController {
     var stepGoal by mutableStateOf(8000)
         private set
     var youtubeSubscriptions by mutableStateOf(false)
+
+    /** Remote Connect: the paired iPhone working these glasses (its name while it is connected). */
+    var remotePeer by mutableStateOf<String?>(null)
+    /** The pairing screen, opened by holding settings. */
+    var showingConnect by mutableStateOf(false)
+    /** What the pairing QR code says; changes with a new code. */
+    var connectLink by mutableStateOf("")
+    private lateinit var connect: RemoteServer
         private set
 
     private lateinit var location: LocationProvider
@@ -333,6 +345,54 @@ object HudController {
         startProviders()
         tick()
         refreshWeather()
+        startConnect()
+    }
+
+    // ------------------------------------------------------------------ Remote Connect
+
+    private fun startConnect() {
+        connect = RemoteServer(app)
+        connect.onPeer = { name ->
+            remotePeer = name
+            if (name != null) {
+                // Paired: the code has done its job.
+                showingConnect = false
+                connect.send(RemoteWire.state(this))
+            }
+        }
+        connect.onMessage = { remoteMessage(it) }
+        connect.start()
+        // The state as the iPhone draws it, sent when it changes, at most ten times a second.
+        scope.launch {
+            snapshotFlow { if (remotePeer != null) RemoteWire.state(this@HudController) else "" }
+                .distinctUntilChanged()
+                .collect { line ->
+                    if (line.isNotEmpty()) connect.send(line)
+                    delay(100)
+                }
+        }
+    }
+
+    /** Opens the pairing screen with a fresh look at the address, which may have changed. */
+    fun showConnect() {
+        connectLink = connect.pairingLink()
+        showingConnect = true
+    }
+
+    /** A new key: whoever was paired has to scan again. */
+    fun newConnectCode() {
+        connect.forget()
+        connectLink = connect.pairingLink()
+    }
+
+    private fun remoteMessage(o: org.json.JSONObject) {
+        when (o.optString("t")) {
+            "action" -> RemoteWire.action(o, this)?.let { perform(it) }
+            "gesture" -> RemoteWire.gesture(o)?.let { gesture(it) }
+            "draft" -> draftChanged(o.optString("text"))
+            "submit" -> submitTyping()
+            "endTyping" -> endTyping()
+        }
     }
 
     /** After a permission is granted, or settings come back: start whatever can now start. */

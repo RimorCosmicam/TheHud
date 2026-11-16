@@ -1,5 +1,8 @@
 import SwiftUI
 import CoreGraphics
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Device metrics for the phones that can drive the glasses at all — iPhone 15 and later with a
 /// USB-C port that carries DisplayPort.
@@ -157,6 +160,8 @@ public enum PhoneAction: Sendable {
     case youtube(YouTubeAction)
     case prompter(PrompterAction)
     case photos(PhotosAction)
+    /// Holding the gear: pair with the Android phone, to work its glasses from here.
+    case remoteConnect
 }
 
 /// The icon row: the browser's own controls, the keyboard, and the gear.
@@ -196,7 +201,20 @@ public struct HudToolBar: View {
             Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 22)
                 .padding(.horizontal, 6)
 
-            button("gearshape", .settings).frame(width: 52)
+            // A tap is settings; a hold is Remote Connect.
+            Image(systemName: "gearshape")
+                .font(.system(size: 19, weight: .medium))
+                .foregroundStyle(HudTheme.ink)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { action(.settings) }
+                .onLongPressGesture(minimumDuration: 0.5) {
+                    #if os(iOS)
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    #endif
+                    action(.remoteConnect)
+                }
+                .frame(width: 52)
         }
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

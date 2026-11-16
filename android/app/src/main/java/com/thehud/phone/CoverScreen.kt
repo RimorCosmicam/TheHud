@@ -236,6 +236,8 @@ fun CoverScreen() {
             }
         }
         KeyboardProxy()
+        // Remote Connect: holding settings shows the code the iPhone scans.
+        if (c.showingConnect) ConnectScreen()
     }
 }
 
@@ -261,16 +263,18 @@ private fun ToolBar() {
         ToolButton(if (c.keyboardTarget != null) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard,
             lit = c.keyboardTarget != null) { c.perform(PhoneAction.Keyboard) }
         Box(Modifier.padding(horizontal = 4.dp).size(1.dp, 20.dp).background(Color.White.copy(alpha = 0.12f)))
-        ToolButton(Icons.Rounded.Settings, lit = c.showingSettings) { c.showingSettings = !c.showingSettings }
+        ToolButton(Icons.Rounded.Settings, lit = c.showingSettings, hold = { c.showConnect() }) { c.showingSettings = !c.showingSettings }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.ToolButton(
-    icon: ImageVector, enabled: Boolean = true, lit: Boolean = false, action: () -> Unit,
+    icon: ImageVector, enabled: Boolean = true, lit: Boolean = false, hold: (() -> Unit)? = null, action: () -> Unit,
 ) {
     val view = LocalView.current
-    Box(Modifier.weight(1f).fillMaxHeight().clickable(enabled = enabled) { view.tick(); action() },
+    Box(Modifier.weight(1f).fillMaxHeight().combinedClickable(enabled = enabled,
+        onLongClick = hold?.let { { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); it() } }) { view.tick(); action() },
         contentAlignment = Alignment.Center) {
         // State by brightness alone, as the Mont material asks.
         Image(icon, null, Modifier.size(24.dp),
@@ -609,15 +613,18 @@ private fun PadHeader() {
             Spacer(Modifier.weight(1f))
             HeaderButton(if (c.keyboardTarget != null) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard,
                 lit = c.keyboardTarget != null) { c.perform(PhoneAction.Keyboard) }
-            HeaderButton(Icons.Rounded.Settings, lit = c.showingSettings) { c.showingSettings = !c.showingSettings }
+            HeaderButton(Icons.Rounded.Settings, lit = c.showingSettings, hold = { c.showConnect() }) { c.showingSettings = !c.showingSettings }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HeaderButton(icon: ImageVector, lit: Boolean, action: () -> Unit) {
+private fun HeaderButton(icon: ImageVector, lit: Boolean, hold: (() -> Unit)? = null, action: () -> Unit) {
     val view = LocalView.current
-    Box(Modifier.size(30.dp).clickable { view.tick(); action() }, contentAlignment = Alignment.Center) {
+    Box(Modifier.size(30.dp).combinedClickable(
+        onLongClick = hold?.let { { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); it() } }) { view.tick(); action() },
+        contentAlignment = Alignment.Center) {
         Image(icon, null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(if (lit) HudTheme.accent else HudTheme.ink))
     }
 }

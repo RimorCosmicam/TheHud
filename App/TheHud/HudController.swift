@@ -55,9 +55,18 @@ final class HudController: ObservableObject {
     /// The fullscreen app's own controls were swapped for the pointer, until the app changes.
     @Published private(set) var appPadSetAside = false
     /// The app whose controls the pad can show: the fullscreen one, or else the centre's.
-    var padApp: HudPanelKind? { padApp(in: arrangement) }
+    var padApp: HudPanelKind? {
+        if let remoteState {
+            return Self.padApp(remoteState.arrangement, solo: remoteState.solo, clearView: remoteState.clearView)
+        }
+        return padApp(in: arrangement)
+    }
 
     private func padApp(in arrangement: HudArrangement) -> HudPanelKind? {
+        Self.padApp(arrangement, solo: solo, clearView: clearView)
+    }
+
+    private static func padApp(_ arrangement: HudArrangement, solo: HudPanelKind?, clearView: Bool) -> HudPanelKind? {
         if clearView { return nil }
         if let solo { return solo.hasPhoneControls ? solo : nil }
         guard let centre = arrangement.centre?.kind, centre.hasPhoneControls,
@@ -71,6 +80,33 @@ final class HudController: ObservableObject {
         return pointerMode == .touchpad ? .touchpad : .remote
     }
     @Published var showingCaptionSessions = false
+
+    // ------------------------------------------------------------------ Remote Connect
+
+    /// The Android phone, while this one works its glasses.
+    let remoteLink = RemoteLink()
+    @Published var showingRemoteConnect = false
+    @Published private(set) var remoteStatus: RemoteLink.Status = .off
+    /// The Android phone's state, while connected. Everything the phone's screen draws comes
+    /// from here then, and its buttons go there; this phone's own scenes are left alone.
+    @Published private(set) var remoteState: RemoteState?
+    /// The keyboard's text while typing on the Android phone. Taken from it only when its
+    /// keyboard comes up, so what is typed here is never overwritten by its own echo.
+    @Published private(set) var remoteDraft = ""
+    var isRemote: Bool { remoteState != nil }
+
+    var shownArrangement: HudArrangement { remoteState?.arrangement ?? arrangement }
+    var shownSolo: HudPanelKind? { remoteState.map(\.solo) ?? solo }
+    var shownClearView: Bool { remoteState?.clearView ?? clearView }
+    var shownSnapshot: HudSnapshot { remoteState?.applied(to: snapshot) ?? snapshot }
+    var shownScenes: [String] { remoteState?.scenes ?? scenes.map(\.name) }
+    var shownSceneIndex: Int { remoteState?.scene ?? sceneIndex }
+    var shownGlassesConnected: Bool { remoteState?.glassesConnected ?? glassesConnected }
+    var shownKeyboardTarget: KeyboardTarget? {
+        guard let remoteState else { return keyboardTarget }
+        return remoteState.keyboard.flatMap(KeyboardTarget.init(name:))
+    }
+    var shownDraft: String { isRemote ? remoteDraft : draft }
     /// Pointing the phone, for REMOTE.
     let remote = RemoteMotion()
     private var remoteTouches: [RemoteZone: TouchPoint] = [:]
@@ -122,7 +158,10 @@ final class HudController: ObservableObject {
     @Published var cornerPressed = false
 
     /// Where keystrokes go while the keyboard is up.
-    enum KeyboardTarget { case address, page, mapSearch, mac, note, youtubeSearch }
+    enum KeyboardTarget: String { case address, page, mapSearch, mac, note, youtubeSearch
+        /// As the Android app names them.
+        init?(name: String) { self.init(rawValue: name) }
+    }
     @Published private(set) var keyboardTarget: KeyboardTarget?
     /// The invisible text field's contents. For the address bar it is the draft itself; for the
     /// page it is a proxy that is diffed into insertions and deletions.
@@ -322,6 +361,7 @@ final class HudController: ObservableObject {
     /// Called once the phone scene is on screen.
     func start() {
         captions.language = captionsLanguage
+        startRemoteConnect()
         // Locked, the phone is in a pocket: nothing to point at. With the glasses plugged in
         // the app never goes to the background (their scene stays on), so it is the phone's
         // own scene that is watched, and the lock itself where a passcode makes it known.
@@ -656,7 +696,14 @@ final class HudController: ObservableObject {
 
     /// Every button on the phone lands here.
     func perform(_ action: PhoneAction) {
+        // Working the Android phone: what its glasses do goes there; this phone's own settings,
+        // pads and editor stay here.
+        if isRemote, let message = RemoteWire.message(for: action) {
+            remoteLink.send(message)
+            return
+        }
         switch action {
+        case .remoteConnect: showingRemoteConnect = true
         case .back: browser.back()
         case .forward: browser.forward()
         case .reload: browser.reload()
@@ -800,7 +847,11 @@ final class HudController: ObservableObject {
     private func remoteMoved(_ dx: Int, _ dy: Int, _ deliberate: Bool) {
         // Put away, the cursor waits for a thumb: a phone swinging in a hand or a pocket
         // should not bring it back.
-        guard !cursorAsleep, pad == .remote else { return }
+        guard isRemote || !cursorAsleep, pad == .remote else { return }
+        if isRemote {
+            remoteLink.send(RemoteWire.message(for: GestureEvent.move(dx: dx, dy: dy, isDragging: remoteDragging)))
+            return
+        }
         pointer.apply(.move(dx: dx, dy: dy, isDragging: remoteDragging))
         pointerMoved()
         snapshot.cursor = pointer.position
@@ -818,7 +869,7 @@ final class HudController: ObservableObject {
         }
         contacts = Array(remoteTouches.values)
 
-        if cursorAsleep, phase == .began {
+        if cursorAsleep, phase == .began, !isRemote {
             cursorAsleep = false
             snapshot.cursor = pointer.position
             remoteWakers.insert(zone)
@@ -1054,6 +1105,10 @@ final class HudController: ObservableObject {
     /// the rail should scroll the page wherever the pointer happens to be parked.
     private func scrollPage(_ ticks: Int) {
         guard ticks != 0 else { return }
+        if isRemote {
+            remoteLink.send(RemoteWire.message(for: GestureEvent.scroll(v: ticks, h: 0)))
+            return
+        }
         // In the Maps app, scrolling zooms: down to see more, up to see closer.
         if mapFillsCanvas { return zoomMap(pow(1.1, Double(ticks))) }
         if solo == .sky && !clearView {
@@ -1466,6 +1521,10 @@ final class HudController: ObservableObject {
     }
 
     func endTyping() {
+        if isRemote {
+            if remoteState?.keyboard != nil { remoteLink.send(["t": "endTyping"]) }
+            return
+        }
         if keyboardTarget == .youtubeSearch { snapshot.youtube.isEditingQuery = false }
         if keyboardTarget == .mapSearch { snapshot.maps.isEditing = false }
         if keyboardTarget == .note {
@@ -1482,6 +1541,14 @@ final class HudController: ObservableObject {
 
     /// The text field changed. Called by its binding.
     func draftChanged(_ new: String) {
+        if isRemote {
+            remoteLink.send(["t": "draft", "text": new])
+            // Typing into a page, the same sentinel as here: gone, the Android phone deletes one
+            // past what was typed and puts it back, and so does this field.
+            let target = shownKeyboardTarget
+            remoteDraft = (target == .page || target == .mac) && !new.hasPrefix(Self.sentinel) ? Self.sentinel + new : new
+            return
+        }
         switch keyboardTarget {
         case .address:
             draft = new
@@ -1543,6 +1610,12 @@ final class HudController: ObservableObject {
     }
 
     func submitTyping() {
+        if isRemote {
+            remoteLink.send(["t": "submit"])
+            // Return on the Mac starts a new line there, and an empty field here.
+            if shownKeyboardTarget == .mac { remoteDraft = Self.sentinel }
+            return
+        }
         switch keyboardTarget {
         case .address:
             if let url = AddressInput.url(from: draft) { browser.load(url) }
@@ -1746,6 +1819,56 @@ final class HudController: ObservableObject {
 
     // ------------------------------------------------------------------ settings
 
+    // ------------------------------------------------------------------ Remote Connect
+
+    private func startRemoteConnect() {
+        remoteLink.onStatus = { [weak self] status in
+            guard let self else { return }
+            self.remoteStatus = status
+            if case .connected = status {
+                // In: the code has done its job.
+                self.showingRemoteConnect = false
+            } else if self.remoteState != nil {
+                self.remoteState = nil
+                self.remoteDraft = ""
+                self.appPadSetAside = false
+                self.padChanged()
+            }
+        }
+        remoteLink.onState = { [weak self] state in self?.remoteStateArrived(state) }
+        if let pairing = RemotePairingStore.load() { remoteLink.connect(pairing) }
+    }
+
+    private func remoteStateArrived(_ state: RemoteState) {
+        let old = remoteState
+        let padBefore = pad
+        if old == nil || old?.keyboard != state.keyboard { remoteDraft = state.draft }
+        if old == nil {
+            // Taking over (not remote yet, so this is this phone's own): the keyboard and the
+            // cursor step aside.
+            if keyboardTarget != nil { endTyping() }
+            putCursorAway()
+        }
+        if old?.solo != state.solo { appPadSetAside = false }
+        remoteState = state
+        if pad != padBefore { padChanged() }
+    }
+
+    /// A scanned code or an opened `thehud://` link.
+    @discardableResult
+    func pair(with link: String) -> Bool {
+        guard let pairing = RemotePairing(link: link) else { return false }
+        RemotePairingStore.save(pairing)
+        remoteLink.connect(pairing)
+        return true
+    }
+
+    /// Back to this phone's own glasses, and the pairing forgotten.
+    func forgetRemote() {
+        RemotePairingStore.save(nil)
+        remoteLink.disconnect()
+    }
+
     func settingsChanged() {
         recognizer.settings = trackpad
         rail.scrollSpeed = trackpad.scrollSpeed
@@ -1789,6 +1912,10 @@ final class HudController: ObservableObject {
     }
 
     private func handle(_ event: GestureEvent) {
+        if isRemote {
+            remoteLink.send(RemoteWire.message(for: event))
+            return
+        }
         pointer.apply(event)
 
         // Put away for being idle or the phone being locked: the first touch only brings it

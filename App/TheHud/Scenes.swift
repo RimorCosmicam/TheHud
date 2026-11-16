@@ -33,6 +33,20 @@ final class PhoneSceneDelegate: UIResponder, UIWindowSceneDelegate {
             rootView: PhoneRootView(screenHeight: windowScene.screen.bounds.height))
         window.makeKeyAndVisible()
         self.window = window
+        // Opened by scanning Remote Connect's code with the Camera app.
+        if let url = options.urlContexts.first?.url { openRemoteLink(url) }
+    }
+
+    func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
+        if let url = contexts.first?.url { openRemoteLink(url) }
+    }
+
+    private func openRemoteLink(_ url: URL) {
+        MainActor.assumeIsolated {
+            let controller = HudController.shared
+            controller.showingRemoteConnect = true
+            controller.pair(with: url.absoluteString)
+        }
     }
 }
 

@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.astronomy)
     implementation(libs.coil.compose)
     implementation(libs.coil.network)
+    implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
