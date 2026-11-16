@@ -14,9 +14,7 @@ import android.graphics.Bitmap
 import android.view.TextureView
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import com.thehud.apps.AppsProvider
-import com.thehud.apps.HudAccessibility
-import com.thehud.core.AppsLayout
+import com.thehud.apps.GlassesOverlayService
 import com.thehud.core.BrowserMetrics
 import com.thehud.core.ClockAppLayout
 import com.thehud.core.MapsLayout
@@ -115,7 +113,7 @@ sealed interface PhoneAction {
     data class MacWindow(val id: Long?) : PhoneAction
 }
 
-enum class KeyboardTarget { address, page, note, mapSearch, mac, youtubeSearch, apps }
+enum class KeyboardTarget { address, page, note, mapSearch, mac, youtubeSearch }
 
 /** What the lower half of the cover screen is: the touchpad, the phone pointed like a remote, or the app's own controls. */
 enum class PhonePad { touchpad, remote, app }
@@ -229,7 +227,6 @@ object HudController {
     val heading = androidx.compose.runtime.mutableDoubleStateOf(0.0)
     var youtube: YouTubePlayer? = null
         private set
-    val apps by lazy { AppsProvider(app) }
     /** Caption sessions and the like changed: the settings page reads this to redraw. */
     var settingsVersion by mutableStateOf(0)
         private set
@@ -358,8 +355,6 @@ object HudController {
             youtube?.stop()
             snapshot = snapshot.copy(youtube = snapshot.youtube.copy(hasVideo = false, isPlaying = false, page = HudSnapshot.YouTube.Page.browse))
         }
-        if (isOnGlasses(HudPanelKind.apps)) refreshApps()
-        else if (snapshot.apps.running != null) snapshot = snapshot.copy(apps = snapshot.apps.copy(running = null))
     }
 
     // ------------------------------------------------------------------ the glasses
@@ -793,75 +788,11 @@ object HudController {
         }
     }
 
-    // ------------------------------------------------------------------ Android apps
+    // ------------------------------------------------------------------ the glasses over DeX
 
-    private fun refreshApps() {
-        val notice = if (apps.serviceEnabled) "" else "TURN ON THEHUD IN ACCESSIBILITY TO WORK APPS FROM THE PHONE"
-        if (snapshot.apps.list.isEmpty() || snapshot.apps.notice != notice) {
-            scope.launch(Dispatchers.IO) {
-                val list = apps.list()
-                withContext(Dispatchers.Main) { snapshot = snapshot.copy(apps = snapshot.apps.copy(list = list, notice = notice)) }
-            }
-        }
-    }
-
-    fun appIcon(packageName: String) = apps.icon(packageName)
-
-    private fun launchApp(entry: HudSnapshot.AppEntry) {
-        val display = GlassesPresenter.shownDisplay ?: return
-        val frame = layout.appsFrame ?: return
-        val content = AppsLayout.content(frame.size).translate(frame.topLeft)
-        val target = apps.mapping(display).rect(content)
-        if (apps.launch(entry.packageName, display, target)) {
-            snapshot = snapshot.copy(apps = snapshot.apps.copy(running = entry))
-            HudAccessibility.instance?.fit(display.displayId, entry.packageName, target)
-        }
-    }
-
-    private fun closeApp() {
-        if (keyboardTarget == KeyboardTarget.apps) endTyping()
-        HudAccessibility.instance?.stopFitting()
-        snapshot = snapshot.copy(apps = snapshot.apps.copy(running = null))
-        GlassesPresenter.raise()
-    }
-
-    private fun appsClick(target: AppsLayout.Target, p: Offset, right: Boolean) {
-        val frame = layout.appsFrame ?: return
-        val a = snapshot.apps
-        when (target) {
-            AppsLayout.Target.home, AppsLayout.Target.close -> if (a.running != null) closeApp()
-            AppsLayout.Target.back -> if (a.running != null) HudAccessibility.instance?.back()
-            AppsLayout.Target.content -> {
-                if (a.running == null) {
-                    AppsLayout.app(p, frame.size, a.scrollRow, a.list.size)?.let { launchApp(a.list[it]) }
-                    return
-                }
-                val service = HudAccessibility.instance ?: return
-                val display = GlassesPresenter.shownDisplay ?: return
-                val at = apps.mapping(display).pixels(p + frame.topLeft)
-                service.tap(display.displayId, at, long = right)
-                // A text field took the tap: the keyboard comes up for it.
-                main.postDelayed({ if (service.focused(display.displayId) != null && keyboardTarget == null) beginAppTyping() }, 400)
-            }
-        }
-    }
-
-    private fun appsScrolled(ticks: Int, p: Offset) {
-        val frame = layout.appsFrame ?: return
-        val a = snapshot.apps
-        if (a.running == null) {
-            snapshot = snapshot.copy(apps = a.copy(scrollRow = (a.scrollRow + ticks.coerceIn(-1, 1)).coerceIn(0, AppsLayout.maxRow(a.list.size, frame.size))))
-            return
-        }
-        val service = HudAccessibility.instance ?: return
-        val display = GlassesPresenter.shownDisplay ?: return
-        val m = apps.mapping(display)
-        val from = m.pixels(p + frame.topLeft)
-        service.swipe(display.displayId, from, Offset(from.x, from.y - ticks * 60 * m.scale))
-    }
-
-    fun openAccessibilitySettings() = apps.openAccessibilitySettings()
-    val appsServiceEnabled get() = apps.serviceEnabled
+    fun openAccessibilitySettings() = GlassesOverlayService.openSettings(app)
+    /** TheHud's accessibility service is on: the glasses are drawn above DeX's taskbar. */
+    val overlayServiceEnabled get() = GlassesOverlayService.enabled(app)
 
     // ------------------------------------------------------------------ the remote
 
@@ -945,7 +876,6 @@ object HudController {
             KeyboardTarget.mapSearch -> if (!mapFillsCanvas) endTyping()
             KeyboardTarget.mac -> if (!isOnGlasses(HudPanelKind.mac)) endTyping()
             KeyboardTarget.youtubeSearch -> if (!isOnGlasses(HudPanelKind.youtube)) endTyping()
-            KeyboardTarget.apps -> if (!isOnGlasses(HudPanelKind.apps)) endTyping()
             null -> {}
         }
         if (::location.isInitialized) {
@@ -1212,7 +1142,6 @@ object HudController {
                 desktop.send(DesktopWire.Command.Click(hit.point.x.toDouble(), hit.point.y.toDouble(), if (right) 1 else 0))
                 if (!right && keyboardTarget == null && snapshot.desktop.connected) beginMacTyping()
             }
-            is GlassesHit.Apps -> appsClick(hit.target, hit.point, right)
             GlassesHit.None -> {}
         }
     }
@@ -1264,7 +1193,6 @@ object HudController {
                 desktop.send(DesktopWire.Command.Scroll(hit.point.x.toDouble(), hit.point.y.toDouble(), 0.0, (-ticks * 48).toDouble()))
                 return
             }
-            is GlassesHit.Apps -> { appsScrolled(ticks, hit.point); return }
             is GlassesHit.Widget -> when (hit.kind) {
                 HudPanelKind.clock -> {
                     // The wheel sets the timer: up for more.
@@ -1323,12 +1251,6 @@ object HudController {
         draft = SENTINEL
     }
 
-    private fun beginAppTyping() {
-        val display = GlassesPresenter.shownDisplay ?: return
-        keyboardTarget = KeyboardTarget.apps
-        draft = HudAccessibility.instance?.text(display.displayId) ?: ""
-    }
-
     private fun beginNote() {
         keyboardTarget = KeyboardTarget.note
         draft = snapshot.note.text
@@ -1374,10 +1296,6 @@ object HudController {
                 snapshot = snapshot.copy(youtube = snapshot.youtube.copy(query = new))
                 searchYouTube(new)
             }
-            KeyboardTarget.apps -> {
-                draft = new
-                GlassesPresenter.shownDisplay?.let { HudAccessibility.instance?.setText(it.displayId, new) }
-            }
             null -> draft = new
         }
     }
@@ -1405,7 +1323,6 @@ object HudController {
             KeyboardTarget.mac -> { desktop.send(DesktopWire.Command.Key("return")); draft = SENTINEL }
             KeyboardTarget.mapSearch -> if (searchResults.isNotEmpty()) route(0) else endTyping()
             KeyboardTarget.youtubeSearch -> { searchYouTube(draft, now = true); endTyping() }
-            KeyboardTarget.apps -> { GlassesPresenter.shownDisplay?.let { HudAccessibility.instance?.enter(it.displayId) }; endTyping() }
             null -> {}
         }
     }

@@ -58,7 +58,7 @@ import kotlin.math.min
 @Composable
 fun GlassesRoot() {
     BoxWithConstraints(Modifier.fillMaxSize()
-        .background(if (HudController.snapshot.apps.running != null) Color.Transparent else Color.Black), contentAlignment = Alignment.Center) {
+        .background(Color.Black), contentAlignment = Alignment.Center) {
         val scale = min(constraints.maxWidth / HudTheme.CANVAS_WIDTH, constraints.maxHeight / HudTheme.CANVAS_HEIGHT)
             .takeIf { it > 0f } ?: 1f
         val eased = easedHeading()
@@ -70,7 +70,6 @@ fun GlassesRoot() {
                     mac = { LiveMac() },
                     mapGround = HudController.mapGround,
                     artwork = HudController.artwork,
-                    appIcon = HudController::appIcon,
                     standIn = false,
                     heading = { eased.doubleValue }))
             }
@@ -150,9 +149,6 @@ private class GlassesPresentation(context: Context, display: Display) : Presenta
         super.onCreate(savedInstanceState)
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        // See-through where the picture is cleared: an Android app running under the Apps panel shows there.
-        window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-        window?.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
         window?.decorView?.let {
             it.setViewTreeLifecycleOwner(owner)
             it.setViewTreeSavedStateRegistryOwner(owner)

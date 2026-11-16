@@ -11,18 +11,18 @@ import kotlinx.serialization.Serializable
 /** Everything the glasses can show: two big things for the middle, and the widgets beside it. */
 @Serializable
 enum class HudPanelKind {
-    browser, mac, apps,
+    browser, mac,
     clock, weather, map, activity, sky, music, note, captions, youtube;
 
-    /** The browser, the Mac and Android apps: the middle, reaching over a side, worked by the cursor. */
-    val isBig: Boolean get() = this == browser || this == mac || this == apps
+    /** The browser and the Mac: the middle, reaching over a side, worked by the cursor. */
+    val isBig: Boolean get() = this == browser || this == mac
 
     val title: String get() = name.uppercase()
 
     companion object {
-        val bigs = listOf(browser, mac, apps)
+        val bigs = listOf(browser, mac)
         val widgets = listOf(clock, weather, map, activity, sky, music, note, captions, youtube)
-        /** Everything: the iPhone's panels, and Android's own apps. */
+        /** Everything: the iPhone's panels. */
         val available: Set<HudPanelKind> = entries.toSet()
     }
 }

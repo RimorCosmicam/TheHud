@@ -25,7 +25,6 @@ data class HudSnapshot(
     val note: Note = Note(),
     val captions: Captions = Captions.preview,
     val youtube: YouTube = YouTube.preview,
-    val apps: Apps = Apps(),
     val browser: Browser = Browser(),
     /** Where the pointer is, in canvas points. Null hides it. */
     val cursor: Offset? = null,
@@ -327,17 +326,6 @@ data class HudSnapshot(
         val aspect: Float get() = source?.takeIf { it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 10f)
         val activeWindow: Int? get() = source?.window?.let { id -> windows.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
     }
-
-    /** Android apps on the glasses: the one running in the panel, or the grid to pick from. */
-    data class Apps(
-        val running: AppEntry? = null,
-        val list: List<AppEntry> = emptyList(),
-        val scrollRow: Int = 0,
-        /** Why apps cannot be worked, when they cannot. */
-        val notice: String = "",
-    )
-
-    data class AppEntry(val packageName: String, val label: String)
 
     data class Browser(
         val url: String = "",

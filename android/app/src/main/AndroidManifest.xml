@@ -83,7 +83,7 @@
             </intent-filter>
         </service>
 
-        <!-- Android apps on the glasses are worked from the phone through this. -->
+        <!-- Only for the glasses' overlay above DeX's taskbar. -->
         <service
             android:name=".apps.HudAccessibility"
             android:exported="true"

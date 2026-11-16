@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.Close
@@ -64,7 +63,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import com.thehud.core.AppsLayout
 import com.thehud.core.BrowserMetrics
 import com.thehud.core.ClockAppLayout
 import com.thehud.core.HudSnapshot
@@ -74,7 +72,7 @@ import com.thehud.core.MusicLayout
 import kotlin.math.max
 
 // The widgets held up alone, as the iPhone app's *App views draw them, at the safe frame's
-// 1792 by 952 points. And the two big panels that show something else: the Mac and Android apps.
+// 1792 by 952 points. And the Mac, the big panel that shows something else.
 
 private val appSize = Size(1792f, 952f)
 
@@ -542,72 +540,5 @@ fun MacPanel(desktop: HudSnapshot.Desktop, standIn: Boolean, picture: (@Composab
                     style = HudTheme.mont(24f, FontWeight.SemiBold, color = HudTheme.inkDim))
             }
         }
-    }
-}
-
-// ------------------------------------------------------------------ Android apps
-
-/** Android apps on the glasses: a bar like the browser's over the app, or over the grid to pick one from. */
-@Composable
-fun AppsPanel(apps: HudSnapshot.Apps, size: Size, hover: Offset?, icon: (String) -> ImageBitmap?) {
-    val shape = RoundedCornerShape(HudTheme.CORNER.dp)
-    val running = apps.running
-    Box(Modifier.fillMaxSize().clip(shape).border(1.dp, HudTheme.edge, shape)) {
-        // While an app runs, its own window shows through: only the bar is drawn.
-        Box(Modifier.fillMaxWidth().height(AppsLayout.contentTop.dp).background(Color.Black))
-        if (running == null) Box(Modifier.at(AppsLayout.content(size)).background(HudTheme.surface))
-        val bar = AppsLayout.bar(size)
-        val target = hover?.let { if (bar.contains(it)) AppsLayout.target(it, size) else null }
-        val capsule = RoundedCornerShape(50)
-        Box(Modifier.at(bar).clip(capsule).background(Color.White.copy(alpha = 0.10f))
-            .border(1.5.dp, Color.White.copy(alpha = if (target != null) 0.42f else 0.26f), capsule)) {
-            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                AppsBarButton(Icons.Rounded.Home, running != null, target == AppsLayout.Target.home)
-                AppsBarButton(Icons.Rounded.ChevronLeft, running != null, target == AppsLayout.Target.back)
-                Row(Modifier.weight(1f).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    running?.let { r -> icon(r.packageName)?.let { Image(it, null, Modifier.size(30.dp).clip(RoundedCornerShape(8.dp))) } }
-                        ?: HudIcon(Icons.Rounded.Apps, 26f, HudTheme.inkDim)
-                    Spacer(Modifier.width(12.dp))
-                    BasicText(running?.label ?: "Apps", style = HudTheme.mont(24f, FontWeight.SemiBold, color = HudTheme.ink.copy(alpha = 0.9f)),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                AppsBarButton(Icons.Rounded.Close, running != null, target == AppsLayout.Target.close)
-            }
-        }
-        if (running == null) {
-            val cols = AppsLayout.columns(size)
-            val rows = AppsLayout.rows(size)
-            for (slot in 0 until cols * rows) {
-                val i = apps.scrollRow * cols + slot
-                val app = apps.list.getOrNull(i) ?: break
-                val frame = AppsLayout.tile(slot, size)
-                val lit = hover?.let { frame.contains(it) } ?: false
-                Column(Modifier.at(frame).padding(10.dp).clip(RoundedCornerShape(22.dp))
-                    .background(Color.White.copy(alpha = if (lit) 0.12f else 0f)).padding(vertical = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    val bitmap = icon(app.packageName)
-                    if (bitmap != null) Image(bitmap, null, Modifier.size(96.dp).clip(RoundedCornerShape(24.dp)))
-                    else Box(Modifier.size(96.dp).background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(24.dp)))
-                    BasicText(app.label, style = HudTheme.mont(17f, FontWeight.SemiBold).copy(textAlign = TextAlign.Center), maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                }
-            }
-            if (apps.notice.isNotEmpty()) {
-                Box(Modifier.at(Rect(0f, size.height - 64, size.width, size.height - 8)).background(Color.Black.copy(alpha = 0.9f)), contentAlignment = Alignment.Center) {
-                    BasicText(apps.notice, style = HudTheme.mont(18f, tracking = 2f, color = HudTheme.accent), maxLines = 1)
-                }
-            }
-            if (apps.list.isEmpty()) Box(Modifier.at(AppsLayout.content(size)), contentAlignment = Alignment.Center) {
-                BasicText("No apps found", style = HudTheme.mont(28f, FontWeight.SemiBold, color = HudTheme.inkFaint))
-            }
-        }
-    }
-}
-
-@Composable
-private fun AppsBarButton(icon: ImageVector, enabled: Boolean, hovered: Boolean) {
-    Box(Modifier.width(BrowserMetrics.BUTTON_WIDTH.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-        if (hovered && enabled) Box(Modifier.size(56.dp).background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(50)))
-        HudIcon(icon, 32f, if (enabled) HudTheme.ink else HudTheme.inkFaint)
     }
 }

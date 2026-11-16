@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Lets the glasses' Apps panel click, scroll and type into the app shown in it, on the glasses' display only. -->
+<!-- Only so the glasses can be an accessibility overlay, above DeX's taskbar: no events, no window content, no gestures. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowsChanged|typeWindowStateChanged"
+    android:accessibilityEventTypes="typeAnnouncement"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
-    android:canPerformGestures="true"
-    android:canRetrieveWindowContent="true"
-    android:notificationTimeout="200"
+    android:accessibilityFlags="flagDefault"
+    android:notificationTimeout="1000"
     android:description="@string/accessibility_description" />

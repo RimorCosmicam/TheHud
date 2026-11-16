@@ -55,7 +55,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import com.thehud.core.AppsLayout
 import com.thehud.core.BrowserMetrics
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
@@ -87,7 +86,6 @@ class GlassesContent(
     val mac: (@Composable () -> Unit)? = null,
     val mapGround: ImageBitmap? = null,
     val artwork: ImageBitmap? = null,
-    val appIcon: (String) -> ImageBitmap? = { null },
     val standIn: Boolean = true,
     /** The heading as the glasses draw it, eased every frame; null uses the snapshot's. */
     val heading: (() -> Double)? = null,
@@ -103,15 +101,7 @@ class GlassesContent(
 @Composable
 fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesContent = GlassesContent.stills) {
     val cursor = snapshot.cursor
-    // The Android app's window shows through a hole while one runs; black is drawn everywhere else.
-    val appsHole = if (snapshot.apps.running != null) layout.appsFrame?.let { f ->
-        AppsLayout.content(f.size).translate(f.topLeft) } else null
-    Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)
-        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-        .drawWithContent {
-            drawContent()
-            appsHole?.let { drawRect(Color.Black, it.topLeft, it.size, blendMode = BlendMode.Clear) }
-        }) {
+    Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
         // The one video: under everything, placed, never moved between views.
         val video = youtubeVideoBox(snapshot, layout)
         Box(Modifier.fillMaxSize().background(Color.Black))
@@ -134,7 +124,6 @@ fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesCon
                 when (kind) {
                     HudPanelKind.browser -> BrowserPanel(snapshot.browser, layout, cursor, live.page)
                     HudPanelKind.mac -> MacPanel(snapshot.desktop, live.standIn && live.mac == null, live.mac)
-                    HudPanelKind.apps -> AppsPanel(snapshot.apps, frame.size, cursor?.let { it - frame.topLeft }, live.appIcon)
                     else -> Placeholder(kind)
                 }
             }

@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">TheHud</string>
-    <string name="accessibility_description">Lets TheHud click, scroll and type into the Android app shown in the glasses\' Apps panel, from the cover screen\'s touchpad. It acts only on the glasses\' display, and only when you work an app there.</string>
+    <string name="accessibility_description">Draws the glasses above DeX\'s taskbar, so they show only the HUD. TheHud reads nothing on the screen and touches nothing.</string>
 </resources>

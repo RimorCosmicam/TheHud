@@ -74,11 +74,6 @@ class StillsTest {
 
     @Test fun desk2() = shot("glasses-mac", snapshot.copy(cursor = null), GlassesLayout(HudScene.presets[0].arrangement))
 
-    @Test fun apps() = shot("glasses-apps", snapshot.copy(cursor = Offset(500f, 300f), apps = HudSnapshot.Apps(
-        list = listOf("Calculator", "Calendar", "Camera", "Chrome", "Clock", "Contacts", "Files", "Gallery", "Gmail", "Maps", "Messages",
-            "Photos", "Play Store", "Settings", "Spotify").map { HudSnapshot.AppEntry("com.example.${it.lowercase()}", it) })),
-        GlassesLayout(solo = HudPanelKind.apps))
-
     private fun skyAt(full: Boolean = false): HudSnapshot.Sky {
         val catalogue = if (full) SkyCatalogue(java.io.File("../../Sources/HudCore/Resources/Sky/sky.json").readText()) else null
         // Lisbon, a November evening.

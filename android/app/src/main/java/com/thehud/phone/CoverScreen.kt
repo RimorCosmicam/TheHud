@@ -47,7 +47,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -164,7 +163,6 @@ val HudPanelKind.icon: ImageVector
     get() = when (this) {
         HudPanelKind.browser -> Icons.Rounded.Language
         HudPanelKind.mac -> Icons.Rounded.DesktopMac
-        HudPanelKind.apps -> Icons.Rounded.Apps
         HudPanelKind.clock -> Icons.Rounded.Schedule
         HudPanelKind.weather -> Icons.Rounded.WbCloudy
         HudPanelKind.map -> Icons.Rounded.Map
@@ -827,7 +825,7 @@ private fun SettingsPage() {
             }
         }
         item {
-            SettingsLink("Android apps on the glasses", if (c.appsServiceEnabled) "ON" else "ACCESSIBILITY") { c.openAccessibilitySettings() }
+            SettingsLink("Glasses above DeX's taskbar", if (c.overlayServiceEnabled) "ON" else "ACCESSIBILITY") { c.openAccessibilitySettings() }
         }
         item {
             SettingsLink("Location, microphone, steps, calendar", "APP SETTINGS") {

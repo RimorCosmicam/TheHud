@@ -40,8 +40,6 @@ sealed interface GlassesHit {
     data class Page(val point: Offset) : GlassesHit
     /** A point on the Mac's picture, 0 to 1 across it. */
     data class Mac(val point: Offset) : GlassesHit
-    /** The Android apps panel: its bar's buttons, or a point in its content, in panel points. */
-    data class Apps(val target: AppsLayout.Target, val point: Offset) : GlassesHit
     data class Widget(val kind: HudPanelKind, val point: Offset, val size: Size) : GlassesHit
     data object None : GlassesHit
 }
@@ -136,7 +134,6 @@ class GlassesLayout(
 
     val browserFrame get() = frameOf(HudPanelKind.browser)
     val desktopFrame get() = frameOf(HudPanelKind.mac)
-    val appsFrame get() = frameOf(HudPanelKind.apps)
 
     /** The Mac's picture inside its panel, fitted without cropping. */
     val desktopPicture: Rect?
@@ -175,9 +172,6 @@ class GlassesLayout(
         desktopPicture?.let { pic ->
             if (pic.contains(p)) return GlassesHit.Mac(Offset((p.x - pic.left) / pic.width, (p.y - pic.top) / pic.height))
         }
-        appsFrame?.let { f ->
-            if (f.contains(p)) return GlassesHit.Apps(AppsLayout.target(p - f.topLeft, f.size), p - f.topLeft)
-        }
         for ((kind, f) in widgetFrames) if (f.contains(p)) return GlassesHit.Widget(kind, p - f.topLeft, f.size)
         val frame = browserFrame
         if (frame == null || !frame.contains(p)) return GlassesHit.None
@@ -197,63 +191,6 @@ class GlassesLayout(
             }
         }
         return GlassesHit.Page(p - frame.topLeft)
-    }
-}
-
-/** The Android apps panel: a bar like the browser's, and the app (or the grid of apps) under it. */
-object AppsLayout {
-    enum class Target { home, back, close, content }
-
-    val contentTop get() = BrowserMetrics.contentTopInset
-    const val TILE_WIDTH = 200f
-    const val TILE_HEIGHT = 190f
-    const val GRID_INSET = 40f
-
-    fun bar(size: Size) = Rect(Offset(BrowserMetrics.BAR_INSET, BrowserMetrics.BAR_INSET),
-        Size(size.width - BrowserMetrics.BAR_INSET * 2, BrowserMetrics.BAR_HEIGHT))
-
-    /** Where the app's own window goes, in panel points. */
-    fun content(size: Size) = Rect(0f, contentTop, size.width, size.height)
-
-    fun target(p: Offset, size: Size): Target {
-        val bar = bar(size)
-        if (!bar.contains(p)) return Target.content
-        val x = p.x - bar.left
-        val b = BrowserMetrics.BUTTON_WIDTH
-        return when {
-            x < b -> Target.home
-            x < b * 2 -> Target.back
-            x >= bar.width - b -> Target.close
-            else -> Target.content
-        }
-    }
-
-    fun columns(size: Size) = maxOf(1, ((size.width - GRID_INSET * 2) / TILE_WIDTH).toInt())
-    fun rows(size: Size) = maxOf(1, ((size.height - contentTop - GRID_INSET) / TILE_HEIGHT).toInt())
-
-    fun tile(slot: Int, size: Size): Rect {
-        val cols = columns(size)
-        val used = cols * TILE_WIDTH
-        val x0 = (size.width - used) / 2
-        return Rect(Offset(x0 + slot % cols * TILE_WIDTH, contentTop + GRID_INSET / 2 + slot / cols * TILE_HEIGHT),
-            Size(TILE_WIDTH, TILE_HEIGHT))
-    }
-
-    /** The app under a point of the grid, as an index into the list. */
-    fun app(at: Offset, size: Size, scrollRow: Int, count: Int): Int? {
-        val cols = columns(size)
-        for (slot in 0 until cols * rows(size)) {
-            if (tile(slot, size).contains(at)) {
-                val i = scrollRow * cols + slot
-                return i.takeIf { it < count }
-            }
-        }
-        return null
-    }
-
-    fun maxRow(count: Int, size: Size): Int {
-        val cols = columns(size)
-        return maxOf(0, (count + cols - 1) / cols - rows(size))
     }
 }
 
