@@ -6,16 +6,19 @@ import CoreGraphics
 public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable {
     case browser, mac
     case clock, weather, map, activity, sky, music, note, captions, youtube
+    case calendar, photos, prompter
 
     public var id: String { rawValue }
 
-    /// The browser and the Mac: they go in the middle, can reach over a side, and are what the
-    /// cursor mostly works on.
+    /// The browser and the Mac: drawn by panels of their own, with live content, and what the
+    /// cursor mostly works on. In a slot they are a live preview of the same content.
     public var isBig: Bool { self == .browser || self == .mac }
 
-    public static let bigs: [HudPanelKind] = [.browser, .mac]
-    public static let widgets: [HudPanelKind] = [.clock, .weather, .map, .activity, .sky,
-                                                 .music, .note, .captions, .youtube]
+    /// Every app, in the order the phone's picker lists them. Any of them can be a widget, the
+    /// one app in the centre, or fullscreen.
+    public static let apps: [HudPanelKind] = [.browser, .mac, .youtube, .map, .music, .calendar,
+                                              .photos, .prompter, .note, .sky, .weather, .clock,
+                                              .activity, .captions]
 
     public var symbol: String {
         switch self {
@@ -30,6 +33,9 @@ public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable 
         case .note: return "note.text"
         case .captions: return "captions.bubble"
         case .youtube: return "play.rectangle"
+        case .calendar: return "calendar"
+        case .photos: return "photo.on.rectangle"
+        case .prompter: return "text.alignleft"
         }
     }
 
@@ -97,6 +103,9 @@ public enum GlassesHitTarget: Equatable, Sendable {
     case mac(CGPoint)
     /// A widget, or a widget's fullscreen app: the point inside it, and its size.
     case widget(HudPanelKind, CGPoint, CGSize)
+    /// The app in the centre (not the browser or the Mac, which have their own): the point
+    /// inside it, and its size.
+    case centre(HudPanelKind, CGPoint, CGSize)
     case none
 }
 
@@ -204,22 +213,30 @@ public struct GlassesLayout: Sendable {
         return arrangement.shownWidgets.map { ($0.kind, Self.slotFrame($0.side, $0.index)) }
     }
 
-    /// The big panels on the canvas, left to right.
+    /// The Apps Center: whatever app is in the centre, and where. Nil when it is switched off,
+    /// or something is fullscreen.
+    public var centre: (kind: HudPanelKind, frame: CGRect)? {
+        guard drawsArrangement, let big = arrangement.orderedBigs.first else { return nil }
+        if let edge = arrangement.strip { return (big.kind, Self.rowMain(along: edge)) }
+        return (big.kind, Self.bigSpan(taking: arrangement.takenSides))
+    }
+
+    /// The centre when it holds an app other than the browser or the Mac.
+    public var centreApp: (kind: HudPanelKind, frame: CGRect)? {
+        guard let centre, !centre.kind.isBig else { return nil }
+        return centre
+    }
+
+    /// The browser's and the Mac's panels on the canvas: in the centre, held up alone, or the
+    /// browser's page fullscreen. In a slot they are widgets, not these.
     public var bigFrames: [(kind: HudPanelKind, frame: CGRect)] {
         if clearView { return [] }
         if fullscreen { return [(.browser, CGRect(origin: .zero, size: HudTheme.glassesSize))] }
         if let solo {
             return solo.isBig ? [(solo, Self.safeFrame)] : []
         }
-        let bigs = arrangement.orderedBigs
-        guard !bigs.isEmpty else { return [] }
-        if let edge = arrangement.strip { return [(bigs[0].kind, Self.rowMain(along: edge))] }
-        let span = Self.bigSpan(taking: arrangement.takenSides)
-        let width = (span.width - Self.gap * CGFloat(bigs.count - 1)) / CGFloat(bigs.count)
-        return bigs.enumerated().map { index, big in
-            (big.kind, CGRect(x: span.minX + CGFloat(index) * (width + Self.gap), y: span.minY,
-                              width: width, height: span.height))
-        }
+        guard let centre, centre.kind.isBig else { return [] }
+        return [centre]
     }
 
     /// Where a widget's fullscreen app is drawn and clicked.
@@ -231,6 +248,7 @@ public struct GlassesLayout: Sendable {
     public func frame(of kind: HudPanelKind) -> CGRect? {
         if kind.isBig { return bigFrames.first { $0.kind == kind }?.frame }
         if solo == kind { return soloWidgetFrame }
+        if let centre, centre.kind == kind { return centre.frame }
         return widgetFrames.first { $0.kind == kind }?.frame
     }
 
@@ -286,6 +304,10 @@ public struct GlassesLayout: Sendable {
         }
         for (kind, frame) in widgetFrames where frame.contains(point) {
             return .widget(kind, CGPoint(x: point.x - frame.minX, y: point.y - frame.minY),
+                           frame.size)
+        }
+        if let (kind, frame) = centreApp, frame.contains(point) {
+            return .centre(kind, CGPoint(x: point.x - frame.minX, y: point.y - frame.minY),
                            frame.size)
         }
         guard let frame = browserFrame, frame.contains(point) else { return .none }

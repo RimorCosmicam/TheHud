@@ -8,7 +8,7 @@ import EventKit
 /// that says "no access" — a HUD should drop a line it cannot fill, not explain itself.
 @MainActor
 public final class CalendarProvider {
-    private let store = EKEventStore()
+    let store = EKEventStore()
 
     public init() {}
 
@@ -63,6 +63,114 @@ public final class CalendarProvider {
                 end: event.isAllDay ? nil : formatter.string(from: event.endDate),
                 isNow: !event.isAllDay && event.startDate <= now)
         }
+    }
+}
+
+extension CalendarProvider {
+    /// The calendar app: today as a timeline, what is next, and the month around it.
+    public func agendaApp(now: Date = Date()) -> HudSnapshot.Agenda {
+        var agenda = HudSnapshot.Agenda()
+        let calendar = Calendar.current
+        let fixed = { (format: String) -> DateFormatter in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = format
+            return formatter
+        }
+        let localised = { (format: String) -> DateFormatter in
+            let formatter = DateFormatter()
+            formatter.setLocalizedDateFormatFromTemplate(format)
+            return formatter
+        }
+        let uses24Hour = (DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current) ?? "H").contains("H")
+        let time = fixed(uses24Hour ? "H:mm" : "h:mm")
+        let parts = calendar.dateComponents([.hour, .minute], from: now)
+        agenda.nowMinute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        agenda.dayTitle = (localised("EEEE").string(from: now) + " \u{00B7} " + localised("d MMMM").string(from: now))
+            .uppercased()
+        agenda.monthTitle = localised("MMMM yyyy").string(from: now).uppercased()
+
+        // Weeks as the phone's calendar starts them.
+        let symbols = fixed("EEE").shortWeekdaySymbols.map { $0.uppercased() }
+        let first = calendar.firstWeekday - 1
+        agenda.weekdays = (0..<7).map { symbols[(first + $0) % 7] }
+
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
+            agenda.hasAccess = false
+            agenda.days = Self.monthDays(around: now, calendar: calendar, events: [])
+            return agenda
+        }
+
+        let dayStart = calendar.startOfDay(for: now)
+        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart),
+              let month = calendar.dateInterval(of: .month, for: now),
+              let gridStart = calendar.dateInterval(of: .weekOfYear, for: month.start)?.start,
+              let gridEnd = calendar.date(byAdding: .day, value: 42, to: gridStart) else { return agenda }
+
+        let events = store.events(matching: store.predicateForEvents(withStart: gridStart, end: gridEnd, calendars: nil))
+        // A tint per calendar, in the order they first turn up.
+        var tints: [String: Int] = [:]
+        func tint(_ event: EKEvent) -> Int {
+            let id = event.calendar?.calendarIdentifier ?? ""
+            if let tint = tints[id] { return tint }
+            tints[id] = tints.count
+            return tints[id]!
+        }
+        let minute = { (date: Date) -> Int in
+            if date <= dayStart { return 0 }
+            if date >= dayEnd { return 24 * 60 }
+            let p = calendar.dateComponents([.hour, .minute], from: date)
+            return (p.hour ?? 0) * 60 + (p.minute ?? 0)
+        }
+        let today = events.filter { $0.startDate < dayEnd && $0.endDate > dayStart }
+            .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
+        agenda.today = today.map { event in
+            HudSnapshot.Agenda.Entry(
+                title: event.title ?? "",
+                time: event.isAllDay ? "ALL DAY" : time.string(from: event.startDate),
+                endTime: event.isAllDay ? "" : time.string(from: event.endDate),
+                startMinute: event.isAllDay ? 0 : minute(event.startDate),
+                endMinute: event.isAllDay ? 24 * 60 : minute(event.endDate),
+                allDay: event.isAllDay, location: event.location ?? "", tint: tint(event))
+        }
+        let timed = zip(today, agenda.today).filter { !$0.0.isAllDay && $0.0.endDate > now }
+        if let (event, entry) = timed.first {
+            agenda.next = entry
+            if event.startDate <= now {
+                agenda.nextIn = "NOW"
+            } else {
+                let minutes = Int(event.startDate.timeIntervalSince(now) / 60)
+                agenda.nextIn = minutes < 60 ? "IN \(max(minutes, 1)) MIN"
+                    : minutes < 180 ? "IN \(minutes / 60) H \(minutes % 60) MIN" : "AT \(entry.time)"
+            }
+            agenda.later = timed.dropFirst().prefix(3).map(\.1)
+        }
+        agenda.days = Self.monthDays(around: now, calendar: calendar, events: events)
+        return agenda
+    }
+
+    /// Whole weeks covering the month, each day with its first few events.
+    static func monthDays(around now: Date, calendar: Calendar, events: [EKEvent]) -> [HudSnapshot.Agenda.Day] {
+        guard let month = calendar.dateInterval(of: .month, for: now),
+              let gridStart = calendar.dateInterval(of: .weekOfYear, for: month.start)?.start else { return [] }
+        let lastDay = month.end.addingTimeInterval(-1)
+        var days: [HudSnapshot.Agenda.Day] = []
+        var day = gridStart
+        while days.count < 42 {
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            let titles = events.filter { $0.startDate < next && $0.endDate > day }
+                .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
+                .compactMap(\.title)
+            days.append(HudSnapshot.Agenda.Day(
+                number: calendar.component(.day, from: day),
+                inMonth: calendar.isDate(day, equalTo: now, toGranularity: .month),
+                isToday: calendar.isDate(day, inSameDayAs: now),
+                titles: Array(titles.prefix(3)), more: max(titles.count - 3, 0)))
+            // Stop at the end of the week the month ends in: 35 days, or 42.
+            if day > lastDay, days.count % 7 == 0 { break }
+            day = next
+        }
+        return days
     }
 }
 

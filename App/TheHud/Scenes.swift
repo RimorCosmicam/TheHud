@@ -86,6 +86,7 @@ struct GlassesHost: View {
                           youtubeContent: AnyView(YouTubePlayerView(controller.youtubePlayer)),
                           mapGround: controller.mapGround,
                           artwork: controller.artwork,
+                          photoImages: controller.photoImages,
                           placeholders: false,
                           liveGlass: true)
                 .scaleEffect(scale)

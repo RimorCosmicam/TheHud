@@ -179,7 +179,7 @@ struct Hudshot {
         phoneSky.skyView.selected = "plane:4951d6"
         try write(PhoneScreen(surface: plain, solo: .sky, pad: .app, appSnapshot: phoneSky),
                   to: outDir, "phone-pad-sky", scale: scale)
-        for kind in [HudPanelKind.music, .clock, .captions, .note] {
+        for kind in [HudPanelKind.music, .clock, .captions, .note, .prompter, .photos] {
             try write(PhoneScreen(surface: plain, solo: kind, pad: .app, appSnapshot: skyStill),
                       to: outDir, "phone-pad-\(kind.rawValue)", scale: scale)
         }
@@ -293,13 +293,28 @@ struct Hudshot {
                                 visible: [.clock, .weather, .map]),
                   to: outDir, "glasses-glance", scale: 1)
 
+        // The Apps Center: each app in the centre, between the widgets.
+        var centreStill = still
+        centreStill.cursor = nil
+        for kind in HudPanelKind.apps where !kind.isBig {
+            var arranged = HudArrangement(left: [.clock, .calendar, .weather], right: [.browser, .music, .note])
+            arranged.setCentre(kind)
+            try write(GlassesScreen(snapshot: centreStill, arrangement: arranged),
+                      to: outDir, "glasses-centre-\(kind.rawValue)", scale: 1)
+        }
+        // Full screen: the month, the gallery, the teleprompter.
+        for kind in [HudPanelKind.calendar, .photos, .prompter] {
+            try write(GlassesScreen(snapshot: centreStill, arrangement: fullGrid, solo: kind),
+                      to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
+        }
+
         print("\nimages in \(outDir.path)")
     }
 
     /// All six slots full, the browser in the middle.
     static let fullGrid = HudArrangement(left: [.clock, .weather, .map],
                                          right: [.music, .sky, .note],
-                                         bigs: [.init(kind: .browser)])
+                                         centre: .init(kind: .browser))
 
     /// Lisbon at ten at night in mid-November, so the stills have stars.
     static let previewSky: HudSnapshot.Sky = {

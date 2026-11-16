@@ -23,6 +23,9 @@ public struct GlassesScreen: View {
     public var mapGround: Image?
     /// The Music app's artwork for what is playing.
     public var artwork: Image?
+    /// The photo library's pictures by index, as far as they have loaded: the one on show and
+    /// the gallery's page.
+    public var photoImages: [Int: Image]
     /// Stand-in page and procedural streets. True for stills; the device passes false, because a
     /// made-up map on someone's face is worse than an empty one.
     public var placeholders: Bool
@@ -38,6 +41,7 @@ public struct GlassesScreen: View {
                 youtubeContent: AnyView? = nil,
                 mapGround: Image? = nil,
                 artwork: Image? = nil,
+                photoImages: [Int: Image] = [:],
                 placeholders: Bool = true,
                 liveGlass: Bool = false) {
         self.snapshot = snapshot
@@ -49,6 +53,7 @@ public struct GlassesScreen: View {
         self.youtubeContent = youtubeContent
         self.mapGround = mapGround
         self.artwork = artwork
+        self.photoImages = photoImages
         self.placeholders = placeholders
         self.liveGlass = liveGlass
     }
@@ -94,6 +99,9 @@ public struct GlassesScreen: View {
                 } else {
                     soloApp(solo).at(GlassesLayout.safeFrame)
                 }
+            }
+            if let (kind, frame) = layout.centreApp {
+                centreApp(kind, size: frame.size, hover: hover(in: frame)).at(frame)
             }
             ForEach(layout.widgetFrames, id: \.kind) { kind, frame in
                 widget(kind, frame: frame).at(frame)
@@ -153,6 +161,11 @@ public struct GlassesScreen: View {
             let inset = GlassesLayout.safeFrame.origin
             return (YouTubeAppLayout.tileVideo.offsetBy(dx: inset.x, dy: inset.y), 12)
         }
+        if solo == nil, let (kind, frame) = layout.centreApp, kind == .youtube {
+            let box = youtube.page == .player ? YouTubeAppLayout.centreVideo(in: frame.size)
+                : YouTubeAppLayout.tileVideo(in: frame.size)
+            return (box.offsetBy(dx: frame.minX, dy: frame.minY), 12)
+        }
         guard solo == nil, let slot = layout.widgetFrames.first(where: { $0.kind == .youtube })?.frame
         else { return nil }
         return (slot, HudTheme.cornerRadius)
@@ -176,6 +189,51 @@ public struct GlassesScreen: View {
         case .note: NoteWidget(snapshot.note)
         case .captions: CaptionsWidget(snapshot.captions)
         case .youtube: YouTubeWidget(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders)
+        case .calendar: CalendarWidget(snapshot.agenda)
+        case .photos: PhotosWidget(snapshot.photos, image: photoImages[snapshot.photos.current])
+        case .prompter: PrompterWidget(text: snapshot.note.text, prompter: snapshot.prompter)
+        case .browser: preview(frame.size) { browserPanel(nil) }
+        case .mac: macPanel
+        }
+    }
+
+    /// The browser as a widget: the page laid out at the centre's width and shrunk into the
+    /// slot, so it shows what it would there instead of a phone-width page.
+    private func preview<Content: View>(_ size: CGSize, @ViewBuilder _ content: () -> Content) -> some View {
+        let scale = size.width / 944
+        return content()
+            .frame(width: size.width / scale, height: size.height / scale)
+            .scaleEffect(scale, anchor: .topLeading)
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .allowsHitTesting(false)
+    }
+
+    /// The app in the centre, laid out for the centre's size.
+    @ViewBuilder
+    private func centreApp(_ kind: HudPanelKind, size: CGSize, hover: CGPoint?) -> some View {
+        switch kind {
+        case .clock: ClockApp(snapshot.clock, timer: snapshot.timer, hover: hover, size: size)
+        case .weather: WeatherApp(snapshot.weather, size: size)
+        case .activity: ActivityApp(snapshot.activity, size: size)
+        case .music: MusicApp(snapshot.music, artwork: artwork, hover: hover, size: size)
+        case .note: NoteApp(snapshot.note, size: size)
+        case .captions: CaptionsApp(snapshot.captions, size: size)
+        case .map: MapWidget(snapshot.minimap, ground: mapGround, proceduralGround: placeholders)
+        case .sky:
+            SkyApp(snapshot.sky, overhead: snapshot.overhead, view: snapshot.skyView,
+                   heading: snapshot.minimap.heading, size: size)
+                .clipShape(RoundedRectangle(cornerRadius: HudTheme.cornerRadius, style: .continuous))
+        case .youtube:
+            if snapshot.youtube.page == .player {
+                YouTubeCentreWatch(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders, size: size)
+            } else {
+                YouTubeApp(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders,
+                           hover: hover, size: size)
+            }
+        case .calendar: CalendarDayView(snapshot.agenda, size: size)
+        case .photos: PhotoView(snapshot.photos, image: photoImages[snapshot.photos.current])
+        case .prompter:
+            PrompterView(text: snapshot.note.text, prompter: snapshot.prompter, fontSize: 64)
         case .browser, .mac: EmptyView()
         }
     }
@@ -192,14 +250,20 @@ public struct GlassesScreen: View {
         case .note: NoteApp(snapshot.note)
         case .captions: CaptionsApp(snapshot.captions)
         case .youtube: YouTubeApp(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders, hover: hover)
+        case .calendar: CalendarMonthView(snapshot.agenda)
+        case .photos:
+            PhotosGallery(snapshot.photos, images: photoImages, size: GlassesLayout.safeFrame.size, hover: hover)
+        case .prompter:
+            PrompterView(text: snapshot.note.text, prompter: snapshot.prompter, fontSize: 96)
         case .map, .sky, .browser, .mac: EmptyView()
         }
     }
 
-    private func browserPanel(_ layout: GlassesLayout) -> BrowserPanel {
+    /// Nil layout: a widget's preview, which nothing hovers.
+    private func browserPanel(_ layout: GlassesLayout?) -> BrowserPanel {
         BrowserPanel(snapshot.browser, content: browserContent, standIn: placeholders,
-                     hovering: layout.isOverBar(snapshot.cursor),
-                     hoveredTab: layout.tab(at: snapshot.cursor), liveGlass: liveGlass)
+                     hovering: layout?.isOverBar(snapshot.cursor) ?? false,
+                     hoveredTab: layout?.tab(at: snapshot.cursor), liveGlass: liveGlass)
     }
 
     private var macPanel: MacPanel {

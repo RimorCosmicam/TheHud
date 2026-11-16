@@ -15,7 +15,7 @@ extension HudPanelKind {
     /// Apps that are better worked with a thumb than a cursor when they fill the glasses.
     public var hasPhoneControls: Bool {
         switch self {
-        case .sky, .music, .clock, .captions, .note, .youtube: return true
+        case .sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos: return true
         default: return false
         }
     }
@@ -66,6 +66,17 @@ public enum YouTubeAction: Sendable, Equatable {
     case dequeue(Int)
     /// On the glasses: the lists, or the video over everything.
     case page(HudSnapshot.YouTube.Page)
+}
+
+public enum PrompterAction: Sendable {
+    case toggle, faster, slower, restart
+}
+
+public enum PhotosAction: Sendable {
+    /// The next photo (positive) or an earlier one: the one shown, or the gallery's pick.
+    case step(Int)
+    /// Fullscreen: the picked photo alone, or back to the grid.
+    case open
 }
 
 public enum NoteAction: Sendable {
@@ -1001,11 +1012,14 @@ public struct AppPad: View {
     public var snapshot: HudSnapshot
     public var captionsLanguage: String
     public var scrolls: Bool
+    /// The app is held up alone, not in the centre.
+    public var fullscreen: Bool
     public var action: (PhoneAction) -> Void
 
     public init(kind: HudPanelKind, snapshot: HudSnapshot, captionsLanguage: String = "pt-BR",
-                scrolls: Bool = true, action: @escaping (PhoneAction) -> Void = { _ in }) {
+                scrolls: Bool = true, fullscreen: Bool = true, action: @escaping (PhoneAction) -> Void = { _ in }) {
         self.scrolls = scrolls
+        self.fullscreen = fullscreen
         self.kind = kind
         self.snapshot = snapshot
         self.captionsLanguage = captionsLanguage
@@ -1023,10 +1037,102 @@ public struct AppPad: View {
             case .captions: CaptionsControls(captions: snapshot.captions, language: captionsLanguage, action: action)
             case .note: NoteControls(note: snapshot.note, action: action)
             case .youtube: YouTubeControls(youtube: snapshot.youtube, scrolls: scrolls, action: action)
+            case .prompter: PrompterControls(prompter: snapshot.prompter, note: snapshot.note, action: action)
+            case .photos: PhotosControls(photos: snapshot.photos, inGallery: fullscreen, action: action)
             default: Color.black
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
+    }
+}
+
+// MARK: - Teleprompter
+
+/// Start and stop, the speed, and back to the top. The words are the note's: WRITE edits it.
+public struct PrompterControls: View {
+    public var prompter: HudSnapshot.Prompter
+    public var note: HudSnapshot.Note
+    public var action: (PhoneAction) -> Void
+
+    public init(prompter: HudSnapshot.Prompter, note: HudSnapshot.Note,
+                action: @escaping (PhoneAction) -> Void = { _ in }) {
+        self.prompter = prompter
+        self.note = note
+        self.action = action
+    }
+
+    public var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                PadButton(symbol: "minus", title: "SLOWER") { action(.prompter(.slower)) }
+                PadCard {
+                    VStack(spacing: 4) {
+                        Text("SPEED").font(HudTheme.mont(10, .black)).tracking(2).foregroundStyle(HudTheme.inkDim)
+                        Text("\(prompter.step)").font(HudTheme.mont(40, .black)).monospacedDigit()
+                            .foregroundStyle(HudTheme.ink)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                PadButton(symbol: "plus", title: "FASTER") { action(.prompter(.faster)) }
+            }
+            .frame(height: 110)
+            PadButton(symbol: prompter.isRunning ? "pause.fill" : "play.fill",
+                      title: prompter.isRunning ? "PAUSE" : "ROLL", lit: true, big: true) {
+                action(.prompter(.toggle))
+            }
+            HStack(spacing: 10) {
+                PadButton(symbol: "arrow.up.to.line", title: "FROM THE TOP") { action(.prompter(.restart)) }
+                PadButton(symbol: "square.and.pencil", title: note.text.isEmpty ? "WRITE" : "EDIT") {
+                    action(.note(.write))
+                }
+            }
+            .frame(height: 96)
+        }
+    }
+}
+
+// MARK: - Photos
+
+/// Back and on through the library; fullscreen, open the picked one or go back to the grid.
+public struct PhotosControls: View {
+    public var photos: HudSnapshot.Photos
+    /// Fullscreen, where the grid is. (Getting there is a hold, never a button.)
+    public var inGallery: Bool
+    public var action: (PhoneAction) -> Void
+
+    public init(photos: HudSnapshot.Photos, inGallery: Bool, action: @escaping (PhoneAction) -> Void = { _ in }) {
+        self.photos = photos
+        self.inGallery = inGallery
+        self.action = action
+    }
+
+    public var body: some View {
+        VStack(spacing: 10) {
+            PadCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PHOTOS").font(HudTheme.mont(10, .black)).tracking(2).foregroundStyle(HudTheme.inkDim)
+                    Text(photos.caption.isEmpty ? (photos.hasAccess ? "No photos" : "Allow Photos in Settings")
+                         : photos.caption)
+                        .font(HudTheme.mont(18, .black)).foregroundStyle(HudTheme.ink).lineLimit(2)
+                    if photos.count > 0 {
+                        Text("\(photos.current + 1) OF \(photos.count)").font(HudTheme.mont(12, .black))
+                            .tracking(1.5).monospacedDigit().foregroundStyle(HudTheme.inkDim)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 10) {
+                PadButton(symbol: "chevron.left", title: "NEWER", big: true) { action(.photos(.step(-1))) }
+                PadButton(symbol: "chevron.right", title: "OLDER", big: true) { action(.photos(.step(1))) }
+            }
+            .frame(maxHeight: .infinity)
+            if inGallery {
+                PadButton(symbol: photos.viewing ? "square.grid.3x3" : "photo",
+                          title: photos.viewing ? "BACK TO THE GRID" : "OPEN") { action(.photos(.open)) }
+                    .frame(height: 84)
+            }
+        }
     }
 }

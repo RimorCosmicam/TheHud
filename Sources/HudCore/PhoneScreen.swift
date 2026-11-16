@@ -128,6 +128,8 @@ public enum PhoneAction: Sendable {
     case tapPanel(HudPanelKind)
     /// Show one panel alone on the glasses.
     case solo(HudPanelKind)
+    /// The app picker: this app in the centre of the glasses.
+    case centre(HudPanelKind)
     /// Everything off at once, or back.
     case clearView
     case editGlasses(Bool)
@@ -153,6 +155,8 @@ public enum PhoneAction: Sendable {
     case captionsLanguage(String)
     case note(NoteAction)
     case youtube(YouTubeAction)
+    case prompter(PrompterAction)
+    case photos(PhotosAction)
 }
 
 /// The icon row: the browser's own controls, the keyboard, and the gear.
@@ -357,6 +361,52 @@ public struct SettingsArea: View {
         return solo.map { $0 == kind } ?? arrangement.isShown(kind)
     }
 
+    /// The browser's tabs or the Mac's windows: only while one of them is the app in use, the
+    /// centre's or fullscreen, so the room goes to the pad otherwise.
+    private var showsBigStrip: Bool {
+        if clearView { return false }
+        if let solo { return solo.isBig }
+        guard let centre = arrangement.centre?.kind else { return false }
+        return centre.isBig && !arrangement.hidden.contains(centre)
+    }
+
+    /// The app picker: every Hud app, the one in the centre lit. A tap puts it there; where it
+    /// came from takes the one it replaces.
+    private var appPicker: some View {
+        let current = arrangement.centre?.kind
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("APP").hudLabel()
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(HudPanelKind.apps) { kind in
+                            let chosen = kind == current
+                            Button { action(.centre(kind)) } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: kind.symbol).font(.system(size: 14, weight: .semibold))
+                                    Text(kind.title).font(HudTheme.mont(11, .black)).tracking(1.2)
+                                }
+                                .foregroundStyle(chosen ? Color.black : HudTheme.inkDim)
+                                .padding(.horizontal, 14)
+                                .frame(height: 40)
+                                .background(chosen ? HudTheme.accent : Color.white.opacity(0.07), in: Capsule())
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .id(kind)
+                            .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
+                        }
+                    }
+                }
+                .onAppear { if let current { proxy.scrollTo(current, anchor: .center) } }
+                .onChange(of: current) { _, kind in
+                    if let kind { withAnimation { proxy.scrollTo(kind, anchor: .center) } }
+                }
+            }
+            .sensoryFeedback(.selection, trigger: current)
+        }
+    }
+
     /// The strip lists the Mac's windows when the Mac is on and the browser is not, or
     /// when both are and WINDOWS was picked.
     private var listsWindows: Bool {
@@ -374,8 +424,11 @@ public struct SettingsArea: View {
             if editing {
                 tray
             } else {
-                stripHeader.padding(.top, 4)
-                if listsWindows { windowStrip } else { tabStrip }
+                appPicker.padding(.top, 4)
+                if showsBigStrip {
+                    stripHeader.padding(.top, 2)
+                    if listsWindows { windowStrip } else { tabStrip }
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -475,7 +528,7 @@ public struct SettingsArea: View {
                     ForEach(0..<HudArrangement.rowSlots, id: \.self) { index in
                         let frame = mini.rowSlot(index)
                         slot(arrangement.row[index],
-                             highlighted: target == .row(index) && drag?.kind.isBig == false)
+                             highlighted: target == .row(index) && !draggingCentre)
                             .frame(width: frame.width, height: frame.height)
                             .offset(x: frame.minX, y: frame.minY)
                     }
@@ -484,7 +537,7 @@ public struct SettingsArea: View {
                         ForEach(0..<HudArrangement.slotsPerSide, id: \.self) { index in
                             let frame = mini.slot(side, index)
                             slot(arrangement.slots(side)[index],
-                                 highlighted: target == .slot(side, index) && drag?.kind.isBig == false)
+                                 highlighted: target == .slot(side, index) && !draggingCentre)
                                 .frame(width: frame.width, height: frame.height)
                                 .offset(x: frame.minX, y: frame.minY)
                         }
@@ -495,7 +548,7 @@ public struct SettingsArea: View {
                         .strokeBorder(Color.white.opacity(editing ? 0.18 : 0.07),
                                       style: StrokeStyle(lineWidth: 1, dash: editing ? [4, 4] : []))
                         .overlay {
-                            Text(editing ? "DRAG BROWSER OR MAC HERE" : "OPEN")
+                            Text(editing ? "DRAG AN APP HERE" : "OPEN")
                                 .font(HudTheme.mont(8, .black)).tracking(1.5)
                                 .foregroundStyle(HudTheme.inkFaint)
                         }
@@ -507,12 +560,17 @@ public struct SettingsArea: View {
                         .frame(width: frame.width, height: frame.height)
                         .offset(x: frame.minX, y: frame.minY)
                 }
-                if let drag, drag.kind.isBig, let target {
+                if drag != nil, let target, draggingCentre || target == .middle {
                     bigTargetMark(target, mini)
                 }
             }
             .opacity(clearView && !editing ? 0.35 : 1)
         }
+    }
+
+    /// The centre's app is being dragged: onto a side it reaches over, not into a slot.
+    private var draggingCentre: Bool {
+        drag != nil && drag?.kind == arrangement.centre?.kind
     }
 
     /// Where the dragged thing would land, if it is over the miniature.
@@ -558,7 +616,7 @@ public struct SettingsArea: View {
         if drag?.kind == kind { return .ghost }
         if solo == kind { return .solo }
         if solo != nil || arrangement.hidden.contains(kind) { return .off }
-        if !kind.isBig, let side = side(of: kind), arrangement.takenSides.contains(side) {
+        if arrangement.centre?.kind != kind, let side = side(of: kind), arrangement.takenSides.contains(side) {
             return .covered
         }
         return .on
@@ -595,7 +653,7 @@ public struct SettingsArea: View {
     }
 
     /// Outside arranging: a tap switches it off or on; held and let go, it goes fullscreen; held
-    /// or pulled and dragged, it moves (the browser or the Mac over a side to take it over).
+    /// or pulled and dragged, it moves (the centre's app over a side to take it over).
     private func pressGesture(_ kind: HudPanelKind) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
@@ -631,7 +689,6 @@ public struct SettingsArea: View {
             let mini = MiniLayout(size: miniFrame.size, strip: arrangement.strip)
             let spot = mini.spot(at: CGPoint(x: location.x - miniFrame.minX,
                                              y: location.y - miniFrame.minY))
-            if !kind.isBig, spot == .middle { return }
             action(.place(kind, spot))
         } else if removing, arrangement.isPlaced(kind) {
             // Dragged off the glasses: back with the icons.
@@ -657,8 +714,8 @@ public struct SettingsArea: View {
                 }
             }
             Text(arrangement.isRow
-                 ? "Drop on the row to add or replace. Drag one off to remove it. One app fills the rest: drop Browser or Mac there."
-                 : "Drop on a slot to add or replace. Drag one off to remove it. Drop Browser or Mac on a side to take that side over.")
+                 ? "Drop on the row to add or replace. Drag one off to remove it. One app fills the rest: drop it there."
+                 : "Drop on a slot for a widget, in the middle for the app in the centre. Drag one off to remove it. Drag the centre's app onto a side to take that side over.")
                 .font(HudTheme.mont(11, .semibold))
                 .foregroundStyle(HudTheme.inkFaint)
                 .fixedSize(horizontal: false, vertical: true)

@@ -2,8 +2,8 @@ import Foundation
 import CoreGraphics
 import HudCore
 
-// The glasses' grid: three widget slots down each side, the browser and the Mac in the middle,
-// and the phone's miniature that arranges it all by dragging.
+// The glasses' grid: three widget slots down each side, one app in the centre, and the phone's
+// miniature that arranges it all by dragging.
 
 func runGridTests() {
     print("\nGrid")
@@ -12,26 +12,29 @@ func runGridTests() {
         expectEqual(HudScene.presets.count, HudScene.count)
         for scene in HudScene.presets {
             let a = scene.arrangement
-            let widgets = (a.left + a.right).compactMap { $0 }
-            expectEqual(Set(widgets).count, widgets.count)
-            expect(widgets.allSatisfy { !$0.isBig }, "\(scene.name): only widgets in slots")
-            expect(a.bigs.allSatisfy(\.kind.isBig), "\(scene.name): only big ones in the middle")
+            for widgets in [(a.left + a.right).compactMap { $0 }, a.row.compactMap { $0 }] {
+                expectEqual(Set(widgets).count, widgets.count)
+                expect(!widgets.contains { $0 == a.centre?.kind }, "\(scene.name): the centre's app not a widget too")
+            }
+            expect(a.bigs.count <= 1, "\(scene.name): one app in the centre")
             let decoded = try? JSONDecoder().decode(HudScene.self, from: JSONEncoder().encode(scene))
             expectEqual(decoded, scene)
         }
-        // DESK: the Mac over the right, so those widgets are covered.
+        // DESK: the browser in the centre, the Mac a live widget beside the others.
         let desk = GlassesLayout(arrangement: HudScene.presets[0].arrangement)
-        expectEqual(Set(desk.widgetFrames.map(\.kind)), [.clock, .weather, .note])
-        // STREET: one row along the top, one app under it, no columns.
+        expectEqual(Set(desk.widgetFrames.map(\.kind)), [.clock, .calendar, .weather, .mac, .music, .note])
+        expectEqual(desk.bigFrames.map(\.kind), [.browser])
+        // STREET: one row along the top, the map under it, no columns.
         let street = GlassesLayout(arrangement: HudScene.presets[1].arrangement)
-        expectEqual(street.widgetFrames.map(\.kind), [.clock, .weather, .map, .music])
+        expectEqual(street.widgetFrames.map(\.kind), [.clock, .weather, .calendar, .music])
         expect(Set(street.widgetFrames.map(\.frame.minY)).count == 1, "all in one row")
-        expectEqual(street.bigFrames.map(\.kind), [.browser])
-        expectEqual(street.bigFrames.first?.frame.width, GlassesLayout.safeFrame.width)
+        expect(street.bigFrames.isEmpty, "no browser or Mac")
+        expectEqual(street.centreApp?.kind, .map)
+        expectEqual(street.centreApp?.frame, GlassesLayout.rowMain(along: .top))
     }
 
     test("row layout: four along an edge, one app in the rest, columns kept for coming back") {
-        var a = HudScene.presets[0].arrangement   // DESK: browser, and the Mac over the right
+        var a = HudScene.presets[0].arrangement   // DESK: the browser in the centre
         let columns = a
         a.setStrip(.bottom)
         let row = GlassesLayout(arrangement: a)
@@ -43,10 +46,12 @@ func runGridTests() {
         }
         expectEqual(row.bigFrames.map(\.kind), [.browser])
         expectEqual(row.bigFrames.first?.frame, main)
-        // The Mac waits behind the browser; dropping it brings it to the front.
-        expect(!a.isPlaced(.mac), "only one app in the row layout")
-        a.place(.mac, at: .middle)
-        expectEqual(GlassesLayout(arrangement: a).bigFrames.map(\.kind), [.mac])
+        // Another app dropped in the middle takes the centre; the browser goes back to the icons.
+        a.place(.note, at: .middle)
+        let noted = GlassesLayout(arrangement: a)
+        expect(noted.bigFrames.isEmpty, "the browser left")
+        expectEqual(noted.centreApp?.kind, .note)
+        expectEqual(noted.centreApp?.frame, main)
         // Widgets swap along the row; one from the drawer replaces what was there.
         let first = a.row[0]
         a.place(.captions, at: .row(0))
@@ -56,11 +61,11 @@ func runGridTests() {
         let hit = GlassesLayout(arrangement: a).hitTest(CGPoint(x: GlassesLayout.rowFrame(0, along: .bottom).midX,
                                                                   y: GlassesLayout.rowFrame(0, along: .bottom).midY))
         if case let .widget(kind, _, _) = hit { expectEqual(kind, .captions) } else { expect(false, "\(hit)") }
-        // Back to columns: as they were, the Mac back over the right.
+        // Back to columns: as they were, but the note is the centre's now, not a widget too.
         a.setStrip(nil)
         expectEqual(a.left, columns.left)
-        expectEqual(a.right, columns.right)
-        expect(a.bigs.contains { $0.kind == .mac && $0.side == .right }, "Mac keeps its side")
+        expectEqual(a.right, columns.right.map { $0 == .note ? nil : $0 })
+        expectEqual(a.centre?.kind, .note)
         // Older saves have no row: they read as columns.
         let old = try! JSONSerialization.data(withJSONObject: ["left": ["clock"], "right": [], "bigs": [], "hidden": []])
         let decoded = try? JSONDecoder().decode(HudArrangement.self, from: old)
@@ -144,25 +149,49 @@ func runGridTests() {
         expect(arrangement.unplaced.contains(.weather))
     }
 
-    test("place: widgets never take the middle; off removes") {
+    test("place: any app in the middle is the centre's, swapping with the one there; off removes") {
         var arrangement = HudArrangement.standard
         arrangement.place(.note, at: .middle)
-        expect(!arrangement.isPlaced(.note))
-        arrangement.place(.clock, at: .off)
-        expectEqual(arrangement.left, [nil, .weather, .map])
+        expectEqual(arrangement.centre?.kind, .note)
+        expect(!arrangement.isPlaced(.browser), "the browser, from nowhere, back to the icons")
+        arrangement.place(.clock, at: .middle)
+        expectEqual(arrangement.centre?.kind, .clock)
+        expectEqual(arrangement.left, [.note, .weather, .map])
+        arrangement.place(.weather, at: .off)
+        expectEqual(arrangement.left, [.note, nil, .map])
     }
 
-    test("place: a big panel on a side reaches over it; the other big one gives that side up") {
+    test("place: the centre on a side reaches over it; any other app there is a widget") {
         var arrangement = HudArrangement.standard
         arrangement.place(.mac, at: .slot(.right, 2))
-        expectEqual(arrangement.side(of: .mac), .right)
+        expectEqual(arrangement.right, [nil, nil, .mac])
+        expectEqual(arrangement.side(of: .mac), nil)
         arrangement.place(.browser, at: .slot(.right, 0))
         expectEqual(arrangement.side(of: .browser), .right)
-        expectEqual(arrangement.side(of: .mac), nil)
-        // Left to right: the Mac in the middle, the browser reaching right.
-        expectEqual(arrangement.orderedBigs.map(\.kind), [.mac, .browser])
-        let frames = GlassesLayout(arrangement: arrangement).bigFrames
-        expectEqual(frames.last!.frame.maxX, GlassesLayout.safeFrame.maxX)
+        expectEqual(arrangement.takenSides, [.right])
+        let layout = GlassesLayout(arrangement: arrangement)
+        expectEqual(layout.bigFrames.last!.frame.maxX, GlassesLayout.safeFrame.maxX)
+        expect(!layout.widgetFrames.contains { $0.kind == .mac }, "the Mac's widget is covered")
+    }
+
+    test("the app picker: a pick swaps the centre with the picked app's slot") {
+        var arrangement = HudArrangement.standard
+        arrangement.setCentre(.weather)
+        expectEqual(arrangement.centre?.kind, .weather)
+        expectEqual(arrangement.left, [.clock, .browser, .map])
+        arrangement.setCentre(.browser)
+        expectEqual(arrangement.left, [.clock, .weather, .map])
+        // Picked while switched off, it comes back on.
+        arrangement.toggleHidden(.browser)
+        arrangement.setCentre(.browser)
+        expect(arrangement.isShown(.browser))
+        // The centre's app gets the centre's size and its clicks.
+        arrangement.setCentre(.calendar)
+        let layout = GlassesLayout(arrangement: arrangement)
+        let frame = layout.centreApp!.frame
+        expectEqual(frame, GlassesLayout.bigSpan(taking: []))
+        expectEqual(layout.hitTest(CGPoint(x: frame.minX + 10, y: frame.minY + 20)),
+                    .centre(.calendar, CGPoint(x: 10, y: 20), frame.size))
     }
 
     test("arrangement survives saving") {

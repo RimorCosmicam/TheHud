@@ -22,12 +22,13 @@ public enum HudSpot: Equatable, Sendable {
 
 /// What is on the glasses and where, in one of two layouts.
 ///
-/// Columns: three widget slots down each side, and the browser and the Mac in the middle, each
-/// of which can reach over one side. Row: four widgets in a row along the top or the bottom, and
-/// one big panel in the rest; quieter, for walking.
+/// Every app has three sizes: a widget in a slot, the one app in the centre (the Apps Center),
+/// or fullscreen when held. Columns: three widget slots down each side and the centre between,
+/// which can reach over one side. Row: four widgets along the top or the bottom, and the centre
+/// in the rest; quieter, for walking. An app is in one place at a time.
 ///
-/// Each layout keeps its own places, so switching back and forth loses nothing.
-/// Edited on the phone and saved; the glasses layout is arithmetic over this.
+/// Each layout keeps its own slots, so switching back and forth loses nothing; the centre is
+/// shared. Edited on the phone and saved; the glasses layout is arithmetic over this.
 public struct HudArrangement: Codable, Equatable, Sendable {
     public static let slotsPerSide = 3
     public static let rowSlots = 4
@@ -40,7 +41,7 @@ public struct HudArrangement: Codable, Equatable, Sendable {
 
     public var left: [HudPanelKind?]
     public var right: [HudPanelKind?]
-    /// The big panels, in the order they sit in the middle.
+    /// The centre, as a list of at most one: the app in it, and the side it reaches over.
     public var bigs: [Big]
     /// Placed but switched off for now with a tap; they keep their place.
     public var hidden: Set<HudPanelKind>
@@ -55,39 +56,46 @@ public struct HudArrangement: Codable, Equatable, Sendable {
         }
     }
 
+    /// The Apps Center: the one app in the middle, whether switched off for now or not.
+    public var centre: Big? { bigs.first }
+
     public init(left: [HudPanelKind?] = [nil, nil, nil], right: [HudPanelKind?] = [nil, nil, nil],
-                bigs: [Big] = [], hidden: Set<HudPanelKind> = [],
+                centre: Big? = nil, hidden: Set<HudPanelKind> = [],
                 row: [HudPanelKind?] = [], strip: HudEdge? = nil) {
         self.left = Self.padded(left)
         self.right = Self.padded(right)
-        self.bigs = bigs
+        self.bigs = centre.map { [$0] } ?? []
         self.hidden = hidden
         self.row = Self.padded(row, to: Self.rowSlots)
         self.strip = strip
     }
 
-    /// Arrangements saved before the row layout have neither of its fields.
+    /// Arrangements saved before the row layout have neither of its fields; ones from before
+    /// the Apps Center can have two apps in the middle, of which the first stays.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         left = Self.padded(try container.decode([HudPanelKind?].self, forKey: .left))
         right = Self.padded(try container.decode([HudPanelKind?].self, forKey: .right))
-        bigs = try container.decode([Big].self, forKey: .bigs)
+        bigs = Array(try container.decode([Big].self, forKey: .bigs).prefix(1))
         hidden = try container.decode(Set<HudPanelKind>.self, forKey: .hidden)
         row = Self.padded(try container.decodeIfPresent([HudPanelKind?].self, forKey: .row) ?? [],
                           to: Self.rowSlots)
         strip = try container.decodeIfPresent(HudEdge.self, forKey: .strip)
     }
 
-    /// The browser in the middle; the clock, the weather and the map down the left.
+    /// The browser in the centre; the clock, the weather and the map down the left.
     public static let standard = HudArrangement(left: [.clock, .weather, .map],
-                                                bigs: [Big(kind: .browser)])
+                                                centre: Big(kind: .browser))
 
-    /// Widgets fill the left slots then the right in the usual order; big ones share the middle.
+    /// The set as a plain list: the browser (or else the Mac) in the centre, and the rest as
+    /// widgets filling the left slots then the right. For stills and tests.
     public init(visible: Set<HudPanelKind>) {
-        let widgets = HudPanelKind.widgets.filter(visible.contains).prefix(Self.slotsPerSide * 2)
-        let list = Array(widgets)
+        let centre: HudPanelKind? = visible.contains(.browser) ? .browser : visible.contains(.mac) ? .mac : nil
+        let widgets = HudPanelKind.allCases.filter { visible.contains($0) && $0 != centre && !$0.isBig }
+            + HudPanelKind.allCases.filter { visible.contains($0) && $0 != centre && $0.isBig }
+        let list = Array(widgets.prefix(Self.slotsPerSide * 2))
         self.init(left: Array(list.prefix(3)), right: Array(list.dropFirst(3)),
-                  bigs: HudPanelKind.bigs.filter(visible.contains).map { Big(kind: $0) })
+                  centre: centre.map { Big(kind: $0) })
     }
 
     private static func padded(_ slots: [HudPanelKind?], to count: Int = slotsPerSide) -> [HudPanelKind?] {
@@ -104,9 +112,6 @@ public struct HudArrangement: Codable, Equatable, Sendable {
         strip = edge
     }
 
-    /// The big panel the row layout shows: the first placed.
-    private var rowBig: Big? { bigs.first }
-
     public func slots(_ side: HudSide) -> [HudPanelKind?] { side == .left ? left : right }
 
     private mutating func setSlot(_ side: HudSide, _ index: Int, _ kind: HudPanelKind?) {
@@ -115,42 +120,39 @@ public struct HudArrangement: Codable, Equatable, Sendable {
 
     /// Where a kind is now, if it is placed.
     public func spot(of kind: HudPanelKind) -> HudSpot {
+        if centre?.kind == kind { return .middle }
         if isRow {
             if let index = row.firstIndex(of: kind) { return .row(index) }
-            return rowBig?.kind == kind ? .middle : .off
+            return .off
         }
         for side in HudSide.allCases {
             if let index = slots(side).firstIndex(of: kind) { return .slot(side, index) }
         }
-        return bigs.contains { $0.kind == kind } ? .middle : .off
+        return .off
     }
 
     public func isPlaced(_ kind: HudPanelKind) -> Bool { spot(of: kind) != .off }
     public func isShown(_ kind: HudPanelKind) -> Bool { isPlaced(kind) && !hidden.contains(kind) }
 
-    /// The side a big panel reaches over, if any.
+    /// The side the centre reaches over, if any.
     public func side(of kind: HudPanelKind) -> HudSide? {
         if isRow { return nil }
-        return bigs.first { $0.kind == kind }?.side
+        return centre?.kind == kind ? centre?.side : nil
     }
 
-    /// The big panels on the glasses, left to right: one reaching over the left first, one
-    /// over the right last, the rest in their order between.
+    /// The centre as it is on the glasses: nothing when switched off, and never over a side in
+    /// the row layout.
     public var orderedBigs: [Big] {
-        if isRow {
-            return rowBig.flatMap { hidden.contains($0.kind) ? nil : Big(kind: $0.kind) }.map { [$0] } ?? []
-        }
-        let shown = bigs.filter { !hidden.contains($0.kind) }
-        return shown.filter { $0.side == .left } + shown.filter { $0.side == nil }
-            + shown.filter { $0.side == .right }
+        guard let centre, !hidden.contains(centre.kind) else { return [] }
+        return [isRow ? Big(kind: centre.kind) : centre]
     }
 
-    /// Sides a shown big panel has taken over.
+    /// Sides the shown centre has taken over.
     public var takenSides: Set<HudSide> {
         Set(orderedBigs.compactMap(\.side))
     }
 
-    /// Widgets that are drawn: placed, not switched off, and not under a big panel.
+    /// Widgets that are drawn: placed, not switched off, and not under the centre's side.
     public var shownWidgets: [(kind: HudPanelKind, side: HudSide, index: Int)] {
         if isRow { return [] }
         let taken = takenSides
@@ -174,55 +176,67 @@ public struct HudArrangement: Codable, Equatable, Sendable {
 
     /// Everything not placed: the icons under the miniature while editing.
     public var unplaced: [HudPanelKind] {
-        HudPanelKind.allCases.filter { !isPlaced($0) }
+        HudPanelKind.apps.filter { !isPlaced($0) }
     }
 
     /// Takes a kind off the glasses.
     public mutating func remove(_ kind: HudPanelKind) {
+        if centre?.kind == kind { bigs = [] }
         if isRow {
             // Only from the layout in use: the columns keep theirs for coming back to.
             row = row.map { $0 == kind ? nil : $0 }
-            if rowBig?.kind == kind { bigs.removeFirst() }
-            if !isPlaced(kind) { hidden.remove(kind) }
+        } else {
+            for side in HudSide.allCases {
+                if let index = slots(side).firstIndex(of: kind) { setSlot(side, index, nil) }
+            }
+        }
+        if !isPlaced(kind) { hidden.remove(kind) }
+    }
+
+    /// Puts an app in the centre, as the phone's app picker does. Where it came from takes the
+    /// app that was there, so two apps swap with one pick each way; from nowhere, the old one
+    /// goes back with the icons. The centre keeps the side it reaches over.
+    public mutating func setCentre(_ kind: HudPanelKind) {
+        makeCentre(kind, side: centre?.side)
+    }
+
+    private mutating func makeCentre(_ kind: HudPanelKind, side: HudSide?) {
+        let old = centre
+        if old?.kind == kind {
+            bigs[0].side = side
+            hidden.remove(kind)
             return
         }
-        for side in HudSide.allCases {
-            if let index = slots(side).firstIndex(of: kind) { setSlot(side, index, nil) }
+        let swapIn = old?.kind
+        switch spot(of: kind) {
+        case let .slot(s, index): setSlot(s, index, swapIn)
+        case let .row(index): row[index] = swapIn
+        case .middle, .off: break
         }
-        bigs.removeAll { $0.kind == kind }
+        // The other layout's slots keep their own places, but not a copy of the centre.
+        left = left.map { $0 == kind ? nil : $0 }
+        right = right.map { $0 == kind ? nil : $0 }
+        row = row.map { $0 == kind ? nil : $0 }
+        bigs = [Big(kind: kind, side: side)]
         hidden.remove(kind)
+        if let swapIn { hidden.remove(swapIn) }
     }
 
     /// Drops a kind somewhere, as the editor does.
     ///
-    /// A widget on a slot takes it; whatever was there swaps into the widget's old slot, or goes
-    /// back to the icons if the widget came from them. A big panel dropped in the middle sits
-    /// there; dropped on a side, it reaches over that side, and a big panel that had that side
-    /// goes back to the middle. Big panels never take a slot, and widgets never the middle.
+    /// On the middle, it becomes the centre app (swapping with the one there). On a slot it is a
+    /// widget there, and whatever was there swaps into its old slot, or goes back to the icons
+    /// if it came from them; the centre itself dropped on a side reaches over that side instead.
     public mutating func place(_ kind: HudPanelKind, at spot: HudSpot) {
         if spot == .off { return remove(kind) }
+        if spot == .middle { return makeCentre(kind, side: nil) }
         if isRow { return placeInRow(kind, at: spot) }
-        if kind.isBig {
-            let side: HudSide?
-            switch spot {
-            case .middle, .row: side = nil
-            case let .slot(s, _): side = s
-            case .off: return
-            }
-            if let side {
-                for index in bigs.indices where bigs[index].side == side && bigs[index].kind != kind {
-                    bigs[index].side = nil
-                }
-            }
-            if let index = bigs.firstIndex(where: { $0.kind == kind }) {
-                bigs[index].side = side
-            } else {
-                bigs.append(Big(kind: kind, side: side))
-            }
-            hidden.remove(kind)
+        guard case let .slot(side, index) = spot, (0..<Self.slotsPerSide).contains(index) else {
             return
         }
-        guard case let .slot(side, index) = spot, (0..<Self.slotsPerSide).contains(index) else {
+        if centre?.kind == kind {
+            bigs[0].side = side
+            hidden.remove(kind)
             return
         }
         let from = self.spot(of: kind)
@@ -237,20 +251,15 @@ public struct HudArrangement: Codable, Equatable, Sendable {
         hidden.remove(kind)
     }
 
-    /// The row layout: one big panel in the rest of the glasses (another placed big one waits
-    /// behind it for the columns), and widgets swapping places along the row.
+    /// The row layout: widgets swapping places along the row. The centre dropped on the row
+    /// swaps with the widget there.
     private mutating func placeInRow(_ kind: HudPanelKind, at spot: HudSpot) {
-        if kind.isBig {
-            if let index = bigs.firstIndex(where: { $0.kind == kind }) {
-                bigs.insert(bigs.remove(at: index), at: 0)
-            } else {
-                bigs.insert(Big(kind: kind), at: 0)
-            }
-            hidden.remove(kind)
-            return
-        }
         guard case let .row(index) = spot, row.indices.contains(index) else { return }
         let occupant = row[index]
+        if centre?.kind == kind {
+            if let occupant { makeCentre(occupant, side: nil) }
+            return
+        }
         if occupant == kind { hidden.remove(kind); return }
         if let from = row.firstIndex(of: kind) {
             row[from] = occupant
@@ -272,9 +281,8 @@ extension HudArrangement {
     /// The big panels left to right as placed, whether switched off for now or not: what the
     /// phone's miniature draws.
     public var placedBigsInOrder: [Big] {
-        if isRow { return bigs.first.map { [Big(kind: $0.kind)] } ?? [] }
-        return bigs.filter { $0.side == .left } + bigs.filter { $0.side == nil }
-            + bigs.filter { $0.side == .right }
+        guard let centre else { return [] }
+        return [isRow ? Big(kind: centre.kind) : centre]
     }
 }
 
@@ -369,19 +377,19 @@ public struct HudScene: Codable, Equatable, Sendable {
     public static let count = 3
 
     public static let presets: [HudScene] = [
-        // At a desk: the browser in the middle, the Mac over the right.
+        // At a desk: the browser in the centre, the Mac live in a slot to swap in.
         HudScene(name: "DESK", arrangement: HudArrangement(
-            left: [.clock, .weather, .note], right: [.music, .activity, .captions],
-            bigs: [.init(kind: .browser), .init(kind: .mac, side: .right)])),
+            left: [.clock, .calendar, .weather], right: [.mac, .music, .note],
+            centre: .init(kind: .browser))),
         // Walking: one row of widgets along the top and a single app under it; a tap on the
-        // browser's chip takes it away to see the street.
+        // centre's chip takes it away to see the street.
         HudScene(name: "STREET", arrangement: HudArrangement(
-            left: [.map, .weather, .clock], right: [.music, .activity, .captions],
-            bigs: [.init(kind: .browser)],
-            row: [.clock, .weather, .map, .music], strip: .top)),
-        // Evening: something to read, and the sky.
+            left: [.calendar, .weather, .clock], right: [.music, .activity, .captions],
+            centre: .init(kind: .map),
+            row: [.clock, .weather, .calendar, .music], strip: .top)),
+        // Evening: something to watch, and the sky.
         HudScene(name: "NIGHT", arrangement: HudArrangement(
-            left: [.clock, .weather, .sky], right: [.music, .note, .activity],
-            bigs: [.init(kind: .browser)])),
+            left: [.clock, .weather, .sky], right: [.music, .photos, .browser],
+            centre: .init(kind: .youtube))),
     ]
 }

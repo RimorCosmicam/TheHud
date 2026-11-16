@@ -224,7 +224,11 @@ public struct MapsApp: View {
 
 public struct WeatherApp: View {
     public var weather: HudSnapshot.Weather?
-    public init(_ weather: HudSnapshot.Weather?) { self.weather = weather }
+    public var size: CGSize
+    public init(_ weather: HudSnapshot.Weather?, size: CGSize = fullAppSize) {
+        self.weather = weather
+        self.size = size
+    }
 
     public var body: some View {
         Group {
@@ -241,8 +245,9 @@ public struct WeatherApp: View {
                         Spacer(minLength: 24)
                         hourly(weather)
                     }
-                    .frame(width: 900)
-                    week(weather)
+                    .frame(width: isWide(size) ? 900 : nil)
+                    // In the centre there is room for today only.
+                    if isWide(size) { week(weather) }
                 }
             } else {
                 Text("WAITING FOR THE WEATHER")
@@ -424,27 +429,39 @@ public struct WeatherApp: View {
 /// click to start or pause, right-click to reset.
 public enum ClockAppLayout {
     public static let timerCard = CGRect(x: 824, y: 330, width: 440, height: 320)
+
+    /// The timer card for an app of this size: in the centre, under the time, on the left.
+    public static func timerCard(in size: CGSize) -> CGRect {
+        isWide(size) ? timerCard : CGRect(x: 48, y: 300, width: (size.width - 120) / 2, height: 320)
+    }
 }
 
 public struct ClockApp: View {
     public var clock: HudSnapshot.Clock
     public var timer: HudSnapshot.TimerReading
     public var hover: CGPoint?
+    public var size: CGSize
     public init(_ clock: HudSnapshot.Clock, timer: HudSnapshot.TimerReading = .init(),
-                hover: CGPoint? = nil) {
+                hover: CGPoint? = nil, size: CGSize = fullAppSize) {
         self.clock = clock
         self.timer = timer
         self.hover = hover
+        self.size = size
     }
 
     public var body: some View {
+        let wide = isWide(size)
+        let card = ClockAppLayout.timerCard(in: size)
         ZStack(alignment: .topLeading) {
-            ClockDial(clock: clock)
-                .at(CGRect(x: 60, y: 126, width: 700, height: 700))
+            // In the centre the digits are the clock; the dial needs the whole canvas.
+            if wide {
+                ClockDial(clock: clock)
+                    .at(CGRect(x: 60, y: 126, width: 700, height: 700))
+            }
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(clock.time).font(HudTheme.mont(176, .black)).tracking(-6)
+                    Text(clock.time).font(HudTheme.mont(wide ? 176 : 150, .black)).tracking(-6)
                         .foregroundStyle(HudTheme.ink)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(clock.seconds).font(HudTheme.mont(64, .black))
@@ -461,17 +478,20 @@ public struct ClockApp: View {
                     .font(HudTheme.mont(28, .black)).tracking(4)
                     .foregroundStyle(HudTheme.inkDim)
             }
-            .at(CGRect(x: 824, y: 40, width: 916, height: 270))
+            .at(wide ? CGRect(x: 824, y: 40, width: 916, height: 270)
+                : CGRect(x: 48, y: 30, width: size.width - 96, height: 250))
 
-            timerCard.at(ClockAppLayout.timerCard)
-            agenda.at(CGRect(x: 1300, y: 340, width: 440, height: 310))
-            worldClocks.at(CGRect(x: 824, y: 730, width: 916, height: 170))
+            timerCard.at(card)
+            agenda.at(CGRect(x: card.maxX + 36, y: card.minY + 10,
+                             width: size.width - card.maxX - 36 - (wide ? 52 : 48), height: 310))
+            worldClocks.at(CGRect(x: card.minX, y: 730, width: size.width - card.minX - (wide ? 52 : 48),
+                                  height: 170))
         }
         .appSurface()
     }
 
     private var timerCard: some View {
-        let hovered = hover.map(ClockAppLayout.timerCard.contains) ?? false
+        let hovered = hover.map(ClockAppLayout.timerCard(in: size).contains) ?? false
         let hint: String
         switch timer.state {
         case .idle: hint = "SCROLL TO SET \u{00B7} CLICK TO START"

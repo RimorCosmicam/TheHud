@@ -128,14 +128,15 @@ struct PhoneRootView: View {
     private func surface(_ size: CGSize, keyboardUp: Bool) -> some View {
         let padSize = CGSize(width: size.width, height: max(size.height - PhoneMetrics.padHeader, 0))
         return VStack(spacing: 0) {
-            PadHeader(current: controller.pad, app: controller.solo, action: controller.perform)
+            PadHeader(current: controller.pad, app: controller.padApp, action: controller.perform)
             Group {
                 switch controller.pad {
                 case .touchpad: touchpad(padSize)
                 case .remote: remote(padSize)
                 case .app:
-                    AppPad(kind: controller.solo ?? .sky, snapshot: controller.snapshot,
-                           captionsLanguage: controller.captionsLanguage, action: controller.perform)
+                    AppPad(kind: controller.padApp ?? .sky, snapshot: controller.snapshot,
+                           captionsLanguage: controller.captionsLanguage,
+                           fullscreen: controller.solo != nil, action: controller.perform)
                 }
             }
             .frame(height: padSize.height)

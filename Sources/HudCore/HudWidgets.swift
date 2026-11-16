@@ -363,8 +363,11 @@ public enum MusicLayout {
         let height: CGFloat = large ? 110 : 56
         let spacing: CGFloat = large ? 28 : 12
         let total = width * 3 + spacing * 2
-        let x0 = large ? 700 : (size.width - total) / 2
-        let y = large ? 640 : size.height - 26 - height
+        // Held up alone the buttons sit under the title, beside the artwork; anywhere narrower
+        // (a slot, the centre) they are centred along the bottom.
+        let besideArtwork = large && size.width >= 1400
+        let x0 = besideArtwork ? 700 : (size.width - total) / 2
+        let y = besideArtwork ? 640 : size.height - (large ? 60 : 26) - height
         return Control.allCases.enumerated().map { index, control in
             (control, CGRect(x: x0 + CGFloat(index) * (width + spacing), y: y,
                              width: width, height: height))

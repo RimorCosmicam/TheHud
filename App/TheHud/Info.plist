@@ -57,7 +57,9 @@
 	</dict>
 
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Shows your next event on the glasses.</string>
+	<string>Shows your day and your month on the glasses.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Shows your photos on the glasses, one at a time or as a gallery.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>The desktop panel finds HudCast on your Mac over the local network to show its screen.</string>
 	<key>NSBonjourServices</key>

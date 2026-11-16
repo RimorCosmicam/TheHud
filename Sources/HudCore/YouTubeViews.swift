@@ -34,6 +34,64 @@ public enum YouTubeAppLayout {
     /// The video in the tile.
     public static let tileVideo = CGRect(x: 1242, y: 36, width: 142, height: 80)
 
+    // The same app at other sizes, as the centre app: as many columns as fit, and the tile under
+    // the tabs when there is no room beside them.
+    static func wide(_ size: CGSize) -> Bool { size.width >= 1400 }
+    public static func columns(_ size: CGSize) -> Int { wide(size) ? columns : 2 }
+    public static func visibleRows(_ size: CGSize) -> Int { size.height >= 900 ? visibleRows : 1 }
+    static func gridTop(_ size: CGSize) -> CGFloat { wide(size) ? gridY : gridY + 100 }
+
+    public static func nowPlayingTile(in size: CGSize) -> CGRect {
+        if size == Self.size { return nowPlayingTile }
+        return wide(size) ? CGRect(x: size.width - 72 - 480, y: 34, width: 480, height: 84)
+            : CGRect(x: 72, y: 128, width: size.width - 144, height: 84)
+    }
+
+    public static func tileVideo(in size: CGSize) -> CGRect {
+        let tile = nowPlayingTile(in: size)
+        return CGRect(x: tile.minX + 2, y: tile.minY + 2, width: 142, height: 80)
+    }
+
+    public static func cardFrame(slot: Int, in size: CGSize) -> CGRect {
+        if size == Self.size { return cardFrame(slot: slot) }
+        let cols = columns(size)
+        let width = (size.width - gridX * 2 - cardGap * CGFloat(cols - 1)) / CGFloat(cols)
+        let height = min(cardHeight, width * thumbHeight / cardWidth + 112)
+        return CGRect(x: gridX + CGFloat(slot % cols) * (width + cardGap),
+                      y: gridTop(size) + CGFloat(slot / cols) * (height + rowGap), width: width, height: height)
+    }
+
+    /// Watching in the centre: the video as large as fits, with its title under it.
+    public static func centreVideo(in size: CGSize) -> CGRect {
+        let width = min(size.width - 64, (size.height - 200) * 16 / 9)
+        return CGRect(x: (size.width - width) / 2, y: 32, width: width, height: width * 9 / 16)
+    }
+
+    public static func target(at point: CGPoint, _ youtube: HudSnapshot.YouTube, in size: CGSize) -> Target? {
+        if size == Self.size { return target(at: point, youtube) }
+        switch youtube.page {
+        case .browse:
+            for (i, tab) in youtube.tabs.enumerated() where tabFrame(i, of: youtube.tabs).contains(point) {
+                return .tab(tab)
+            }
+            if youtube.hasVideo, nowPlayingTile(in: size).contains(point) { return .nowPlaying }
+            let list = youtube.list(youtube.tab)
+            let cols = columns(size)
+            for slot in 0..<(cols * visibleRows(size)) where cardFrame(slot: slot, in: size).contains(point) {
+                let index = youtube.scrollRow * cols + slot
+                return list.indices.contains(index) ? .card(index) : nil
+            }
+            return nil
+        case .player:
+            return .video
+        }
+    }
+
+    public static func maxRow(_ count: Int, in size: CGSize) -> Int {
+        let cols = columns(size)
+        return max(0, (count + cols - 1) / cols - visibleRows(size))
+    }
+
     public static func tabFrame(_ index: Int, of tabs: [HudSnapshot.YouTube.Tab]) -> CGRect {
         var x: CGFloat = 72
         for (i, tab) in tabs.enumerated() {
@@ -207,25 +265,27 @@ public struct YouTubeApp: View {
     public var live: Bool
     public var standIn: Bool
     public var hover: CGPoint?
+    /// Fullscreen, or the centre's size.
+    public var size: CGSize
 
     public init(_ youtube: HudSnapshot.YouTube, live: Bool = false, standIn: Bool = false,
-                hover: CGPoint? = nil) {
+                hover: CGPoint? = nil, size: CGSize = YouTubeAppLayout.size) {
         self.youtube = youtube
         self.live = live
         self.standIn = standIn
         self.hover = hover
+        self.size = size
     }
 
     private var target: YouTubeAppLayout.Target? {
-        hover.flatMap { YouTubeAppLayout.target(at: $0, youtube) }
+        hover.flatMap { YouTubeAppLayout.target(at: $0, youtube, in: size) }
     }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
             browse
         }
-        .frame(width: YouTubeAppLayout.size.width, height: YouTubeAppLayout.size.height,
-               alignment: .topLeading)
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
         .appSurface()
         // The tile's video is the live layer underneath: cut its place out of the surface.
         .mask {
@@ -233,7 +293,7 @@ public struct YouTubeApp: View {
                 Rectangle()
                 if live && youtube.hasVideo {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .at(YouTubeAppLayout.tileVideo)
+                        .at(YouTubeAppLayout.tileVideo(in: size))
                         .blendMode(.destinationOut)
                 }
             }
@@ -256,28 +316,31 @@ public struct YouTubeApp: View {
                 .font(HudTheme.mont(26, youtube.query.isEmpty ? .semibold : .black))
                 .foregroundStyle(youtube.query.isEmpty ? HudTheme.inkFaint : HudTheme.ink)
                 .lineLimit(1)
-                .at(CGRect(x: last.maxX + 24, y: last.minY, width: YouTubeAppLayout.nowPlayingTile.minX - last.maxX - 48,
+                .at(CGRect(x: last.maxX + 24, y: last.minY,
+                           width: max((YouTubeAppLayout.wide(size) ? YouTubeAppLayout.nowPlayingTile(in: size).minX : size.width) - last.maxX - 48, 0),
                            height: last.height), alignment: .leading)
         }
-        if youtube.hasVideo { nowPlaying.at(YouTubeAppLayout.nowPlayingTile) }
+        if youtube.hasVideo { nowPlaying.at(YouTubeAppLayout.nowPlayingTile(in: size)) }
 
         let list = youtube.list(youtube.tab)
         if list.isEmpty {
             Text(emptyText).font(HudTheme.mont(30, .semibold)).foregroundStyle(HudTheme.inkFaint)
-                .at(CGRect(x: 72, y: 150, width: 1648, height: 600), alignment: .center)
+                .at(CGRect(x: 72, y: 150, width: size.width - 144, height: size.height - 300), alignment: .center)
         } else {
-            let first = youtube.scrollRow * YouTubeAppLayout.columns
-            ForEach(0..<(YouTubeAppLayout.columns * YouTubeAppLayout.visibleRows), id: \.self) { slot in
+            let columns = YouTubeAppLayout.columns(size)
+            let visibleRows = YouTubeAppLayout.visibleRows(size)
+            let first = youtube.scrollRow * columns
+            ForEach(0..<(columns * visibleRows), id: \.self) { slot in
                 if list.indices.contains(first + slot) {
                     let video = list[first + slot]
                     VideoCard(video: video, queued: youtube.queue.firstIndex(of: video),
                               playing: video.id == youtube.videoId,
                               hovered: target == .card(first + slot))
-                        .at(YouTubeAppLayout.cardFrame(slot: slot))
+                        .at(YouTubeAppLayout.cardFrame(slot: slot, in: size))
                 }
             }
-            let rows = (list.count + YouTubeAppLayout.columns - 1) / YouTubeAppLayout.columns
-            if rows > YouTubeAppLayout.visibleRows {
+            let rows = (list.count + columns - 1) / columns
+            if rows > visibleRows, size == YouTubeAppLayout.size {
                 Text("ROWS \(youtube.scrollRow + 1)\u{2013}\(min(youtube.scrollRow + 2, rows)) OF \(rows) \u{00B7} SCROLL FOR MORE")
                     .font(HudTheme.mont(18, .black)).tracking(3).foregroundStyle(HudTheme.inkFaint)
                     .at(CGRect(x: 72, y: 872, width: 1648, height: 30))
@@ -459,6 +522,54 @@ struct StandInFrame: View {
             }
             .frame(width: size.width, height: height)
             .position(x: size.width / 2, y: size.height / 2)
+        }
+    }
+}
+
+// MARK: - Watching in the centre
+
+/// The video as large as the centre allows, with what it is and how far along under it. The live
+/// video is the layer underneath; its place is cut out.
+public struct YouTubeCentreWatch: View {
+    public var youtube: HudSnapshot.YouTube
+    public var live: Bool
+    public var standIn: Bool
+    public var size: CGSize
+
+    public init(_ youtube: HudSnapshot.YouTube, live: Bool, standIn: Bool, size: CGSize) {
+        self.youtube = youtube
+        self.live = live
+        self.standIn = standIn
+        self.size = size
+    }
+
+    public var body: some View {
+        let video = YouTubeAppLayout.centreVideo(in: size)
+        ZStack(alignment: .topLeading) {
+            if !live { PlayerFrame(live: false, standIn: standIn).at(video) }
+            VStack(alignment: .leading, spacing: 10) {
+                Text(youtube.isAd ? "AD" : youtube.isPlaying ? "NOW PLAYING" : "PAUSED")
+                    .font(HudTheme.mont(16, .black)).tracking(3)
+                    .foregroundStyle(youtube.isPlaying ? HudTheme.accent : HudTheme.inkDim)
+                Text(youtube.title).font(HudTheme.mont(32, .black)).lineLimit(2).foregroundStyle(HudTheme.ink)
+                Text(youtube.channel).font(HudTheme.mont(22, .semibold)).lineLimit(1).foregroundStyle(HudTheme.inkDim)
+                if youtube.duration > 0 {
+                    ProgressLine(progress: youtube.elapsed / max(youtube.duration, 1)).frame(height: 6).padding(.top, 6)
+                }
+            }
+            .at(CGRect(x: video.minX, y: video.maxY + 24, width: video.width, height: size.height - video.maxY - 48),
+                alignment: .topLeading)
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .appSurface()
+        .mask {
+            ZStack(alignment: .topLeading) {
+                Rectangle()
+                if live && youtube.hasVideo {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous).at(video).blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
         }
     }
 }

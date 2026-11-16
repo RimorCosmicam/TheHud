@@ -21,6 +21,10 @@ final class HudController: ObservableObject {
             scenes[sceneIndex].arrangement = arrangement
             saveScenes()
             panelsChanged()
+            if padApp(in: oldValue) != padApp {
+                appPadSetAside = false
+                padChanged()
+            }
         }
     }
     /// Three arrangements to switch between, each keeping its own edits. Saved.
@@ -50,9 +54,20 @@ final class HudController: ObservableObject {
         PointerMode(rawValue: UserDefaults.standard.string(forKey: "pointerMode") ?? "") ?? .touchpad
     /// The fullscreen app's own controls were swapped for the pointer, until the app changes.
     @Published private(set) var appPadSetAside = false
+    /// The app whose controls the pad can show: the fullscreen one, or else the centre's.
+    var padApp: HudPanelKind? { padApp(in: arrangement) }
+
+    private func padApp(in arrangement: HudArrangement) -> HudPanelKind? {
+        if clearView { return nil }
+        if let solo { return solo.hasPhoneControls ? solo : nil }
+        guard let centre = arrangement.centre?.kind, centre.hasPhoneControls,
+              arrangement.isShown(centre) else { return nil }
+        return centre
+    }
+
     /// What the phone's lower half is right now.
     var pad: PhonePad {
-        if let solo, solo.hasPhoneControls, !clearView, !appPadSetAside { return .app }
+        if padApp != nil, !appPadSetAside { return .app }
         return pointerMode == .touchpad ? .touchpad : .remote
     }
     @Published var showingCaptionSessions = false
@@ -76,6 +91,10 @@ final class HudController: ObservableObject {
     }
     /// The map held up alone: it gets the whole canvas, as the Maps app.
     private var mapFillsCanvas: Bool { solo == .map && !clearView }
+    /// The map as the centre's app: bigger than a slot, so it takes the canvas's raster too.
+    private var mapInCentre: Bool {
+        solo == nil && !clearView && arrangement.centre?.kind == .map && arrangement.isShown(.map)
+    }
     @Published var config: HalftoneConfig = .miniMateDefault
     @Published var trackpad = TouchpadSettings()
 
@@ -156,6 +175,11 @@ final class HudController: ObservableObject {
     private var youtubeScroll = 0
     /// The Music app's artwork for what is playing.
     @Published private(set) var artwork: Image?
+    /// The photo library's pictures on show, by index.
+    @Published private(set) var photoImages: [Int: Image] = [:]
+    private let photosProvider = PhotosProvider()
+    private var photoScroll = 0
+    private var lastSlide = Date()
     /// The activity ring's target.
     @Published var stepGoal: Int = UserDefaults.standard.object(forKey: "stepGoal") as? Int ?? 8000 {
         didSet {
@@ -247,15 +271,16 @@ final class HudController: ObservableObject {
         if let data = defaults.data(forKey: scenesKey),
            var stored = try? JSONDecoder().decode([HudScene].self, from: data),
            stored.count == HudScene.count {
-            // STREET became a row of widgets: the saved one is brought up to it, once.
-            if defaults.integer(forKey: "scenesVersion") < 2 {
-                stored[1] = HudScene.presets[1]
-                defaults.set(2, forKey: "scenesVersion")
+            // The Apps Center: one app in the centre and new apps beside it. The scenes start
+            // again from the new presets, once.
+            if defaults.integer(forKey: "scenesVersion") < 3 {
+                stored = HudScene.presets
+                defaults.set(3, forKey: "scenesVersion")
                 if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: scenesKey) }
             }
             return (stored, index)
         }
-        defaults.set(2, forKey: "scenesVersion")
+        defaults.set(3, forKey: "scenesVersion")
         var scenes = HudScene.presets
         if let data = defaults.data(forKey: "arrangement"),
            let old = try? JSONDecoder().decode(HudArrangement.self, from: data) {
@@ -351,6 +376,7 @@ final class HudController: ObservableObject {
         activityProvider.goal = stepGoal
         activityProvider.onChange = { [weak self] activity in self?.snapshot.activity = activity }
         captions.onChange = { [weak self] captions in self?.snapshot.captions = captions }
+        photosProvider.onChange = { [weak self] in self?.photosChanged() }
         snapshot.youtube.showsSubscriptions = youtubeSubscriptions
         youtubePlayer.onChange = { [weak self] state in self?.youtubeChanged(state) }
         panelsChanged()
@@ -370,13 +396,20 @@ final class HudController: ObservableObject {
             calendarNext = calendar.nextEvent()
             calendarAgenda = calendar.agenda()
             calendarChanged = true
+            snapshot.agenda = calendar.agendaApp()
+        } else {
+            // The now line and "IN 25 MIN" move with the minute.
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: Date())
+            let minute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+            if minute != snapshot.agenda.nowMinute { lastCalendarRead = .distantPast }
         }
         clock.nextEvent = calendarNext?.title
         clock.nextEventTime = calendarNext?.time
         clock.agenda = calendarAgenda
         // A redraw a second is for the clock app alone.
         tickWidgets()
-        guard isOnGlasses(.clock) && solo == .clock || calendarChanged
+        let clockApp = solo == .clock || solo == nil && arrangement.centre?.kind == .clock
+        guard isOnGlasses(.clock) && clockApp || calendarChanged
                 || clock.time != snapshot.clock.time else { return }
         snapshot.clock = clock
     }
@@ -425,7 +458,7 @@ final class HudController: ObservableObject {
     /// the map has the whole canvas, which is about 1300 m of diagonal at the same zoom.
     private var groundPlan: (span: Double, room: Double, scale: CGFloat) {
         let spanMetres = Double(snapshot.minimap.spanMetres)
-        if mapFillsCanvas {
+        if mapFillsCanvas || mapInCentre {
             let ppm = snapshot.minimap.pointsPerMetre
             let canvas = HudTheme.glassesSize
             let inset = HudTheme.safeInset * 2
@@ -474,7 +507,8 @@ final class HudController: ObservableObject {
         case .address, .page: if !isOnGlasses(.browser) { endTyping() }
         case .mapSearch: if !mapFillsCanvas { endTyping() }
         case .mac: if !isOnGlasses(.mac) { endTyping() }
-        case .note: if !isOnGlasses(.note) { endTyping() }
+        // The teleprompter reads the note, so writing it there is writing the note.
+        case .note: if !isOnGlasses(.note) && !isOnGlasses(.prompter) { endTyping() }
         case .youtubeSearch: if !isOnGlasses(.youtube) { endTyping() }
         case nil: break
         }
@@ -667,6 +701,14 @@ final class HudController: ObservableObject {
         case let .solo(kind):
             clearView = false
             solo = kind
+        case let .centre(kind):
+            clearView = false
+            solo = nil
+            arrangement.setCentre(kind)
+        case let .prompter(action):
+            prompterAction(action)
+        case let .photos(action):
+            photosAction(action)
         case .clearView:
             if solo != nil { solo = nil }
             clearView.toggle()
@@ -686,7 +728,7 @@ final class HudController: ObservableObject {
             case .app:
                 appPadSetAside = false
             case .touchpad, .remote:
-                if solo?.hasPhoneControls == true { appPadSetAside = true }
+                if padApp != nil { appPadSetAside = true }
                 pointerMode = choice == .touchpad ? .touchpad : .remote
                 UserDefaults.standard.set(pointerMode.rawValue, forKey: "pointerMode")
             }
@@ -959,33 +1001,50 @@ final class HudController: ObservableObject {
                 if await browser.click(at: point) { beginPageTyping() }
             }
         case let .widget(kind, point, size):
-            widgetClick(kind, at: point, size: size)
+            appClick(kind, at: point, size: size, large: solo == kind)
+        case let .centre(kind, point, size):
+            appClick(kind, at: point, size: size, large: true)
         case .none: break
         }
     }
 
-    /// Clicks on widgets, small or held up alone. Most only show things; these do.
-    private func widgetClick(_ kind: HudPanelKind, at point: CGPoint, size: CGSize) {
-        let alone = solo == kind
+    /// Clicks on apps: as widgets, in the centre, or held up alone (`large` for the last two).
+    /// Most only show things; these do.
+    private func appClick(_ kind: HudPanelKind, at point: CGPoint, size: CGSize, large: Bool) {
+        let alone = large
         switch kind {
         case .note:
             keyboardTarget == .note ? endTyping() : beginNoteEditing()
         case .captions:
             captions.toggle()
         case .music:
-            switch MusicLayout.control(at: point, in: size, large: alone) {
+            switch MusicLayout.control(at: point, in: size, large: large) {
             case .previous: music.previous()
             case .playPause: music.playPause()
             case .next: music.next()
             case nil: break
             }
         case .youtube:
-            youtubeClick(at: point, alone: alone)
+            youtubeClick(at: point, size: size, alone: alone)
         case .clock where alone:
-            if ClockAppLayout.timerCard.contains(point) {
+            if ClockAppLayout.timerCard(in: size).contains(point) {
                 timer.toggle(at: Date())
                 timerChanged()
             }
+        case .prompter:
+            prompterAction(.toggle)
+        case .photos where solo == .photos:
+            // The gallery: a click picks a photo, and on the picked one opens it; open, a
+            // click goes back to the grid.
+            if snapshot.photos.viewing {
+                snapshot.photos.viewing = false
+            } else if let index = PhotosLayout.photo(at: point, in: size, snapshot.photos) {
+                if index == snapshot.photos.selected { snapshot.photos.viewing = true }
+                snapshot.photos.selected = index
+            }
+            photosChanged()
+        case .photos:
+            photosAction(.step(1))
         default:
             break
         }
@@ -1015,8 +1074,17 @@ final class HudController: ObservableObject {
                 timerChanged()
             }
             return
-        case let .widget(.youtube, p, _):
-            youtubeScrolled(ticks, at: p, alone: solo == .youtube)
+        case let .widget(.youtube, p, size):
+            youtubeScrolled(ticks, at: p, size: size, alone: solo == .youtube)
+            return
+        case .widget(.photos, _, _) where solo == .photos:
+            photosScrolled(ticks)
+            return
+        case .widget(.prompter, _, _) where solo == .prompter:
+            prompterNudge(ticks)
+            return
+        case let .centre(kind, p, size):
+            centreScrolled(kind, ticks, at: p, size: size)
             return
         case .widget(.note, _, _) where solo == .note:
             snapshot.note.scroll = max(snapshot.note.scroll + CGFloat(ticks) * 40, 0)
@@ -1034,6 +1102,131 @@ final class HudController: ObservableObject {
             point = CGPoint(x: content.width / 2, y: content.height / 2)
         }
         browser.scroll(ticks: ticks, at: point)
+    }
+
+    /// The wheel over the app in the centre.
+    private func centreScrolled(_ kind: HudPanelKind, _ ticks: Int, at point: CGPoint, size: CGSize) {
+        switch kind {
+        case .clock:
+            guard ClockAppLayout.timerCard(in: size).contains(point) else { return }
+            timer.adjust(notches: -ticks)
+            UserDefaults.standard.set(timer.setSeconds, forKey: "timerSeconds")
+            timerChanged()
+        case .youtube:
+            youtubeScrolled(ticks, at: point, size: size, alone: true)
+        case .note:
+            snapshot.note.scroll = max(snapshot.note.scroll + CGFloat(ticks) * 40, 0)
+        case .photos:
+            photoScroll += ticks
+            let notches = photoScroll / 3
+            guard notches != 0 else { return }
+            photoScroll -= notches * 3
+            photosAction(.step(notches))
+        case .prompter:
+            prompterNudge(ticks)
+        case .sky:
+            snapshot.skyView.zoom(notches: ticks)
+            saveSkyView()
+        case .map:
+            zoomMap(pow(1.1, Double(ticks)))
+        default:
+            break
+        }
+    }
+
+    // ------------------------------------------------------------------ teleprompter
+
+    /// Every change starts again from where it is now, so the glasses' smooth scrolling never
+    /// jumps.
+    private func prompterAction(_ action: PrompterAction) {
+        let now = Date()
+        var prompter = snapshot.prompter
+        prompter.anchorOffset = prompter.offset(at: now)
+        prompter.anchorTime = now
+        let speeds = HudSnapshot.Prompter.speeds
+        switch action {
+        case .toggle: prompter.isRunning.toggle()
+        case .faster: prompter.speed = min(prompter.speed + 30, speeds.upperBound)
+        case .slower: prompter.speed = max(prompter.speed - 30, speeds.lowerBound)
+        case .restart: prompter.anchorOffset = 0
+        }
+        snapshot.prompter = prompter
+    }
+
+    /// The wheel moves the words by hand, running or not.
+    private func prompterNudge(_ ticks: Int) {
+        let now = Date()
+        snapshot.prompter.anchorOffset = max(snapshot.prompter.offset(at: now) + CGFloat(ticks) * 24, 0)
+        snapshot.prompter.anchorTime = now
+    }
+
+    // ------------------------------------------------------------------ photos
+
+    /// The library's count and the caption, and the pictures on show loaded: the gallery's page
+    /// held up alone, otherwise the one photo.
+    private func photosChanged() {
+        var photos = snapshot.photos
+        photos.hasAccess = photosProvider.hasAccess
+        photos.count = photosProvider.count
+        let last = max(photos.count - 1, 0)
+        photos.current = min(photos.current, last)
+        photos.selected = min(photos.selected, last)
+        photos.scrollRow = min(photos.scrollRow, PhotosLayout.maxRow(photos.count))
+        let gallery = solo == .photos && !clearView
+        photos.caption = photosProvider.caption(gallery ? photos.selected : photos.current)
+        if photos != snapshot.photos { snapshot.photos = photos }
+        guard isOnGlasses(.photos) else {
+            photosProvider.show(thumbnails: [], large: nil)
+            if !photoImages.isEmpty { photoImages = [:] }
+            return
+        }
+        let perPage = PhotosLayout.columns * PhotosLayout.rows
+        let first = photos.scrollRow * PhotosLayout.columns
+        let page = gallery ? Array(first..<min(first + perPage, photos.count)) : []
+        photosProvider.show(thumbnails: page,
+                            large: gallery ? (photos.viewing ? photos.selected : nil) : photos.current)
+        photoImages = photosProvider.images
+    }
+
+    private func photosAction(_ action: PhotosAction) {
+        let count = snapshot.photos.count
+        guard count > 0 else { return }
+        switch action {
+        case let .step(by):
+            if solo == .photos {
+                let selected = min(max(snapshot.photos.selected + by, 0), count - 1)
+                snapshot.photos.selected = selected
+                snapshot.photos.scrollRow = PhotosLayout.row(showing: selected, from: snapshot.photos.scrollRow)
+            } else {
+                snapshot.photos.current = ((snapshot.photos.current + by) % count + count) % count
+                lastSlide = Date()
+            }
+        case .open:
+            guard solo == .photos else { return }
+            snapshot.photos.viewing.toggle()
+        }
+        photosChanged()
+    }
+
+    /// The gallery's wheel: a row at a time, or open, photo to photo.
+    private func photosScrolled(_ ticks: Int) {
+        photoScroll += ticks
+        let notches = photoScroll / 3
+        guard notches != 0 else { return }
+        photoScroll -= notches * 3
+        if snapshot.photos.viewing { return photosAction(.step(notches)) }
+        snapshot.photos.scrollRow = min(max(snapshot.photos.scrollRow + notches, 0),
+                                        PhotosLayout.maxRow(snapshot.photos.count))
+        photosChanged()
+    }
+
+    /// The widget and the centre show a new photo every few seconds.
+    private func slideshow(now: Date) {
+        guard isOnGlasses(.photos), solo != .photos, snapshot.photos.count > 1,
+              now.timeIntervalSince(lastSlide) >= 8 else { return }
+        lastSlide = now
+        snapshot.photos.current = (snapshot.photos.current + 1) % snapshot.photos.count
+        photosChanged()
     }
 
     // ------------------------------------------------------------------ YouTube
@@ -1184,13 +1377,13 @@ final class HudController: ObservableObject {
         }
     }
 
-    private func youtubeClick(at point: CGPoint, alone: Bool) {
+    private func youtubeClick(at point: CGPoint, size: CGSize, alone: Bool) {
         guard alone else {
             // In a slot: the video is the button.
             if snapshot.youtube.hasVideo { youtubePlayer.togglePlay() }
             return
         }
-        switch YouTubeAppLayout.target(at: point, snapshot.youtube) {
+        switch YouTubeAppLayout.target(at: point, snapshot.youtube, in: size) {
         case let .tab(tab):
             snapshot.youtube.tab = tab
             snapshot.youtube.scrollRow = 0
@@ -1210,7 +1403,7 @@ final class HudController: ObservableObject {
 
     /// Browsing, the wheel moves the grid a row at a time; over the video, it scrubs by five
     /// seconds.
-    private func youtubeScrolled(_ ticks: Int, at point: CGPoint, alone: Bool) {
+    private func youtubeScrolled(_ ticks: Int, at point: CGPoint, size: CGSize, alone: Bool) {
         youtubeScroll += ticks
         let step = 3
         guard abs(youtubeScroll) >= step else { return }
@@ -1219,7 +1412,7 @@ final class HudController: ObservableObject {
         if alone, snapshot.youtube.page == .browse {
             let count = snapshot.youtube.list(snapshot.youtube.tab).count
             snapshot.youtube.scrollRow = min(max(snapshot.youtube.scrollRow + notches, 0),
-                                             YouTubeAppLayout.maxRow(count))
+                                             YouTubeAppLayout.maxRow(count, in: size))
         } else if snapshot.youtube.hasVideo, !snapshot.youtube.isLive {
             // Down the page is on in the video.
             youtubePlayer.seek(by: Double(notches) * 5)
@@ -1481,6 +1674,10 @@ final class HudController: ObservableObject {
         let placed = { (kind: HudPanelKind) in self.arrangement.isPlaced(kind) || self.solo == kind }
         if placed(.music) { music.start() }
         if placed(.activity) { activityProvider.start() }
+        if placed(.photos) {
+            Task { await photosProvider.start() }
+        }
+        photosChanged()
         if placed(.sky) || solo == .sky { updateSky(force: true) }
         // Hidden or cleared away, captions keep listening (the phone shows a red dot); taken
         // off the glasses, they stop.
@@ -1502,6 +1699,7 @@ final class HudController: ObservableObject {
         music.tick()
         activityProvider.tick(now: now)
         captions.tick(now: now)
+        slideshow(now: now)
         updateSky()
         updateOverhead(now: now)
     }
@@ -1628,6 +1826,17 @@ final class HudController: ObservableObject {
             case let .widget(.clock, p, _) where solo == .clock && ClockAppLayout.timerCard.contains(p):
                 timer.reset()
                 timerChanged()
+            case let .centre(.clock, p, size) where ClockAppLayout.timerCard(in: size).contains(p):
+                timer.reset()
+                timerChanged()
+            case .centre(.youtube, _, _) where snapshot.youtube.page == .player:
+                // Out of the video, back to the lists; it plays on in their corner.
+                snapshot.youtube.page = .browse
+            case .widget(.photos, _, _) where solo == .photos && snapshot.photos.viewing:
+                snapshot.photos.viewing = false
+                photosChanged()
+            case .centre(.prompter, _, _):
+                prompterAction(.restart)
             default:
                 break
             }

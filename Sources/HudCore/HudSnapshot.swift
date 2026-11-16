@@ -30,6 +30,12 @@ public struct HudSnapshot: Sendable {
     public var captions: Captions = .preview
     /// What the YouTube widget is playing.
     public var youtube: YouTube = .preview
+    /// Today and this month, for the calendar app.
+    public var agenda: Agenda = .preview
+    /// The phone's photo library, for the photos app.
+    public var photos: Photos = .preview
+    /// The teleprompter, reading the note.
+    public var prompter: Prompter = Prompter()
     public var browser: Browser
     /// Where the trackpad has put the pointer, in canvas points. Nil hides it.
     public var cursor: CGPoint?
@@ -709,6 +715,8 @@ public struct HudSnapshot: Sendable {
         snapshot.note = Note()
         snapshot.captions = Captions()
         snapshot.youtube = YouTube()
+        snapshot.agenda = Agenda()
+        snapshot.photos = Photos()
         return snapshot
     }
 }

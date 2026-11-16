@@ -162,21 +162,26 @@ public struct SkyApp: View {
     public var overhead: HudSnapshot.Overhead
     public var view: SkyView
     public var heading: Double
+    /// The whole canvas held up alone; the centre's size there.
+    public var size: CGSize
 
     public init(_ sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead = .init(),
-                view: SkyView = .init(), heading: Double) {
+                view: SkyView = .init(), heading: Double, size: CGSize = HudTheme.glassesSize) {
         self.sky = sky
         self.overhead = overhead
         self.view = view
         self.heading = heading
+        self.size = size
     }
+
+    private var wide: Bool { size.width >= 1400 }
 
     private var facing: Double {
         ((heading + view.pan).truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
     }
 
     private var projection: SkyProjection {
-        SkyProjection(facing: facing, fov: view.fov, tilt: view.tilt)
+        SkyProjection(facing: facing, fov: view.fov, tilt: view.tilt, size: size)
     }
 
     private var selected: SkyTarget? {
@@ -195,17 +200,23 @@ public struct SkyApp: View {
                 .frame(width: 1100, height: 700)
                 .allowsHitTesting(false)
             heading(selected)
-                .at(CGRect(x: 72, y: 52, width: 900, height: 240))
-            legend
-                .at(CGRect(x: 1000, y: 56, width: 848, height: 40), alignment: .topTrailing)
+                .at(CGRect(x: wide ? 72 : 40, y: wide ? 52 : 36, width: min(900, size.width - 80), height: 240))
+            if wide {
+                legend
+                    .at(CGRect(x: 1000, y: 56, width: 848, height: 40), alignment: .topTrailing)
+            }
             if let selected {
                 card(selected)
-                    .at(CGRect(x: 72, y: 760, width: 1100, height: 280), alignment: .bottomLeading)
+                    .at(CGRect(x: wide ? 72 : 40, y: size.height - 320, width: min(1100, size.width - 80),
+                               height: 280), alignment: .bottomLeading)
             }
-            footer
-                .at(CGRect(x: 1200, y: 1000, width: 648, height: 40), alignment: .bottomTrailing)
+            if wide {
+                footer
+                    .at(CGRect(x: 1200, y: 1000, width: 648, height: 40), alignment: .bottomTrailing)
+            }
         }
-        .frame(width: HudTheme.glassesSize.width, height: HudTheme.glassesSize.height)
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .clipped()
     }
 
     // MARK: overlay

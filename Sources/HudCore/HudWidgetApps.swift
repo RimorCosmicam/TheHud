@@ -4,6 +4,12 @@ import SwiftUI
 // Positions inside are fixed numbers, as in the Maps app, so clicks can be worked out without
 // a view: see `MusicLayout` and `ClockAppLayout`.
 
+/// The safe canvas an app has when held up alone; in the centre it gets less.
+public let fullAppSize = CGSize(width: 1792, height: 952)
+
+/// Whether an app has the whole canvas's width or the centre's.
+func isWide(_ size: CGSize) -> Bool { size.width >= 1400 }
+
 extension View {
     func appSurface() -> some View {
         frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -24,7 +30,11 @@ extension View {
 
 public struct ActivityApp: View {
     public var activity: HudSnapshot.Activity?
-    public init(_ activity: HudSnapshot.Activity?) { self.activity = activity }
+    public var size: CGSize
+    public init(_ activity: HudSnapshot.Activity?, size: CGSize = fullAppSize) {
+        self.activity = activity
+        self.size = size
+    }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
@@ -40,21 +50,25 @@ public struct ActivityApp: View {
                     .foregroundStyle(HudTheme.ink)
                     .padding(80)
                 }
-                .at(CGRect(x: 90, y: 156, width: 640, height: 640))
+                .at(isWide(size) ? CGRect(x: 90, y: 156, width: 640, height: 640)
+                    : CGRect(x: (size.width - 470) / 2, y: 48, width: 470, height: 470))
 
                 HStack(spacing: 0) {
                     stat("DISTANCE", activity.distanceKm.map { String(format: "%.1f KM", $0) } ?? "--")
                     stat("FLOORS", activity.floors.map(String.init) ?? "--")
                     stat("GOAL", "\(Int(activity.fraction * 100))%")
                 }
-                .at(CGRect(x: 820, y: 150, width: 900, height: 120))
+                .at(isWide(size) ? CGRect(x: 820, y: 150, width: 900, height: 120)
+                    : CGRect(x: 56, y: 556, width: size.width - 112, height: 110))
 
-                hours(activity.hourly)
-                    .at(CGRect(x: 820, y: 420, width: 900, height: 400))
+                hours(activity.hourly, bars: isWide(size) ? 260 : 150)
+                    .at(isWide(size) ? CGRect(x: 820, y: 420, width: 900, height: 400)
+                        : CGRect(x: 56, y: 700, width: size.width - 112, height: 230))
             } else {
                 Text("Counting steps needs Motion & Fitness access in Settings")
                     .font(HudTheme.mont(34, .semibold)).foregroundStyle(HudTheme.inkDim)
-                    .at(CGRect(x: 0, y: 0, width: 1792, height: 952), alignment: .center)
+                    .multilineTextAlignment(.center).padding(40)
+                    .at(CGRect(origin: .zero, size: size), alignment: .center)
             }
         }
         .appSurface()
@@ -68,7 +82,7 @@ public struct ActivityApp: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func hours(_ hourly: [Int]) -> some View {
+    private func hours(_ hourly: [Int], bars: CGFloat) -> some View {
         let peak = max(hourly.max() ?? 1, 1)
         return VStack(alignment: .leading, spacing: 16) {
             Text("BY THE HOUR").hudLabel()
@@ -78,11 +92,11 @@ public struct ActivityApp: View {
                     let current = hour == hourly.count - 1
                     RoundedRectangle(cornerRadius: 5)
                         .fill(current ? HudTheme.accent : Color.white.opacity(steps > 0 ? 0.55 : 0.1))
-                        .frame(height: max(CGFloat(steps) / CGFloat(peak) * 260, 6))
+                        .frame(height: max(CGFloat(steps) / CGFloat(peak) * bars, 6))
                         .frame(maxWidth: .infinity)
                 }
             }
-            .frame(height: 270, alignment: .bottom)
+            .frame(height: bars + 10, alignment: .bottom)
             HStack {
                 ForEach(["0", "6", "12", "18", "24"], id: \.self) { label in
                     Text(label).font(HudTheme.mont(18, .black)).foregroundStyle(HudTheme.inkFaint)
@@ -99,22 +113,27 @@ public struct MusicApp: View {
     public var music: HudSnapshot.NowPlaying?
     public var artwork: Image?
     public var hover: CGPoint?
-    public init(_ music: HudSnapshot.NowPlaying?, artwork: Image?, hover: CGPoint?) {
+    public var size: CGSize
+    public init(_ music: HudSnapshot.NowPlaying?, artwork: Image?, hover: CGPoint?,
+                size: CGSize = fullAppSize) {
         self.music = music
         self.artwork = artwork
         self.hover = hover
+        self.size = size
     }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
+            let wide = isWide(size)
             Artwork(image: artwork, corner: 36)
-                .at(CGRect(x: 72, y: 136, width: 560, height: 560))
+                .at(wide ? CGRect(x: 72, y: 136, width: 560, height: 560)
+                    : CGRect(x: (size.width - 400) / 2, y: 52, width: 400, height: 400))
 
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: wide ? .leading : .center, spacing: 14) {
                 Text(music?.isPlaying == true ? "NOW PLAYING" : "MUSIC").font(HudTheme.mont(20, .black))
                     .tracking(4).foregroundStyle(music?.isPlaying == true ? HudTheme.accent : HudTheme.inkDim)
-                Text(music?.title ?? "Nothing playing").font(HudTheme.mont(68, .black))
-                    .lineLimit(2).foregroundStyle(HudTheme.ink)
+                Text(music?.title ?? "Nothing playing").font(HudTheme.mont(wide ? 68 : 52, .black))
+                    .lineLimit(wide ? 2 : 1).minimumScaleFactor(0.7).foregroundStyle(HudTheme.ink)
                 Text(music?.artist ?? "Play something in the Music app")
                     .font(HudTheme.mont(36, .semibold)).foregroundStyle(HudTheme.ink.opacity(0.85))
                     .lineLimit(1)
@@ -123,7 +142,10 @@ public struct MusicApp: View {
                         .lineLimit(1)
                 }
             }
-            .at(CGRect(x: 700, y: 140, width: 1020, height: 360), alignment: .bottomLeading)
+            .multilineTextAlignment(wide ? .leading : .center)
+            .at(wide ? CGRect(x: 700, y: 140, width: 1020, height: 360)
+                : CGRect(x: 56, y: 470, width: size.width - 112, height: 220),
+                alignment: wide ? .bottomLeading : .top)
 
             if let music {
                 VStack(spacing: 12) {
@@ -136,10 +158,11 @@ public struct MusicApp: View {
                     .font(HudTheme.mont(22, .black)).monospacedDigit()
                     .foregroundStyle(HudTheme.inkDim)
                 }
-                .at(CGRect(x: 700, y: 540, width: 1020, height: 60))
+                .at(wide ? CGRect(x: 700, y: 540, width: 1020, height: 60)
+                    : CGRect(x: 72, y: 700, width: size.width - 144, height: 60))
             }
 
-            ForEach(MusicLayout.buttons(in: CGSize(width: 1792, height: 952), large: true), id: \.0) { control, frame in
+            ForEach(MusicLayout.buttons(in: size, large: true), id: \.0) { control, frame in
                 MusicButton(control: control, isPlaying: music?.isPlaying ?? false, large: true,
                             hovered: hover.map(frame.contains) ?? false)
                     .at(frame)
@@ -154,7 +177,11 @@ public struct MusicApp: View {
 /// The note, large: a teleprompter. Scrolling moves it; a click edits it.
 public struct NoteApp: View {
     public var note: HudSnapshot.Note
-    public init(_ note: HudSnapshot.Note) { self.note = note }
+    public var size: CGSize
+    public init(_ note: HudSnapshot.Note, size: CGSize = fullAppSize) {
+        self.note = note
+        self.size = size
+    }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
@@ -168,12 +195,13 @@ public struct NoteApp: View {
                         .foregroundStyle(HudTheme.ink)
                 }
             }
-            .font(HudTheme.mont(64, .semibold))
+            .font(HudTheme.mont(isWide(size) ? 64 : 48, .semibold))
             .lineSpacing(14)
-            .frame(width: 1560, alignment: .topLeading)
+            .frame(width: size.width - 232, alignment: .topLeading)
             .fixedSize(horizontal: false, vertical: true)
             .offset(x: 116, y: 120 - note.scroll)
         }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
         .clipped()
         .appSurface()
     }
@@ -183,7 +211,11 @@ public struct NoteApp: View {
 
 public struct CaptionsApp: View {
     public var captions: HudSnapshot.Captions
-    public init(_ captions: HudSnapshot.Captions) { self.captions = captions }
+    public var size: CGSize
+    public init(_ captions: HudSnapshot.Captions, size: CGSize = fullAppSize) {
+        self.captions = captions
+        self.size = size
+    }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
@@ -197,10 +229,11 @@ public struct CaptionsApp: View {
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .foregroundStyle(captions.isListening ? HudTheme.accent : HudTheme.inkFaint)
             }
-            .at(CGRect(x: 72, y: 52, width: 1648, height: 40))
+            .at(CGRect(x: 72, y: 52, width: size.width - 144, height: 40))
 
-            CaptionLines(captions: captions, size: 54, count: 7)
-                .at(CGRect(x: 120, y: 120, width: 1552, height: 760), alignment: .bottomLeading)
+            CaptionLines(captions: captions, size: isWide(size) ? 54 : 44, count: 7)
+                .at(CGRect(x: isWide(size) ? 120 : 72, y: 120, width: size.width - (isWide(size) ? 240 : 144),
+                           height: size.height - 192), alignment: .bottomLeading)
         }
         .appSurface()
     }
