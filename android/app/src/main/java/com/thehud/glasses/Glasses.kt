@@ -123,8 +123,8 @@ private fun LiveVideo(player: com.thehud.youtube.YouTubePlayer) {
     // going into Host mode (or out), the new place takes the player before the old one is released,
     // and a plain detach there took it straight back out of the new one, playing with no picture.
     AndroidView(
-        factory = { c -> android.widget.FrameLayout(c).also { frame -> player.detach(); frame.addView(player.view) } },
-        update = { frame -> if (player.view.parent !== frame) { player.detach(); frame.addView(player.view) } },
+        factory = { c -> android.widget.FrameLayout(c).also { frame -> player.detach(); frame.addView(player.view); player.settle() } },
+        update = { frame -> if (player.view.parent !== frame) { player.detach(); frame.addView(player.view); player.settle() } },
         modifier = Modifier.fillMaxSize(),
         onRelease = { frame -> if (player.view.parent === frame) frame.removeView(player.view) })
 }

@@ -204,6 +204,26 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
 
     fun detach() { (view.parent as? ViewGroup)?.removeView(view) }
 
+    /**
+     * Just put into a new place (another window, or out of Host mode's view and back): the page
+     * follows its new size, but Chromium can keep the video's own picture at the size it had,
+     * playing small in the top left corner. A one-pixel nudge of the view's size, and resize events
+     * in the page, make it lay the picture out again.
+     */
+    fun settle() {
+        val params = view.layoutParams as? android.widget.FrameLayout.LayoutParams ?: return
+        for (delay in longArrayOf(0, 250, 1200)) main.postDelayed({
+            if (view.parent == null) return@postDelayed
+            params.rightMargin = 1
+            view.layoutParams = params
+            main.postDelayed({
+                params.rightMargin = 0
+                view.layoutParams = params
+                view.evaluateJavascript("window.dispatchEvent(new Event('resize'))", null)
+            }, 60)
+        }, delay)
+    }
+
     fun play(id: String) {
         loadedId = id
         loadedAt = System.currentTimeMillis()
