@@ -11,8 +11,13 @@ import HudCore
 final class HostStreamer: NSObject {
     private static let width = 1920
     private static let height = 1080
-    /// Bytes handed to the network and not yet sent: past this, frames wait for a keyframe.
-    private static let backlog = 2_000_000
+    /// Bytes handed to the network and not yet sent: past this, no new frame is filmed, so the
+    /// picture never runs more than a few frames behind. (Skipping before encoding needs no
+    /// keyframe: the next frame simply follows the last one sent.)
+    private static let backlog = 160_000
+    /// Past this (a keyframe burst on a slow network), frames already encoded are dropped and a
+    /// keyframe asked for.
+    private static let emergency = 1_000_000
 
     private let link: RemoteLink
     private var window: UIWindow?
@@ -29,6 +34,9 @@ final class HostStreamer: NSObject {
     var macPicture: () -> CVPixelBuffer? = { nil }
     private var lastOverlay = Data()
     private var lastOverlayAt = Date.distantPast
+    /// No film before this: filming takes the main thread, which the touches and the gyro need,
+    /// so it never gets more than half of it, at up to sixty frames a second.
+    private var nextFilm: CFTimeInterval = 0
     /// Locked, iOS draws nothing and the display link stops; this keeps the overlay going, so
     /// the video on the Android phone plays on.
     private var heartbeat: Timer?
@@ -67,7 +75,7 @@ final class HostStreamer: NSObject {
         ]
         CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
 
-        let displayLink = CADisplayLink(target: self, selector: #selector(film))
+        let displayLink = CADisplayLink(target: self, selector: #selector(tick))
         displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         displayLink.add(to: .main, forMode: .common)
         self.displayLink = displayLink
@@ -90,6 +98,7 @@ final class HostStreamer: NSObject {
         window?.isHidden = true
         window = nil
         skipping = false
+        nextFilm = 0
     }
 
     /// The Android phone has a new surface to draw on, or lost its place.
@@ -97,7 +106,19 @@ final class HostStreamer: NSObject {
         encoder?.requestKeyframe()
     }
 
-    @objc private func film() {
+    @objc private func tick() {
+        let (json, mac) = overlay()
+        // Every tick, filmed or not: the pointer and the video's place move on the Android phone
+        // at the display's rate, whatever the picture manages.
+        sendOverlay(json)
+        let now = CACurrentMediaTime()
+        guard now >= nextFilm, link.unsentBytes < Self.backlog else { return }
+        film(mac: mac)
+        let took = CACurrentMediaTime() - now
+        nextFilm = now + max(took * 2, 1 / 61)
+    }
+
+    private func film(mac: CGRect?) {
         guard let window, let encoder, let pool else { return }
         var buffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer else { return }
@@ -116,7 +137,6 @@ final class HostStreamer: NSObject {
         context.scaleBy(x: 2, y: -2)
         UIGraphicsPushContext(context)
         window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
-        let (json, mac) = overlay()
         if let mac, let picture = macPicture() {
             var image: CGImage?
             VTCreateCGImageFromCVPixelBuffer(picture, options: nil, imageOut: &image)
@@ -127,7 +147,6 @@ final class HostStreamer: NSObject {
             }
         }
         UIGraphicsPopContext()
-        sendOverlay(json)
         encoder.encode(buffer, time: CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
     }
 
@@ -140,11 +159,11 @@ final class HostStreamer: NSObject {
         link.sendPacket(DesktopWire.pack(.overlay, data))
     }
 
-    /// To the Android phone, unless the network is behind: then nothing until a keyframe, so the
-    /// picture never smears from a missing frame and the delay never grows.
+    /// To the Android phone, unless the network is far behind: then nothing until a keyframe, so
+    /// the picture never smears from a missing frame and the delay never grows.
     private func deliver(_ packets: Data, keyframe: Bool) {
         if skipping && !keyframe { return }
-        if link.unsentBytes > Self.backlog {
+        if link.unsentBytes > Self.emergency {
             skipping = true
             encoder?.requestKeyframe()
             return

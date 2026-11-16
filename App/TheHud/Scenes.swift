@@ -85,7 +85,8 @@ final class GlassesSceneDelegate: UIResponder, UIWindowSceneDelegate {
 /// Scales the fixed 1920x1080 canvas to whatever the glasses actually report.
 struct GlassesHost: View {
     @ObservedObject private var controller = HudController.shared
-    /// The browser bar's live blur; off when the picture is filmed for Host mode.
+    /// The browser bar's live blur and the pointer; both off when the picture is filmed for
+    /// Host mode, where the Android phone draws the pointer itself.
     var liveGlass = true
 
     var body: some View {
@@ -104,7 +105,8 @@ struct GlassesHost: View {
                           artwork: controller.artwork,
                           photoImages: controller.photoImages,
                           placeholders: false,
-                          liveGlass: liveGlass)
+                          liveGlass: liveGlass,
+                          drawsCursor: liveGlass)
                 .scaleEffect(scale)
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }

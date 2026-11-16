@@ -1960,7 +1960,8 @@ final class HudController: ObservableObject {
         let screen = GlassesScreen(snapshot: snapshot, arrangement: arrangement, solo: solo, clearView: clearView)
         func rect(_ r: CGRect) -> [Double] { [r.minX, r.minY, r.width, r.height].map { Double($0) } }
         var o: [String: Any] = [:]
-        if let cursor = snapshot.cursor { o["cursor"] = [Double(cursor.x), Double(cursor.y)] }
+        // Drawn by the Android phone, not filmed: it moves as soon as this arrives.
+        if let cursor = screen.shownCursor { o["cursor"] = [Double(cursor.x), Double(cursor.y)] }
         let y = snapshot.youtube
         if y.hasVideo, !y.videoId.isEmpty {
             var video: [String: Any] = ["id": y.videoId, "t": y.elapsed, "playing": y.isPlaying, "ad": y.isAd,

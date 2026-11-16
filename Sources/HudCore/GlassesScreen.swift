@@ -31,6 +31,9 @@ public struct GlassesScreen: View {
     public var placeholders: Bool
     /// A real backdrop blur under the browser's bar. The device only; see `BrowserPanel`.
     public var liveGlass: Bool
+    /// False in Host mode's film: the Android phone draws the pointer itself, from where it is
+    /// sent at once, rather than waiting for it in the video.
+    public var drawsCursor: Bool
 
     public init(snapshot: HudSnapshot = HudSnapshot(),
                 arrangement: HudArrangement = .standard,
@@ -43,7 +46,8 @@ public struct GlassesScreen: View {
                 artwork: Image? = nil,
                 photoImages: [Int: Image] = [:],
                 placeholders: Bool = true,
-                liveGlass: Bool = false) {
+                liveGlass: Bool = false,
+                drawsCursor: Bool = true) {
         self.snapshot = snapshot
         self.arrangement = arrangement
         self.solo = solo
@@ -56,6 +60,7 @@ public struct GlassesScreen: View {
         self.photoImages = photoImages
         self.placeholders = placeholders
         self.liveGlass = liveGlass
+        self.drawsCursor = drawsCursor
     }
 
     /// What is on, as a set: widgets fill the left slots then the right. For stills.
@@ -118,12 +123,18 @@ public struct GlassesScreen: View {
                          alignment: .top)
             }
 
-            if let cursor = snapshot.cursor, showsCursor(layout, cursor) {
+            if drawsCursor, let cursor = shownCursor {
                 Cursor().offset(x: cursor.x, y: cursor.y)
             }
         }
         .frame(width: HudTheme.glassesSize.width, height: HudTheme.glassesSize.height)
         .environment(\.colorScheme, .dark)
+    }
+
+    /// Where the pointer is drawn, if it is: Host mode sends this for the Android phone to draw.
+    public var shownCursor: CGPoint? {
+        guard let cursor = snapshot.cursor, showsCursor(layout, cursor) else { return nil }
+        return cursor
     }
 
     /// Over the Mac's picture the Mac draws its own pointer, which is the one that matters
