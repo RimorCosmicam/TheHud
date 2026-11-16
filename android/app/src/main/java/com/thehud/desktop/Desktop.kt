@@ -118,6 +118,108 @@ object DesktopWire {
 }
 
 /**
+ * H.264 as the Mac and the iPhone send it (format, then frames) decoded onto a view's texture.
+ * Thread-safe: frames arrive on a socket's thread, the surface comes and goes on the main one.
+ */
+class StreamDecoder(private val tag: String, private val onSurface: () -> Unit = {}) {
+    private val lock = Any()
+    private var surface: Surface? = null
+    private var codec: MediaCodec? = null
+    private var sps: ByteArray? = null
+    private var pps: ByteArray? = null
+    private var waitingForKeyframe = true
+    private var size = 1920 to 1080
+    private var codecSize: Pair<Int, Int>? = null
+
+    /** The picture's size, when the sender says it. */
+    fun size(width: Int, height: Int) = synchronized(lock) {
+        size = width to height
+        if (codecSize != null && codecSize != size) release()
+    }
+
+    fun format(payload: ByteArray) {
+        val (a, b) = DesktopWire.parseFormat(payload) ?: return
+        synchronized(lock) { if (!a.contentEquals(sps) || !b.contentEquals(pps)) { sps = a; pps = b; release() } }
+    }
+
+    /** True when the frame went to the decoder. */
+    fun frame(payload: ByteArray): Boolean {
+        if (payload.isEmpty()) return false
+        val key = payload[0].toInt() and 1 == 1
+        synchronized(lock) {
+            if (waitingForKeyframe && !key) return false
+            val c = codec ?: make() ?: return false
+            waitingForKeyframe = false
+            val data = DesktopWire.annexB(payload, 1)
+            val index = runCatching { c.dequeueInputBuffer(20_000) }.getOrDefault(-1)
+            if (index < 0) return false
+            c.getInputBuffer(index)?.apply { clear(); put(data) }
+            c.queueInputBuffer(index, 0, data.size, System.nanoTime() / 1000, if (key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
+            drain(c)
+        }
+        return true
+    }
+
+    /** A new stream: it starts from a keyframe. */
+    fun reset() = synchronized(lock) { release() }
+
+    private fun make(): MediaCodec? {
+        val out = surface ?: return null
+        val a = sps ?: return null
+        val b = pps ?: return null
+        val (w, h) = size
+        return runCatching {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(DesktopWire.withStart(a)))
+                setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(DesktopWire.withStart(b)))
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
+                setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
+            MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).also {
+                it.configure(format, out, null, 0)
+                it.start()
+                codec = it
+                codecSize = w to h
+            }
+        }.onFailure { Log.w(tag, "No decoder", it) }.getOrNull()
+    }
+
+    private fun drain(c: MediaCodec) {
+        val info = MediaCodec.BufferInfo()
+        while (true) {
+            val i = runCatching { c.dequeueOutputBuffer(info, 0) }.getOrDefault(-1)
+            if (i < 0) break
+            // Shown at once: the newest frame is the only one worth seeing.
+            c.releaseOutputBuffer(i, true)
+        }
+    }
+
+    private fun release() {
+        codec?.let { runCatching { it.stop() }; runCatching { it.release() } }
+        codec = null
+        codecSize = null
+        waitingForKeyframe = true
+    }
+
+    /** The picture goes to this view; the sender is asked for a keyframe to start it. */
+    fun attach(view: TextureView) {
+        view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+                synchronized(lock) { release(); surface?.release(); surface = Surface(texture) }
+                onSurface()
+            }
+            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+                synchronized(lock) { release(); surface?.release(); surface = null }
+                return true
+            }
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
+        }
+        view.surfaceTexture?.let { t -> view.surfaceTextureListener?.onSurfaceTextureAvailable(t, view.width, view.height) }
+    }
+}
+
+/**
  * The phone's end of HudCast: finds the Mac on the network, takes its picture as H.264 and
  * decodes it onto the glasses, and sends the cursor, clicks and keys back. Never plays anything
  * on the Mac; it only shows the Mac's screen.
@@ -140,13 +242,8 @@ class DesktopLink(private val context: Context, private val onChange: (HudSnapsh
     private var multicast: WifiManager.MulticastLock? = null
     private var generation = 0
 
-    // The decoder lives with the surface; both are made and remade on the main thread's say.
-    private var surface: Surface? = null
-    private var codec: MediaCodec? = null
-    private var sps: ByteArray? = null
-    private var pps: ByteArray? = null
-    private var waitingForKeyframe = true
-    private val codecLock = Any()
+    // The decoder lives with the surface; a new surface asks for a keyframe by asking for the same source again.
+    private val decoder = StreamDecoder(tag) { send(DesktopWire.Command.Select(state.source?.window)) }
 
     fun start() {
         if (active) return
@@ -190,7 +287,7 @@ class DesktopLink(private val context: Context, private val onChange: (HudSnapsh
 
     private fun clear() {
         state = state.copy(connected = false, hasPicture = false, source = null, windows = emptyList())
-        synchronized(codecLock) { releaseCodec() }
+        decoder.reset()
     }
 
     private fun closeSocket() {
@@ -223,7 +320,7 @@ class DesktopLink(private val context: Context, private val onChange: (HudSnapsh
             output = s.getOutputStream()
             main.post { if (mine == generation) state = state.copy(connected = true, status = "WAITING FOR ${state.host.uppercase()}") }
             val input = DataInputStream(s.getInputStream().buffered(256 * 1024))
-            waitingForKeyframe = true
+            decoder.reset()
             while (mine == generation) {
                 val kind = input.readUnsignedByte()
                 val length = input.readInt()
@@ -249,90 +346,17 @@ class DesktopLink(private val context: Context, private val onChange: (HudSnapsh
             DesktopWire.WINDOWS -> DesktopWire.windows(payload).let { w -> main.post { if (mine == generation) state = state.copy(windows = w) } }
             DesktopWire.SOURCE -> DesktopWire.source(payload)?.let { src ->
                 main.post { if (mine == generation) state = state.copy(source = src, host = src.host) }
-                synchronized(codecLock) { if (codecSize != src.width to src.height) releaseCodec() }
+                decoder.size(src.width, src.height)
             }
-            DesktopWire.FORMAT -> DesktopWire.parseFormat(payload)?.let { (a, b) ->
-                synchronized(codecLock) {
-                    if (!a.contentEquals(sps) || !b.contentEquals(pps)) { sps = a; pps = b; releaseCodec() }
-                }
-            }
+            DesktopWire.FORMAT -> decoder.format(payload)
             DesktopWire.FRAME -> {
-                if (payload.isEmpty()) return
-                val key = payload[0].toInt() and 1 == 1
-                synchronized(codecLock) {
-                    if (waitingForKeyframe && !key) return
-                    val c = codec ?: makeCodec() ?: return
-                    waitingForKeyframe = false
-                    val data = DesktopWire.annexB(payload, 1)
-                    val index = runCatching { c.dequeueInputBuffer(20_000) }.getOrDefault(-1)
-                    if (index < 0) return
-                    c.getInputBuffer(index)?.apply { clear(); put(data) }
-                    c.queueInputBuffer(index, 0, data.size, System.nanoTime() / 1000, if (key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
-                    drain(c)
-                }
-                if (!state.hasPicture) main.post { if (mine == generation) state = state.copy(hasPicture = true) }
+                if (decoder.frame(payload) && !state.hasPicture) main.post { if (mine == generation) state = state.copy(hasPicture = true) }
             }
         }
-    }
-
-    private var codecSize: Pair<Int, Int>? = null
-
-    private fun makeCodec(): MediaCodec? {
-        val out = surface ?: return null
-        val a = sps ?: return null
-        val b = pps ?: return null
-        val w = state.source?.width ?: 1920
-        val h = state.source?.height ?: 1200
-        return runCatching {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
-                setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(DesktopWire.withStart(a)))
-                setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(DesktopWire.withStart(b)))
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            }
-            MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).also {
-                it.configure(format, out, null, 0)
-                it.start()
-                codec = it
-                codecSize = w to h
-            }
-        }.onFailure { Log.w(tag, "No decoder", it) }.getOrNull()
-    }
-
-    private fun drain(c: MediaCodec) {
-        val info = MediaCodec.BufferInfo()
-        while (true) {
-            val i = runCatching { c.dequeueOutputBuffer(info, 0) }.getOrDefault(-1)
-            if (i < 0) break
-            // Shown at once: the newest frame is the only one worth seeing.
-            c.releaseOutputBuffer(i, true)
-        }
-    }
-
-    private fun releaseCodec() {
-        codec?.let { runCatching { it.stop() }; runCatching { it.release() } }
-        codec = null
-        codecSize = null
-        waitingForKeyframe = true
     }
 
     /** The glasses' picture of the Mac: a texture the decoder draws into. */
-    fun attach(view: TextureView) {
-        view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-                synchronized(codecLock) { releaseCodec(); surface?.release(); surface = Surface(texture) }
-                // Ask for a keyframe by asking for the same source again.
-                send(DesktopWire.Command.Select(state.source?.window))
-            }
-            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {}
-            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-                synchronized(codecLock) { releaseCodec(); surface?.release(); surface = null }
-                return true
-            }
-            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
-        }
-        view.surfaceTexture?.let { t -> view.surfaceTextureListener?.onSurfaceTextureAvailable(t, view.width, view.height) }
-    }
+    fun attach(view: TextureView) = decoder.attach(view)
 
     fun send(command: DesktopWire.Command) {
         val out = output ?: return

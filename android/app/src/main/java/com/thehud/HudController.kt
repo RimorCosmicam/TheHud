@@ -262,6 +262,9 @@ object HudController {
 
     /** Remote Connect: the paired iPhone working these glasses (its name while it is connected). */
     var remotePeer by mutableStateOf<String?>(null)
+    /** Host mode: the paired iPhone runs the apps and this phone only shows its picture on the glasses. */
+    var hosted by mutableStateOf(false)
+        private set
     /** The pairing screen, opened by holding settings. */
     var showingConnect by mutableStateOf(false)
     /** What the pairing QR code says; changes with a new code. */
@@ -329,7 +332,7 @@ object HudController {
         }
 
     fun isOnGlasses(kind: HudPanelKind): Boolean =
-        if (clearView) false else solo?.let { it == kind } ?: arrangement.isShown(kind)
+        if (clearView || hosted) false else solo?.let { it == kind } ?: arrangement.isShown(kind)
 
     fun start(context: Context) {
         if (::app.isInitialized) return
@@ -382,21 +385,25 @@ object HudController {
 
     private fun startConnect() {
         connect = RemoteServer(app)
-        connect.onPeer = { name ->
+        connect.onPeer = { name, hosting ->
             remotePeer = name
+            // Hosting, this phone's own apps rest: nothing of theirs is on the glasses.
+            val wasHosted = hosted
+            hosted = name != null && hosting
+            if (hosted != wasHosted) { if (hosted) endTyping(); panelsChanged() }
             // The iPhone points now: this phone's own aim stops.
             sensorsChanged()
             if (name != null) {
                 // Paired: the code has done its job.
                 showingConnect = false
-                connect.send(RemoteWire.state(this))
+                if (!hosting) connect.send(RemoteWire.state(this))
             }
         }
         connect.onMessage = { remoteMessage(it) }
         connect.start()
         // The state as the iPhone draws it, sent when it changes, at most ten times a second.
         scope.launch {
-            snapshotFlow { if (remotePeer != null) RemoteWire.state(this@HudController) else "" }
+            snapshotFlow { if (remotePeer != null && !hosted) RemoteWire.state(this@HudController) else "" }
                 .distinctUntilChanged()
                 .collect { line ->
                     if (line.isNotEmpty()) connect.send(line)
@@ -410,6 +417,12 @@ object HudController {
         connectLink = connect.pairingLink()
         showingConnect = true
     }
+
+    /** Host mode: the iPhone's picture goes to this view on the glasses. */
+    fun attachHost(view: TextureView) = connect.hostPicture.attach(view)
+
+    /** Ends Remote Connect for now; the iPhone comes back when it reconnects. */
+    fun dropRemote() = connect.drop()
 
     /** A new key: whoever was paired has to scan again. */
     fun newConnectCode() {

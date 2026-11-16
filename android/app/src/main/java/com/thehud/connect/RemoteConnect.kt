@@ -11,6 +11,9 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import com.thehud.HudController
+import com.thehud.desktop.DesktopWire
+import com.thehud.desktop.StreamDecoder
+import java.io.DataInputStream
 import com.thehud.MusicAction
 import com.thehud.NoteAction
 import com.thehud.PhoneAction
@@ -55,8 +58,10 @@ import kotlin.concurrent.thread
 class RemoteServer(private val context: Context) {
     /** A message from the paired iPhone, on the main thread. */
     var onMessage: ((JSONObject) -> Unit)? = null
-    /** The paired iPhone came (its name) or went (null), on the main thread. */
-    var onPeer: ((String?) -> Unit)? = null
+    /** The paired iPhone came (its name, and whether it hosts) or went (null), on the main thread. */
+    var onPeer: ((String?, Boolean) -> Unit)? = null
+    /** Host mode: the iPhone's own glasses picture, decoded onto this phone's glasses. */
+    val hostPicture = StreamDecoder("RemoteHost") { send(JSONObject().put("t", "keyframe").toString()) }
 
     private val prefs = context.getSharedPreferences("connect", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
@@ -144,9 +149,27 @@ class RemoteServer(private val context: Context) {
             client = s
             writer = w
             val name = auth.optString("name").ifEmpty { "iPhone" }
-            main.post { onPeer?.invoke(name) }
+            val hosting = auth.optString("mode") == "host"
+            main.post { onPeer?.invoke(name, hosting) }
             send(JSONObject().put("t", "welcome").toString())
-            while (true) {
+            if (hosting) {
+                // From here the iPhone sends its picture, framed as HudCast frames its Mac's. It waited
+                // for the welcome, so nothing of it is in the line reader's buffer.
+                hostPicture.reset()
+                val video = DataInputStream(s.getInputStream().buffered(256 * 1024))
+                while (true) {
+                    val kind = video.readUnsignedByte()
+                    val length = video.readInt()
+                    if (length < 0 || length > DesktopWire.MAX_PAYLOAD) break
+                    val payload = ByteArray(length)
+                    video.readFully(payload)
+                    when (kind) {
+                        DesktopWire.FORMAT -> hostPicture.format(payload)
+                        DesktopWire.FRAME -> hostPicture.frame(payload)
+                        DesktopWire.SOURCE -> DesktopWire.source(payload)?.let { hostPicture.size(it.width, it.height) }
+                    }
+                }
+            } else while (true) {
                 val line = input.readLine() ?: break
                 val message = runCatching { JSONObject(line) }.getOrNull() ?: continue
                 main.post { onMessage?.invoke(message) }
@@ -158,7 +181,8 @@ class RemoteServer(private val context: Context) {
             if (client === s) {
                 client = null
                 writer = null
-                main.post { onPeer?.invoke(null) }
+                hostPicture.reset()
+                main.post { onPeer?.invoke(null, false) }
             }
         }
     }

@@ -85,6 +85,8 @@ final class GlassesSceneDelegate: UIResponder, UIWindowSceneDelegate {
 /// Scales the fixed 1920x1080 canvas to whatever the glasses actually report.
 struct GlassesHost: View {
     @ObservedObject private var controller = HudController.shared
+    /// The browser bar's live blur; off when the picture is filmed for Host mode.
+    var liveGlass = true
 
     var body: some View {
         GeometryReader { geometry in
@@ -102,7 +104,7 @@ struct GlassesHost: View {
                           artwork: controller.artwork,
                           photoImages: controller.photoImages,
                           placeholders: false,
-                          liveGlass: true)
+                          liveGlass: liveGlass)
                 .scaleEffect(scale)
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }

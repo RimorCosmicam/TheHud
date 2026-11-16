@@ -1,4 +1,6 @@
 import Foundation
+import CoreMedia
+import CoreVideo
 import HudCore
 
 // Remote Connect: the pairing code, the proof, and the Android phone's messages.
@@ -138,6 +140,54 @@ func runRemoteConnectTests() {
                 let until = Date().addingTimeInterval(5)
                 while remote.status != .refused, Date() < until { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
                 expectEqual(remote.status, .refused)
+                remote.disconnect()
+            }
+        }
+        test("live: hosts, sending a few seconds of picture") {
+            guard let pairing = RemotePairing(link: link) else { return expect(false, "bad link") }
+            MainActor.assumeIsolated {
+                let remote = RemoteLink()
+                remote.hosting = true
+                var states = 0
+                remote.onState = { _ in states += 1 }
+                remote.connect(pairing)
+                let deadline = Date().addingTimeInterval(8)
+                while !remote.isConnected, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+                expect(remote.isConnected, "connected: \(remote.status)")
+                var packets: [Data] = []
+                let encoder = DesktopEncoder(width: 1920, height: 1080, bitrate: 4_000_000, fps: 30) { key, avcc, sps, pps in
+                    var p = Data()
+                    if let sps, let pps { p.append(DesktopWire.pack(.format, DesktopWire.formatPayload(sps: sps, pps: pps))) }
+                    p.append(DesktopWire.pack(.frame, DesktopWire.framePayload(keyframe: key, avcc: avcc)))
+                    DispatchQueue.main.async { packets.append(p) }
+                }
+                expect(encoder != nil, "an encoder")
+                remote.onKeyframe = { encoder?.requestKeyframe() }
+                var buffer: CVPixelBuffer?
+                CVPixelBufferCreate(nil, 1920, 1080, kCVPixelFormatType_32BGRA, nil, &buffer)
+                for i in 0..<90 {
+                    if let buffer {
+                        CVPixelBufferLockBaseAddress(buffer, [])
+                        let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+                        // A band sweeping across, so a picture that moves is plainly the stream.
+                        for y in 0..<1080 { for x in 0..<1920 {
+                            let o = y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
+                            let lit = abs(x - i * 21) < 120
+                            base[o] = 0; base[o + 1] = lit ? 180 : 20; base[o + 2] = lit ? 230 : 20; base[o + 3] = 255
+                        } }
+                        CVPixelBufferUnlockBaseAddress(buffer, [])
+                        encoder?.encode(buffer, time: CMTime(value: CMTimeValue(i), timescale: 30))
+                    }
+                    RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 30))
+                    for p in packets { remote.sendPacket(p) }
+                    packets.removeAll()
+                }
+                encoder?.flush()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+                for p in packets { remote.sendPacket(p) }
+                RunLoop.main.run(until: Date().addingTimeInterval(1))
+                expect(remote.isConnected, "still connected after the picture: \(remote.status)")
+                expectEqual(states, 0)
                 remote.disconnect()
             }
         }

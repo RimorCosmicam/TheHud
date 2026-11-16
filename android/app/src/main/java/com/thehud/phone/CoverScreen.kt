@@ -246,6 +246,8 @@ fun CoverScreen() {
             }
         }
         KeyboardProxy()
+        // Host mode: the iPhone works its own apps; this phone only shows them.
+        if (c.hosted) HostedScreen()
         // Remote Connect: holding settings shows the code the iPhone scans.
         if (c.showingConnect) ConnectScreen()
     }

@@ -345,7 +345,14 @@ public final class RemoteLink {
     }
     public var onStatus: ((Status) -> Void)?
     public var onState: ((RemoteState) -> Void)?
+    /// Host mode: the Android phone asks for a keyframe (its picture starts or restarts).
+    public var onKeyframe: (() -> Void)?
     public private(set) var pairing: RemotePairing?
+    /// Host mode, set before connecting: this phone runs the apps and sends its glasses' picture;
+    /// the Android phone only shows it. Otherwise this phone is the Android phone's remote.
+    public var hosting = false
+    /// Bytes given to the connection and not yet sent: Host mode drops frames past a backlog.
+    public private(set) var unsentBytes = 0
 
     private let queue = DispatchQueue(label: "thehud.remote")
     private var connection: NWConnection?
@@ -382,6 +389,18 @@ public final class RemoteLink {
         connection.send(content: line, completion: .idempotent)
     }
 
+    /// Host mode: framed picture data, as it is.
+    public func sendPacket(_ data: Data) {
+        guard authed, hosting, let connection else { return }
+        unsentBytes += data.count
+        connection.send(content: data, completion: .contentProcessed { [weak self, weak connection] _ in
+            Task { @MainActor in
+                guard let self, let connection, connection === self.connection else { return }
+                self.unsentBytes = max(self.unsentBytes - data.count, 0)
+            }
+        })
+    }
+
     private static var parameters: NWParameters {
         let parameters = NWParameters.tcp
         if let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
@@ -409,6 +428,7 @@ public final class RemoteLink {
         self.connection = connection
         buffer = Data()
         authed = false
+        unsentBytes = 0
         connection.stateUpdateHandler = { [weak self, weak connection] update in
             Task { @MainActor in
                 guard let self, let connection, connection === self.connection else { return }
@@ -482,7 +502,8 @@ public final class RemoteLink {
             guard let pairing, let nonce = (o["nonce"] as? String).flatMap({ Data(base64Encoded: $0) }),
                   let connection else { return }
             pendingName = o["name"] as? String ?? "Android"
-            let auth: [String: Any] = ["t": "auth", "mac": pairing.proof(for: nonce).base64EncodedString(), "name": Self.deviceName]
+            let auth: [String: Any] = ["t": "auth", "mac": pairing.proof(for: nonce).base64EncodedString(),
+                                       "name": Self.deviceName, "mode": hosting ? "host" : "remote"]
             if let line = RemoteWire.line(auth) { connection.send(content: line, completion: .idempotent) }
             awaitingWelcome = true
         case "welcome":
@@ -491,8 +512,11 @@ public final class RemoteLink {
             attempt = 0
             status = .connected(pendingName)
         case "state":
-            guard authed else { return }
+            guard authed, !hosting else { return }
             onState?(RemoteWire.state(from: o))
+        case "keyframe":
+            guard authed, hosting else { return }
+            onKeyframe?()
         default:
             break
         }

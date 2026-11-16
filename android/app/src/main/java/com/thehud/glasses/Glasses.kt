@@ -64,7 +64,7 @@ fun GlassesRoot() {
         val eased = easedHeading()
         CompositionLocalProvider(LocalDensity provides Density(scale, 1f)) {
             Box(Modifier.requiredSize(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-                GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
+                if (HudController.hosted) HostedPicture() else GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
                     page = { LivePage() },
                     youtube = HudController.youtube?.let { player -> { LiveVideo(player) } },
                     mac = { LiveMac() },
@@ -120,6 +120,12 @@ private fun LivePage() {
 @Composable
 private fun LiveVideo(player: com.thehud.youtube.YouTubePlayer) {
     AndroidView(factory = { player.detach(); player.view }, modifier = Modifier.fillMaxSize(), onRelease = { player.detach() })
+}
+
+/** Host mode: the paired iPhone's glasses, as it draws them. */
+@Composable
+private fun HostedPicture() {
+    AndroidView(factory = { c -> android.view.TextureView(c).also { HudController.attachHost(it) } }, modifier = Modifier.fillMaxSize())
 }
 
 /** The Mac's picture, decoded straight onto this view's surface. */

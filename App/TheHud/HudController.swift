@@ -87,6 +87,10 @@ final class HudController: ObservableObject {
     let remoteLink = RemoteLink()
     @Published var showingRemoteConnect = false
     @Published private(set) var remoteStatus: RemoteLink.Status = .off
+    /// Remote Connect's mode, picked when pairing: HOST runs this phone's apps on the Android
+    /// phone's glasses; otherwise this phone is the Android phone's remote. Saved.
+    @Published private(set) var remoteHosting = UserDefaults.standard.bool(forKey: "remoteHosting")
+    private var hostStreamer: HostStreamer?
     /// The Android phone's state, while connected. Everything the phone's screen draws comes
     /// from here then, and its buttons go there; this phone's own scenes are left alone.
     @Published private(set) var remoteState: RemoteState?
@@ -1824,9 +1828,12 @@ final class HudController: ObservableObject {
     // ------------------------------------------------------------------ Remote Connect
 
     private func startRemoteConnect() {
+        remoteLink.hosting = remoteHosting
+        remoteLink.onKeyframe = { [weak self] in self?.hostStreamer?.requestKeyframe() }
         remoteLink.onStatus = { [weak self] status in
             guard let self else { return }
             self.remoteStatus = status
+            if case .connected = status, self.remoteLink.hosting { self.startHosting() } else { self.stopHosting() }
             if case .connected = status {
                 // In: the code has done its job.
                 self.showingRemoteConnect = false
@@ -1863,6 +1870,38 @@ final class HudController: ObservableObject {
         RemotePairingStore.save(pairing)
         remoteLink.connect(pairing)
         return true
+    }
+
+    /// REMOTE or HOST: a change reconnects in the new mode.
+    func setRemoteHosting(_ on: Bool) {
+        guard on != remoteHosting else { return }
+        remoteHosting = on
+        UserDefaults.standard.set(on, forKey: "remoteHosting")
+        remoteLink.hosting = on
+        if let pairing = remoteLink.pairing { remoteLink.connect(pairing) }
+    }
+
+    /// The glasses this phone draws for, plugged into it: Host mode leaves them be.
+    private var glassesScene: Bool {
+        UIApplication.shared.connectedScenes.contains { $0.delegate is GlassesSceneDelegate }
+    }
+
+    /// Host mode is in: this phone's glasses are drawn and sent, as if they were plugged in here.
+    private func startHosting() {
+        guard hostStreamer == nil, !glassesScene,
+              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.session.role == .windowApplication }) else { return }
+        let streamer = HostStreamer(link: remoteLink)
+        streamer.start(in: scene)
+        hostStreamer = streamer
+        glassesConnected = true
+    }
+
+    private func stopHosting() {
+        guard let streamer = hostStreamer else { return }
+        streamer.stop()
+        hostStreamer = nil
+        glassesConnected = glassesScene
     }
 
     /// Back to this phone's own glasses, and the pairing forgotten.

@@ -69,6 +69,25 @@ fun ConnectScreen() {
     }
 }
 
+/** Host mode, on the cover screen: the glasses show the iPhone, which works them. */
+@Composable
+fun HostedScreen() {
+    val c = HudController
+    Box(Modifier.fillMaxSize().background(Color.Black)
+        .clickable(remember { MutableInteractionSource() }, indication = null) {},
+        contentAlignment = Alignment.Center) {
+        Column(Modifier.widthIn(max = 360.dp).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            BasicText("HOST MODE", style = HudTheme.mont(13f, tracking = 3f, color = HudTheme.accent))
+            BasicText("THE GLASSES SHOW ${(c.remotePeer ?: "the iPhone").uppercase()}",
+                style = HudTheme.mont(16f, tracking = 1.5f).copy(textAlign = TextAlign.Center))
+            BasicText("Its apps run there: work them from the iPhone. Switch it to Remote, or disconnect it, to have this phone's apps back.",
+                style = HudTheme.mont(12f, color = HudTheme.inkDim).copy(textAlign = TextAlign.Center))
+            ConnectButton("REMOTE CONNECT", Modifier.fillMaxWidth()) { c.showConnect() }
+        }
+    }
+}
+
 @Composable
 private fun ConnectButton(title: String, modifier: Modifier, action: () -> Unit) {
     Box(modifier.height(44.dp).border(1.dp, HudTheme.inkFaint, RoundedCornerShape(10.dp)).clickable { action() },

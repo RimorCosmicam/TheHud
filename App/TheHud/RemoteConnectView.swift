@@ -13,6 +13,18 @@ struct RemoteConnectView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 22) {
+                Picker("Mode", selection: Binding(get: { controller.remoteHosting },
+                                                  set: { controller.setRemoteHosting($0) })) {
+                    Text("REMOTE").tag(false)
+                    Text("HOST").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text(controller.remoteHosting
+                     ? "This iPhone runs the apps; the Android phone shows them on its glasses."
+                     : "This iPhone works the Android phone's apps, on its glasses.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                 status
                 if scanning {
                     QRScanner { payload in
@@ -64,6 +76,8 @@ struct RemoteConnectView: View {
         let (text, colour): (String, Color) = switch controller.remoteStatus {
         case .off: ("NOT CONNECTED", HudTheme.inkFaint)
         case .connecting: ("LOOKING FOR THE ANDROID PHONE", HudTheme.inkDim)
+        case let .connected(name) where controller.remoteHosting:
+            ("SHOWING THIS IPHONE ON \(name.uppercased())'S GLASSES", HudTheme.accent)
         case let .connected(name): ("WORKING \(name.uppercased())'S GLASSES", HudTheme.accent)
         case .refused: ("ITS CODE CHANGED: SCAN IT AGAIN", .red)
         }
