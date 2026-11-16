@@ -137,6 +137,25 @@ class CoreTest {
     }
 
     @Test
+    fun hostStreamTakesATextLineBetweenFrames() {
+        // What broke Host mode: the theme, sent as a line, read as a packet with a huge length.
+        val out = java.io.ByteArrayOutputStream()
+        val data = java.io.DataOutputStream(out)
+        fun packet(kind: Int, payload: ByteArray) { data.writeByte(kind); data.writeInt(payload.size); data.write(payload) }
+        packet(2, byteArrayOf(1, 2, 3))
+        data.write("{\"t\":\"theme\",\"color\":\"sky\"}\n".toByteArray())
+        packet(3, byteArrayOf(9))
+        val packets = mutableListOf<Pair<Int, Int>>()
+        val lines = mutableListOf<String>()
+        runCatching {
+            com.thehud.connect.readHostStream(java.io.DataInputStream(java.io.ByteArrayInputStream(out.toByteArray())),
+                packet = { k, p -> packets += k to p.size }, line = { lines += it })
+        }
+        assertEquals(listOf(2 to 3, 3 to 1), packets)
+        assertEquals(listOf("{\"t\":\"theme\",\"color\":\"sky\"}"), lines)
+    }
+
+    @Test
     fun themeAccentsMatchTheIPhone() {
         val expected = listOf(0xFFD8A628, 0xFF9ABE50, 0xFF00CBA9, 0xFF36BCFC, 0xFFA6A2FF, 0xFFE18BDA, 0xFFF985A2, 0xFFFA8C66)
         assertEquals(expected, com.thehud.core.ThemeColor.entries.map { com.thehud.core.OKLCH.rotate(0xFFD8A628, it.shift) })

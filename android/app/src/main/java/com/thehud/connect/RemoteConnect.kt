@@ -159,12 +159,7 @@ class RemoteServer(private val context: Context) {
                 // for the welcome, so nothing of it is in the line reader's buffer.
                 hostPicture.reset()
                 val video = DataInputStream(s.getInputStream().buffered(256 * 1024))
-                while (true) {
-                    val kind = video.readUnsignedByte()
-                    val length = video.readInt()
-                    if (length < 0 || length > DesktopWire.MAX_PAYLOAD) break
-                    val payload = ByteArray(length)
-                    video.readFully(payload)
+                readHostStream(video, packet = { kind, payload ->
                     when (kind) {
                         DesktopWire.FORMAT -> hostPicture.format(payload)
                         DesktopWire.FRAME -> hostPicture.frame(payload)
@@ -172,7 +167,11 @@ class RemoteServer(private val context: Context) {
                         DesktopWire.OVERLAY -> runCatching { JSONObject(payload.decodeToString()) }.getOrNull()
                             ?.let { o -> main.post { onOverlay?.invoke(o) } }
                     }
-                }
+                }, line = { text ->
+                    // The iPhone's messages that are not about the picture (the theme) come as in
+                    // Remote mode, between frames.
+                    runCatching { JSONObject(text) }.getOrNull()?.let { o -> main.post { onMessage?.invoke(o) } }
+                })
             } else while (true) {
                 val line = input.readLine() ?: break
                 val message = runCatching { JSONObject(line) }.getOrNull() ?: continue
@@ -226,6 +225,33 @@ class RemoteServer(private val context: Context) {
         const val PORT = 47825
         const val SERVICE = "_thehud-remote._tcp."
         private const val TAG = "RemoteConnect"
+    }
+}
+
+/**
+ * Host mode's stream from the iPhone: binary packets (a kind byte, a big-endian length, the payload)
+ * with the odd JSON line between them, told apart by the line's opening brace, which no packet kind
+ * uses. Returns when the stream ends or makes no sense; a line or packet past the limit is the latter.
+ */
+internal fun readHostStream(input: DataInputStream, packet: (Int, ByteArray) -> Unit, line: (String) -> Unit) {
+    while (true) {
+        val kind = input.readUnsignedByte()
+        if (kind == '{'.code) {
+            val bytes = java.io.ByteArrayOutputStream().apply { write(kind) }
+            while (true) {
+                val b = input.readUnsignedByte()
+                if (b == '\n'.code) break
+                bytes.write(b)
+                if (bytes.size() > 64 * 1024) return
+            }
+            line(bytes.toString(Charsets.UTF_8.name()))
+            continue
+        }
+        val length = input.readInt()
+        if (length < 0 || length > DesktopWire.MAX_PAYLOAD) return
+        val payload = ByteArray(length)
+        input.readFully(payload)
+        packet(kind, payload)
     }
 }
 
