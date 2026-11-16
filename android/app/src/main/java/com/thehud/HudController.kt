@@ -86,6 +86,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Host mode: the iPhone's YouTube video, played here in the box it gives, in step with its time. */
+data class HostVideo(val id: String, val time: Double, val playing: Boolean, val ad: Boolean,
+                     val box: androidx.compose.ui.geometry.Rect?, val corner: Float)
+
+/** Host mode: what a film of the iPhone's glasses cannot hold. */
+data class HostOverlay(val cursor: Offset? = null, val video: HostVideo? = null,
+                       val mac: androidx.compose.ui.geometry.Rect? = null)
+
 /** Every button on the phone lands here as one of these. */
 sealed interface PhoneAction {
     data object Back : PhoneAction
@@ -265,6 +273,11 @@ object HudController {
     /** Host mode: the paired iPhone runs the apps and this phone only shows its picture on the glasses. */
     var hosted by mutableStateOf(false)
         private set
+    var hostOverlay by mutableStateOf(HostOverlay())
+        private set
+    private var hostVideoId = ""
+    private var hostToggledAt = 0L
+    private var hostSeekedAt = 0L
     /** The pairing screen, opened by holding settings. */
     var showingConnect by mutableStateOf(false)
     /** What the pairing QR code says; changes with a new code. */
@@ -390,7 +403,14 @@ object HudController {
             // Hosting, this phone's own apps rest: nothing of theirs is on the glasses.
             val wasHosted = hosted
             hosted = name != null && hosting
-            if (hosted != wasHosted) { if (hosted) endTyping(); panelsChanged() }
+            if (hosted != wasHosted) {
+                // This phone's own video stops either way: hosting, the iPhone's plays here instead.
+                if (youtube?.state?.hasVideo == true) youtube?.stop()
+                hostVideoId = ""
+                hostOverlay = HostOverlay()
+                if (hosted) endTyping()
+                panelsChanged()
+            }
             // The iPhone points now: this phone's own aim stops.
             sensorsChanged()
             if (name != null) {
@@ -400,6 +420,7 @@ object HudController {
             }
         }
         connect.onMessage = { remoteMessage(it) }
+        connect.onOverlay = { hostOverlayArrived(it) }
         connect.start()
         // The state as the iPhone draws it, sent when it changes, at most ten times a second.
         scope.launch {
@@ -410,6 +431,43 @@ object HudController {
                     delay(100)
                 }
         }
+    }
+
+    private fun hostOverlayArrived(o: org.json.JSONObject) {
+        if (!hosted) return
+        fun rect(a: org.json.JSONArray?) = a?.takeIf { it.length() == 4 }?.let {
+            androidx.compose.ui.geometry.Rect(Offset(it.optDouble(0).toFloat(), it.optDouble(1).toFloat()),
+                androidx.compose.ui.geometry.Size(it.optDouble(2).toFloat(), it.optDouble(3).toFloat()))
+        }
+        val cursor = o.optJSONArray("cursor")?.let { Offset(it.optDouble(0).toFloat(), it.optDouble(1).toFloat()) }
+        val video = o.optJSONObject("video")?.let { v ->
+            HostVideo(v.optString("id"), v.optDouble("t", 0.0), v.optBoolean("playing"), v.optBoolean("ad"),
+                rect(v.optJSONArray("box")), v.optDouble("corner", 0.0).toFloat())
+        }
+        hostOverlay = HostOverlay(cursor, video, rect(o.optJSONArray("mac")))
+        syncHostVideo(video)
+    }
+
+    /** The iPhone's video, here: the same one, at its time, playing or paused as it is there. */
+    private fun syncHostVideo(v: HostVideo?) {
+        val player = youtube ?: return
+        if (v == null || v.id.isEmpty()) {
+            if (hostVideoId.isNotEmpty()) { player.stop(); hostVideoId = "" }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (v.id != hostVideoId) {
+            hostVideoId = v.id
+            player.play(v.id)
+            hostSeekedAt = now; hostToggledAt = now
+            return
+        }
+        val s = player.state
+        // Ads come and go on each phone by themselves: only the film itself is kept in step.
+        if (!s.hasVideo || s.isAd || v.ad) return
+        // Both players report once a second, so only a real gap is closed, and not twice running.
+        if (now - hostSeekedAt > 3000 && kotlin.math.abs(s.elapsed - v.time) > 2.5) { player.seek(v.time - s.elapsed); hostSeekedAt = now }
+        if (s.isPlaying != v.playing && now - hostToggledAt > 2500) { player.togglePlay(); hostToggledAt = now }
     }
 
     /** Opens the pairing screen with a fresh look at the address, which may have changed. */
@@ -463,7 +521,7 @@ object HudController {
         if (isOnGlasses(HudPanelKind.mac)) desktop.start() else desktop.stop()
         if (pad == PhonePad.remote && remotePeer == null) remote.start() else remote.stop()
         if (isOnGlasses(HudPanelKind.youtube)) refreshYouTube(snapshot.youtube.tab)
-        else if (youtube?.state?.hasVideo == true) {
+        else if (!hosted && youtube?.state?.hasVideo == true) {
             youtube?.stop()
             snapshot = snapshot.copy(youtube = snapshot.youtube.copy(hasVideo = false, isPlaying = false, page = HudSnapshot.YouTube.Page.browse))
         }
@@ -795,7 +853,7 @@ object HudController {
             isPlaying = state.isPlaying, elapsed = state.elapsed, duration = state.duration,
             isAd = state.isAd, canSkipAd = state.canSkipAd, notice = state.notice,
             page = if (state.hasVideo) y.page else HudSnapshot.YouTube.Page.browse))
-        if (state.ended) youtubeNext()
+        if (state.ended && !hosted) youtubeNext()
     }
 
     private fun refreshYouTube(tab: HudSnapshot.YouTube.Tab, force: Boolean = false) {

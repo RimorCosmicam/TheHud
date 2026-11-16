@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import AVFoundation
+import VideoToolbox
 
 /// The phone's end of the desktop stream: finds HudCast on the local network, keeps one
 /// connection to it, shows what it sends, and sends back the cursor and keys.
@@ -27,6 +28,14 @@ public final class DesktopLink {
     private var endpoints: [NWEndpoint] = []
     private var parser = DesktopWire.Parser()
     private var depacketizer = DesktopDepacketizer()
+    /// Host mode films the glasses, and a display layer's picture cannot be filmed: the frames
+    /// are decoded here as well, and the newest painted in.
+    public var decodesPictures = false {
+        didSet { if !decodesPictures { decoder.map(VTDecompressionSessionInvalidate); decoder = nil; latestPicture = nil } }
+    }
+    public private(set) var latestPicture: CVPixelBuffer?
+    private var decoder: VTDecompressionSession?
+    private var decoderFormat: CMFormatDescription?
     /// After a flush the decoder needs a keyframe before anything else makes sense.
     private var waitingForKeyframe = true
     /// The panel is on. Off, a dropped connection stays dropped.
@@ -171,11 +180,37 @@ public final class DesktopLink {
                 waitingForKeyframe = false
             }
             if let sample = depacketizer.sampleBuffer(avcc: frame.avcc) {
+                if decodesPictures { decode(sample) }
                 renderer.enqueue(sample)
                 if !state.hasPicture { state.hasPicture = true }
             }
-        case .command:
+        case .command, .overlay:
             break
+        }
+    }
+
+    private func decode(_ sample: CMSampleBuffer) {
+        guard let format = CMSampleBufferGetFormatDescription(sample) else { return }
+        if decoder == nil || decoderFormat.map({ !CMFormatDescriptionEqual($0, otherFormatDescription: format) }) ?? true {
+            decoder.map(VTDecompressionSessionInvalidate)
+            decoder = nil
+            let attributes = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA] as CFDictionary
+            var session: VTDecompressionSession?
+            VTDecompressionSessionCreate(allocator: nil, formatDescription: format, decoderSpecification: nil,
+                                         imageBufferAttributes: attributes, outputCallback: nil,
+                                         decompressionSessionOut: &session)
+            decoder = session
+            decoderFormat = format
+        }
+        guard let decoder else { return }
+        VTDecompressionSessionDecodeFrame(decoder, sampleBuffer: sample, flags: [._EnableAsynchronousDecompression],
+                                          infoFlagsOut: nil) { [weak self] status, _, image, _, _ in
+            guard status == noErr, let image else { return }
+            nonisolated(unsafe) let picture = image
+            Task { @MainActor in
+                guard let self, self.decodesPictures else { return }
+                self.latestPicture = picture
+            }
         }
     }
 

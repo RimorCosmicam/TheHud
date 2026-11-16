@@ -21,6 +21,8 @@ public enum DesktopWire {
         case source = 4
         /// Phone to Mac: input and requests, `DesktopCommand`.
         case command = 16
+        /// Host mode, iPhone to Android phone: where the video and the cursor are, as JSON.
+        case overlay = 32
     }
 
     public static let headerSize = 5

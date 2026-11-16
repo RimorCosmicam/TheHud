@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import CoreMedia
+import VideoToolbox
 import HudCore
 
 /// Host mode: this phone's glasses, drawn in a window behind the phone's own screen, filmed up to
@@ -20,6 +21,14 @@ final class HostStreamer: NSObject {
     private var pool: CVPixelBufferPool?
     /// Frames are being dropped until the next keyframe, which every later frame needs.
     private var skipping = false
+    /// What a film of the glasses cannot hold (video layers draw nothing into it): where the
+    /// YouTube video and the cursor are, for the Android phone to play and draw there itself,
+    /// and the Mac's picture's frame, to paint in here.
+    var overlay: () -> (json: [String: Any], mac: CGRect?) = { ([:], nil) }
+    /// The Mac's newest frame, decoded.
+    var macPicture: () -> CVPixelBuffer? = { nil }
+    private var lastOverlay = Data()
+    private var lastOverlayAt = Date.distantPast
 
     init(link: RemoteLink) {
         self.link = link
@@ -96,8 +105,28 @@ final class HostStreamer: NSObject {
         context.scaleBy(x: 2, y: -2)
         UIGraphicsPushContext(context)
         window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+        let (json, mac) = overlay()
+        if let mac, let picture = macPicture() {
+            var image: CGImage?
+            VTCreateCGImageFromCVPixelBuffer(picture, options: nil, imageOut: &image)
+            // The canvas's points are twice the window's.
+            if let image {
+                UIImage(cgImage: image).draw(in: CGRect(x: mac.minX / 2, y: mac.minY / 2,
+                                                        width: mac.width / 2, height: mac.height / 2))
+            }
+        }
         UIGraphicsPopContext()
+        sendOverlay(json)
         encoder.encode(buffer, time: CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
+    }
+
+    /// When it changes, and once a second anyway: the video's time keeps the two players together.
+    private func sendOverlay(_ json: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]) else { return }
+        guard data != lastOverlay || Date().timeIntervalSince(lastOverlayAt) > 1 else { return }
+        lastOverlay = data
+        lastOverlayAt = Date()
+        link.sendPacket(DesktopWire.pack(.overlay, data))
     }
 
     /// To the Android phone, unless the network is behind: then nothing until a keyframe, so the

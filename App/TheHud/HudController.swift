@@ -1892,15 +1892,42 @@ final class HudController: ObservableObject {
               let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
                 .first(where: { $0.session.role == .windowApplication }) else { return }
         let streamer = HostStreamer(link: remoteLink)
+        streamer.overlay = { [weak self] in self?.hostOverlay() ?? ([:], nil) }
+        streamer.macPicture = { [weak self] in self?.desktopLink.latestPicture }
+        desktopLink.decodesPictures = true
+        // The Android phone plays the video, and its sound goes to the glasses: this one is silent.
+        youtubePlayer.muted = true
         streamer.start(in: scene)
         hostStreamer = streamer
         glassesConnected = true
+    }
+
+    /// What the film of the glasses cannot hold, in the canvas's points.
+    private func hostOverlay() -> (json: [String: Any], mac: CGRect?) {
+        let screen = GlassesScreen(snapshot: snapshot, arrangement: arrangement, solo: solo, clearView: clearView)
+        func rect(_ r: CGRect) -> [Double] { [r.minX, r.minY, r.width, r.height].map { Double($0) } }
+        var o: [String: Any] = [:]
+        if let cursor = snapshot.cursor { o["cursor"] = [Double(cursor.x), Double(cursor.y)] }
+        let y = snapshot.youtube
+        if y.hasVideo, !y.videoId.isEmpty {
+            var video: [String: Any] = ["id": y.videoId, "t": y.elapsed, "playing": y.isPlaying, "ad": y.isAd]
+            if let place = screen.videoPlace {
+                video["box"] = rect(place.box)
+                video["corner"] = Double(place.corner)
+            }
+            o["video"] = video
+        }
+        let mac = screen.macPicture
+        if let mac { o["mac"] = rect(mac) }
+        return (o, mac)
     }
 
     private func stopHosting() {
         guard let streamer = hostStreamer else { return }
         streamer.stop()
         hostStreamer = nil
+        desktopLink.decodesPictures = false
+        youtubePlayer.muted = false
         glassesConnected = glassesScene
     }
 

@@ -153,6 +153,15 @@ public struct GlassesScreen: View {
 
     /// Where the live video shows right now: the whole canvas while watching, the tile while
     /// browsing, its slot as a widget, or nowhere.
+    /// Host mode: where the live video goes on the canvas, for the phone that shows it.
+    public var videoPlace: (box: CGRect, corner: CGFloat)? { youtubeVideo(layout) }
+
+    /// Host mode: where the Mac's picture goes on the canvas, while it is shown.
+    public var macPicture: CGRect? {
+        guard snapshot.desktop.hasPicture, !clearView, solo == nil || solo == .mac else { return nil }
+        return layout.desktopPicture
+    }
+
     private func youtubeVideo(_ layout: GlassesLayout) -> (box: CGRect, corner: CGFloat)? {
         let youtube = snapshot.youtube
         guard youtube.hasVideo, !clearView, !layout.fullscreen else { return nil }

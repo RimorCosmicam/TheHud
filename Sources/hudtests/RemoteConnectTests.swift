@@ -181,6 +181,12 @@ func runRemoteConnectTests() {
                     RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 30))
                     for p in packets { remote.sendPacket(p) }
                     packets.removeAll()
+                    // Where the video and the cursor are, as a hosting iPhone sends it.
+                    let overlay: [String: Any] = ["cursor": [960.0, 540.0], "mac": [100.0, 100.0, 400.0, 250.0],
+                                                  "video": ["id": "", "t": 0.0, "playing": false, "ad": false]]
+                    if i % 10 == 0, let data = try? JSONSerialization.data(withJSONObject: overlay) {
+                        remote.sendPacket(DesktopWire.pack(.overlay, data))
+                    }
                 }
                 encoder?.flush()
                 RunLoop.main.run(until: Date().addingTimeInterval(0.5))

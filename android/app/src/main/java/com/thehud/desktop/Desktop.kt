@@ -35,6 +35,8 @@ object DesktopWire {
     const val FRAME = 3
     const val SOURCE = 4
     const val COMMAND = 16
+    /** Host mode, iPhone to this phone: where the video and the cursor are, as JSON. */
+    const val OVERLAY = 32
     const val MAX_PAYLOAD = 32 shl 20
 
     fun pack(kind: Int, payload: ByteArray): ByteArray {

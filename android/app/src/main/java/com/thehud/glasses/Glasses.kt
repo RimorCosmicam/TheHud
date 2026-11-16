@@ -64,7 +64,7 @@ fun GlassesRoot() {
         val eased = easedHeading()
         CompositionLocalProvider(LocalDensity provides Density(scale, 1f)) {
             Box(Modifier.requiredSize(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-                if (HudController.hosted) HostedPicture() else GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
+                if (HudController.hosted) HostedGlasses() else GlassesScreen(HudController.snapshot, HudController.layout, GlassesContent(
                     page = { LivePage() },
                     youtube = HudController.youtube?.let { player -> { LiveVideo(player) } },
                     mac = { LiveMac() },
@@ -122,10 +122,23 @@ private fun LiveVideo(player: com.thehud.youtube.YouTubePlayer) {
     AndroidView(factory = { player.detach(); player.view }, modifier = Modifier.fillMaxSize(), onRelease = { player.detach() })
 }
 
-/** Host mode: the paired iPhone's glasses, as it draws them. */
+/**
+ * Host mode: the paired iPhone's glasses, as it draws them. Its film cannot hold video, so the
+ * YouTube video plays here, in the box the iPhone gives, with the cursor drawn again over it and
+ * over the Mac's picture, which the iPhone paints in itself.
+ */
 @Composable
-private fun HostedPicture() {
-    AndroidView(factory = { c -> android.view.TextureView(c).also { HudController.attachHost(it) } }, modifier = Modifier.fillMaxSize())
+private fun HostedGlasses() {
+    val o = HudController.hostOverlay
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(factory = { c -> android.view.TextureView(c).also { HudController.attachHost(it) } }, modifier = Modifier.fillMaxSize())
+        HudController.youtube?.let { player ->
+            YouTubeVideoLayer(o.video?.box, o.video?.corner ?: 0f) { LiveVideo(player) }
+        }
+        o.cursor?.let { c ->
+            if (o.video?.box?.contains(c) == true || o.mac?.contains(c) == true) CursorArrow(c)
+        }
+    }
 }
 
 /** The Mac's picture, decoded straight onto this view's surface. */

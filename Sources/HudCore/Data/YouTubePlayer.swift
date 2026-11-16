@@ -33,6 +33,10 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
 
     public let webView: WKWebView
     public private(set) var state = State()
+    /// Host mode: the Android phone plays the sound (and the picture); this one plays silent.
+    public var muted = false {
+        didSet { if muted != oldValue { applyMuted() } }
+    }
     /// Called whenever the page's state changes.
     public var onChange: ((State) -> Void)?
     private var pollTimer: Timer?
@@ -162,8 +166,14 @@ public final class YouTubePlayer: NSObject, WKNavigationDelegate {
         host.show(webView, force: true)
     }
 
+    private func applyMuted() {
+        run("document.querySelectorAll('video').forEach(function(v){v.muted=\(muted)})")
+    }
+
     private func poll() {
         settle()
+        // A new video starts with its own sound: kept as it should be.
+        if muted { applyMuted() }
         // While a new page loads, the old one would still answer with the old video.
         guard !loadedId.isEmpty, !webView.isLoading else { return }
         webView.evaluateJavaScript(Self.reading) { [weak self] result, _ in

@@ -60,6 +60,8 @@ class RemoteServer(private val context: Context) {
     var onMessage: ((JSONObject) -> Unit)? = null
     /** The paired iPhone came (its name, and whether it hosts) or went (null), on the main thread. */
     var onPeer: ((String?, Boolean) -> Unit)? = null
+    /** Host mode: what the iPhone's picture cannot hold (the video, the cursor), on the main thread. */
+    var onOverlay: ((JSONObject) -> Unit)? = null
     /** Host mode: the iPhone's own glasses picture, decoded onto this phone's glasses. */
     val hostPicture = StreamDecoder("RemoteHost") { send(JSONObject().put("t", "keyframe").toString()) }
 
@@ -167,6 +169,8 @@ class RemoteServer(private val context: Context) {
                         DesktopWire.FORMAT -> hostPicture.format(payload)
                         DesktopWire.FRAME -> hostPicture.frame(payload)
                         DesktopWire.SOURCE -> DesktopWire.source(payload)?.let { hostPicture.size(it.width, it.height) }
+                        DesktopWire.OVERLAY -> runCatching { JSONObject(payload.decodeToString()) }.getOrNull()
+                            ?.let { o -> main.post { onOverlay?.invoke(o) } }
                     }
                 }
             } else while (true) {
