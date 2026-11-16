@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -66,13 +67,26 @@ fun youtubeVideoBox(snapshot: HudSnapshot, layout: com.thehud.core.GlassesLayout
 /** 16:9 inside a box. */
 fun fit16x9(size: Size): Size { val s = min(size.width / 16, size.height / 9); return Size(16 * s, 9 * s) }
 
-/** The one video layer: placed in its box, or parked off the canvas, never taken out of its view. */
+/** The size the player's page is always laid out at. */
+private val PLAYER_PAGE = Size(1280f, 720f)
+
+/**
+ * The one video layer: placed in its box, or parked off the canvas, never taken out of its view.
+ *
+ * The page itself never changes size: YouTube's player keeps drawing at the size it first had,
+ * so a page grown from a slot to the whole canvas played in its top left corner. It stays
+ * 1280 by 720 and its picture is scaled into the box instead.
+ */
 @Composable
 fun YouTubeVideoLayer(box: Rect?, corner: Float, content: @Composable () -> Unit) {
-    val b = box ?: Rect(Offset(-1400f, 0f), Size(1280f, 720f))
+    val b = box ?: Rect(Offset(-1400f, 0f), PLAYER_PAGE)
     val v = fit16x9(b.size)
+    val scale = v.width / PLAYER_PAGE.width
     Box(Modifier.at(b).clip(RoundedCornerShape(corner.dp)).background(Color.Black), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(v.width.dp, v.height.dp)) { content() }
+        Box(Modifier.size(v.width.dp, v.height.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.requiredSize(PLAYER_PAGE.width.dp, PLAYER_PAGE.height.dp)
+                .graphicsLayer { scaleX = scale; scaleY = scale }) { content() }
+        }
     }
 }
 
