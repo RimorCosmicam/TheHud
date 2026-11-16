@@ -7,8 +7,8 @@ public enum AirQualityProvider {
     public static func air(at coordinate: CLLocationCoordinate2D) async throws -> HudSnapshot.Weather.Air {
         var components = URLComponents(string: "https://air-quality-api.open-meteo.com/v1/air-quality")!
         components.queryItems = [
-            .init(name: "latitude", value: String(format: "%.4f", coordinate.latitude)),
-            .init(name: "longitude", value: String(format: "%.4f", coordinate.longitude)),
+            .init(name: "latitude", value: String(format: "%.2f", coordinate.latitude)),
+            .init(name: "longitude", value: String(format: "%.2f", coordinate.longitude)),
             .init(name: "current", value: "european_aqi,pm2_5,uv_index," + pollenKeys.joined(separator: ",")),
             .init(name: "timezone", value: "auto"),
         ]

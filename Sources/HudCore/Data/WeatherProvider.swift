@@ -24,8 +24,8 @@ public struct OpenMeteoWeatherProvider: WeatherProviding {
                         placeName: String) async throws -> HudSnapshot.Weather {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
         components.queryItems = [
-            .init(name: "latitude", value: String(format: "%.4f", coordinate.latitude)),
-            .init(name: "longitude", value: String(format: "%.4f", coordinate.longitude)),
+            .init(name: "latitude", value: String(format: "%.2f", coordinate.latitude)),
+            .init(name: "longitude", value: String(format: "%.2f", coordinate.longitude)),
             .init(name: "current", value: "temperature_2m,apparent_temperature,"
                   + "relative_humidity_2m,wind_speed_10m,weather_code,is_day"),
             .init(name: "hourly", value: "temperature_2m,weather_code,precipitation_probability,is_day"),
