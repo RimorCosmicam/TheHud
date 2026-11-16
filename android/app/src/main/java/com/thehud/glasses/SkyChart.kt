@@ -19,6 +19,7 @@ import androidx.compose.material.icons.rounded.WbTwilight
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -80,15 +81,19 @@ private fun planetColour(name: String) = when (name) {
 fun skyFacing(heading: Double, view: SkyView) = (((heading + view.pan) % 360) + 360) % 360
 
 @Composable
-fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, heading: () -> Double) {
+fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, heading: () -> Double,
+           size: Size = Size(HudTheme.CANVAS_WIDTH, HudTheme.CANVAS_HEIGHT)) {
     val facing = { skyFacing(heading(), view) }
     val selected = view.selected?.let { id -> SkyTarget.all(sky, overhead, view.layers).firstOrNull { it.id == id } }
-    Box(Modifier.size(HudTheme.CANVAS_WIDTH.dp, HudTheme.CANVAS_HEIGHT.dp)) {
-        SkyCanvas(sky, overhead, view.layers, { SkyProjection(facing(), view.fov, view.tilt) }, view.fov, selected)
+    // The whole canvas held up alone; the centre's size there.
+    val wide = size.width >= 1400f
+    Box(Modifier.size(size.width.dp, size.height.dp).clipToBounds()) {
+        SkyCanvas(sky, overhead, view.layers, { SkyProjection(facing(), view.fov, view.tilt, size) }, view.fov, selected)
         Box(Modifier.size(1100.dp, 700.dp).background(Brush.radialGradient(
             0f to Color.Black.copy(alpha = 0.85f), 0.19f to Color.Black.copy(alpha = 0.85f), 1f to Color.Transparent,
             center = Offset.Zero, radius = 640f)))
-        Column(Modifier.at(Rect(72f, 52f, 972f, 292f)), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.at(Rect(Offset(if (wide) 72f else 40f, if (wide) 52f else 36f), Size(minOf(900f, size.width - 80), 240f))),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 SkyBearing(facing)
                 if (view.isAdjusted) BasicText("${view.fov.roundToInt()}° WIDE", style = HudTheme.mont(16f, tracking = 2.5f, color = HudTheme.inkFaint),
@@ -111,7 +116,7 @@ fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, 
                 }
             }
         }
-        Box(Modifier.at(Rect(1000f, 56f, 1848f, 96f)), contentAlignment = Alignment.TopEnd) {
+        if (wide) Box(Modifier.at(Rect(1000f, 56f, 1848f, 96f)), contentAlignment = Alignment.TopEnd) {
             Row(Modifier.height(40.dp).background(Color.Black.copy(alpha = 0.92f), RoundedCornerShape(50)).padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 for (layer in SkyLayer.entries) {
@@ -125,7 +130,8 @@ fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, 
             }
         }
         selected?.let { t ->
-            Box(Modifier.at(Rect(72f, 760f, 1172f, 1040f)), contentAlignment = Alignment.BottomStart) {
+            Box(Modifier.at(Rect(Offset(if (wide) 72f else 40f, size.height - 320), Size(minOf(1100f, size.width - 80), 280f))),
+                contentAlignment = Alignment.BottomStart) {
                 Column(Modifier.background(Color.Black.copy(alpha = 0.93f), RoundedCornerShape(26.dp)).border(1.5.dp, HudTheme.edge, RoundedCornerShape(26.dp))
                     .padding(horizontal = 30.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     BasicText(if (t.isUp) t.kind.title else t.kind.title + " · BELOW THE HORIZON", style = HudTheme.mont(15f, tracking = 3f, color = HudTheme.accent))
@@ -140,7 +146,7 @@ fun SkyApp(sky: HudSnapshot.Sky, overhead: HudSnapshot.Overhead, view: SkyView, 
                 }
             }
         }
-        Box(Modifier.at(Rect(1200f, 1000f, 1848f, 1040f)), contentAlignment = Alignment.BottomEnd) {
+        if (wide) Box(Modifier.at(Rect(1200f, 1000f, 1848f, 1040f)), contentAlignment = Alignment.BottomEnd) {
             val parts = buildList {
                 if (SkyLayer.planes in view.layers && overhead.status.isNotEmpty()) add(overhead.status)
                 if (SkyLayer.planes in view.layers) add("AIRCRAFT · ADSB.LOL")

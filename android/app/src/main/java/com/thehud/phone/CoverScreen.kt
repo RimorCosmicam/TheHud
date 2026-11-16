@@ -47,6 +47,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Photo
+import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.FormatAlignLeft
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -132,6 +138,8 @@ import com.thehud.KeyboardTarget
 import com.thehud.NoteAction
 import com.thehud.PhoneAction
 import com.thehud.PhonePad
+import com.thehud.PhotosAction
+import com.thehud.PrompterAction
 import com.thehud.TimerAction
 import com.thehud.core.BrowserMetrics
 import com.thehud.core.HudArrangement
@@ -172,6 +180,9 @@ val HudPanelKind.icon: ImageVector
         HudPanelKind.note -> Icons.Rounded.StickyNote2
         HudPanelKind.captions -> Icons.Rounded.ClosedCaption
         HudPanelKind.youtube -> Icons.Rounded.SmartDisplay
+        HudPanelKind.calendar -> Icons.Rounded.CalendarMonth
+        HudPanelKind.photos -> Icons.Rounded.PhotoLibrary
+        HudPanelKind.prompter -> Icons.Rounded.FormatAlignLeft
     }
 
 /** A drag in progress, in root pixels, and where the miniature is, in the same pixels. */
@@ -189,7 +200,6 @@ private class Editor {
         val c = HudController
         val spot = spot(at, c.arrangement.strip)
         if (spot != null) {
-            if (!kind.isBig && spot == HudSpot.Middle) return
             c.perform(PhoneAction.Place(kind, spot))
         } else if (removing && c.arrangement.isPlaced(kind)) {
             // Dragged off the glasses: back with the icons.
@@ -217,7 +227,7 @@ fun CoverScreen() {
                     // The pad runs to the bottom edge: the cameras simply sit over a corner of it.
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         when {
-                            c.pad == PhonePad.app && c.solo?.hasPhoneControls == true -> AppControls(c.solo!!)
+                            c.pad == PhonePad.app && c.padApp != null -> AppControls(c.padApp!!)
                             c.pad == PhonePad.remote -> RemotePad(Modifier.fillMaxSize())
                             else -> Touchpad(Modifier.fillMaxSize())
                         }
@@ -364,7 +374,9 @@ private fun Miniature(editor: Editor, modifier: Modifier) {
         val mini = MiniLayout(Size(maxWidth.value, maxHeight.value), a.strip)
         val drag = editor.drag
         val target = drag?.let { editor.spot(it.second, a.strip) }
-        val draggingWidget = drag != null && !drag.first.isBig
+        // Any app can take the middle; only the centre's browser or Mac can spread over a side.
+        val spreading = drag != null && drag.first.isBig && a.centre?.kind == drag.first
+        val draggingWidget = drag != null && !spreading
 
         fun Modifier.at(r: Rect) = this.offset(r.left.dp, r.top.dp).size(r.width.dp, r.height.dp)
 
@@ -381,11 +393,11 @@ private fun Miniature(editor: Editor, modifier: Modifier) {
         if (bigs.isEmpty()) {
             Box(Modifier.at(mini.middle).border(1.dp, Color.White.copy(alpha = if (editing) 0.18f else 0.07f), RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center) {
-                BasicText(if (editing) "DRAG THE BROWSER HERE" else "OPEN", style = HudTheme.mont(8f, tracking = 1.5f, color = HudTheme.inkFaint))
+                BasicText(if (editing) "DRAG AN APP HERE" else "OPEN", style = HudTheme.mont(8f, tracking = 1.5f, color = HudTheme.inkFaint))
             }
         }
         for ((kind, frame) in bigs) Chip(kind, editor, big = true, Modifier.at(frame))
-        if (drag != null && drag.first.isBig && target != null) {
+        if (drag != null && target != null && (spreading || target == HudSpot.Middle)) {
             var frame = mini.middle
             if (target is HudSpot.Slot && mini.strip == null) {
                 frame = if (target.side == HudSide.left) Rect(0f, 0f, mini.middle.right, mini.size.height)
@@ -593,7 +605,7 @@ private fun IntrinsicTabWidth(title: String) = (title.length * 7).coerceIn(40, 1
 private fun PadHeader() {
     val c = HudController
     val view = LocalView.current
-    val app = c.solo?.takeIf { it.hasPhoneControls }
+    val app = c.padApp
     val choices = listOfNotNull(app?.let { PhonePad.app }, PhonePad.touchpad, PhonePad.remote)
     Row(Modifier.fillMaxWidth().height(30.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -668,6 +680,8 @@ private fun AppControls(kind: HudPanelKind) {
             HudPanelKind.captions -> CaptionsControls()
             HudPanelKind.youtube -> YouTubeControls()
             HudPanelKind.map -> MapsControls()
+            HudPanelKind.prompter -> PrompterControls(HudController.snapshot.prompter, HudController.snapshot.note)
+            HudPanelKind.photos -> PhotosControls(HudController.snapshot.photos, inGallery = HudController.solo == HudPanelKind.photos)
             else -> {}
         }
     }
@@ -758,6 +772,55 @@ private fun NoteControls(note: HudSnapshot.Note) {
             PadButton(Icons.Rounded.VerticalAlignTop, "TOP", Modifier.width(80.dp)) {
                 c.perform(PhoneAction.Note(NoteAction.Scroll(Float.NEGATIVE_INFINITY)))
             }
+        }
+    }
+}
+
+/** Start and stop, the speed, and back to the top. The words are the note's: WRITE edits it. */
+@Composable
+private fun PrompterControls(prompter: HudSnapshot.Prompter, note: HudSnapshot.Note) {
+    val c = HudController
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.height(96.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PadButton(Icons.Rounded.Remove, "SLOWER", Modifier.width(88.dp)) { c.perform(PhoneAction.Prompter(PrompterAction.Slower)) }
+            PadCard(Modifier.weight(1f).fillMaxHeight()) {
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    BasicText("SPEED", style = HudTheme.mont(9f, tracking = 2f, color = HudTheme.inkDim))
+                    BasicText("${prompter.step}", style = HudTheme.mont(34f))
+                }
+            }
+            PadButton(Icons.Rounded.Add, "FASTER", Modifier.width(88.dp)) { c.perform(PhoneAction.Prompter(PrompterAction.Faster)) }
+        }
+        PadButton(if (prompter.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (prompter.isRunning) "PAUSE" else "ROLL",
+            Modifier.fillMaxWidth().weight(1f), lit = true) { c.perform(PhoneAction.Prompter(PrompterAction.Toggle)) }
+        Row(Modifier.height(72.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PadButton(Icons.Rounded.VerticalAlignTop, "FROM THE TOP", Modifier.weight(1f)) { c.perform(PhoneAction.Prompter(PrompterAction.Restart)) }
+            PadButton(Icons.Rounded.Edit, if (note.text.isEmpty()) "WRITE" else "EDIT", Modifier.weight(1f)) { c.perform(PhoneAction.Note(NoteAction.Write)) }
+        }
+    }
+}
+
+/** Back and on through the library; fullscreen, open the picked one or go back to the grid. */
+@Composable
+private fun PhotosControls(photos: HudSnapshot.Photos, inGallery: Boolean) {
+    val c = HudController
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PadCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                BasicText("PHOTOS", style = HudTheme.mont(9f, tracking = 2f, color = HudTheme.inkDim))
+                BasicText(photos.caption.ifEmpty { if (photos.hasAccess) "No photos" else "Allow Photos in Settings" },
+                    style = HudTheme.mont(17f), maxLines = 2)
+                if (photos.count > 0) BasicText("${(if (inGallery) photos.selected else photos.current) + 1} OF ${photos.count}",
+                    style = HudTheme.mont(11f, tracking = 1.5f, color = HudTheme.inkDim))
+            }
+        }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PadButton(Icons.Rounded.ChevronLeft, "NEWER", Modifier.weight(1f)) { c.perform(PhoneAction.Photos(PhotosAction.Step(-1))) }
+            PadButton(Icons.Rounded.ChevronRight, "OLDER", Modifier.weight(1f)) { c.perform(PhoneAction.Photos(PhotosAction.Step(1))) }
+        }
+        if (inGallery) PadButton(if (photos.viewing) Icons.Rounded.GridView else Icons.Rounded.Photo,
+            if (photos.viewing) "BACK TO THE GRID" else "OPEN", Modifier.fillMaxWidth().height(72.dp)) {
+            c.perform(PhoneAction.Photos(PhotosAction.Open))
         }
     }
 }

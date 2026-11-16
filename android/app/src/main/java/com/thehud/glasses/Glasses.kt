@@ -70,6 +70,7 @@ fun GlassesRoot() {
                     mac = { LiveMac() },
                     mapGround = HudController.mapGround,
                     artwork = HudController.artwork,
+                    photos = HudController.photoImages,
                     standIn = false,
                     heading = { eased.doubleValue }))
             }

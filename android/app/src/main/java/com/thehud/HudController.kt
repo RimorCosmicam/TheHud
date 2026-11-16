@@ -21,6 +21,7 @@ import com.thehud.core.BrowserMetrics
 import com.thehud.core.ClockAppLayout
 import com.thehud.core.MapsLayout
 import com.thehud.core.MusicLayout
+import com.thehud.core.PhotosLayout
 import com.thehud.core.SkyCatalogue
 import com.thehud.core.SkyLayer
 import com.thehud.core.SkyModel
@@ -32,6 +33,7 @@ import com.thehud.core.YouTubeVideo
 import com.thehud.data.ActivityProvider
 import com.thehud.data.CalendarProvider
 import com.thehud.data.CaptionsEngine
+import com.thehud.data.PhotosProvider
 import com.thehud.data.LatLon
 import com.thehud.data.LocationProvider
 import com.thehud.data.MapGround
@@ -115,6 +117,19 @@ sealed interface PhoneAction {
     data class Maps(val action: MapsLayout.Target, val index: Int = 0) : PhoneAction
     data class Remote(val zone: RemoteZone, val phase: RemotePhase) : PhoneAction
     data class MacWindow(val id: Long?) : PhoneAction
+    /** The APP picker: this app in the centre. */
+    data class Centre(val kind: HudPanelKind) : PhoneAction
+    data class Prompter(val action: PrompterAction) : PhoneAction
+    data class Photos(val action: PhotosAction) : PhoneAction
+}
+
+enum class PrompterAction { Toggle, Faster, Slower, Restart }
+
+sealed interface PhotosAction {
+    /** The next photo (positive) or an earlier one: the one shown, or the gallery's pick. */
+    data class Step(val by: Int) : PhotosAction
+    /** Fullscreen: the picked photo alone, or back to the grid. */
+    data object Open : PhotosAction
 }
 
 enum class KeyboardTarget { address, page, note, mapSearch, mac, youtubeSearch }
@@ -170,7 +185,7 @@ sealed interface NoteAction {
 
 /** The apps whose controls can take the cover screen's lower half. */
 val HudPanelKind.hasPhoneControls get() = this in setOf(HudPanelKind.sky, HudPanelKind.music, HudPanelKind.clock,
-    HudPanelKind.captions, HudPanelKind.note, HudPanelKind.youtube, HudPanelKind.map)
+    HudPanelKind.captions, HudPanelKind.note, HudPanelKind.youtube, HudPanelKind.map, HudPanelKind.prompter, HudPanelKind.photos)
 
 val HudPanelKind.padTitle get() = if (this == HudPanelKind.clock) "TIMER" else title
 
@@ -227,6 +242,9 @@ object HudController {
         private set
     var artwork by mutableStateOf<ImageBitmap?>(null)
         private set
+    /** The photo library's pictures on show, by index. */
+    var photoImages by mutableStateOf<Map<Int, ImageBitmap>>(emptyMap())
+        private set
     /** Where the phone faces, unwrapped, at the sensor's own rate: read only where it is drawn. */
     val heading = androidx.compose.runtime.mutableDoubleStateOf(0.0)
     var youtube: YouTubePlayer? = null
@@ -253,6 +271,9 @@ object HudController {
 
     private lateinit var location: LocationProvider
     private lateinit var calendar: CalendarProvider
+    private lateinit var photos: PhotosProvider
+    private var photoScroll = 0
+    private var lastSlide = 0L
     private lateinit var activity: ActivityProvider
     private lateinit var music: MusicProvider
     private lateinit var captions: CaptionsEngine
@@ -299,6 +320,14 @@ object HudController {
         get() = GlassesLayout(arrangement, solo, clearView, snapshot.browser.tabs.size, activeTab, snapshot.browser.isFullscreen,
             snapshot.desktop.aspect, snapshot.browser.isEditingAddress)
 
+    /** The app whose controls the pad can show: the fullscreen one, or else the centre's. */
+    val padApp: HudPanelKind?
+        get() = when {
+            clearView -> null
+            solo != null -> solo?.takeIf { it.hasPhoneControls }
+            else -> arrangement.centre?.kind?.takeIf { it.hasPhoneControls && arrangement.isShown(it) }
+        }
+
     fun isOnGlasses(kind: HudPanelKind): Boolean =
         if (clearView) false else solo?.let { it == kind } ?: arrangement.isShown(kind)
 
@@ -330,6 +359,7 @@ object HudController {
         overhead = OverheadProvider(scope)
         location = LocationProvider(app, onHeading = { heading.doubleValue = it }) { minimap, at, _ -> located(minimap, at) }
         calendar = CalendarProvider(app)
+        photos = PhotosProvider(app, scope) { photosChanged() }
         activity = ActivityProvider(app, prefs) { snapshot = snapshot.copy(activity = it) }.also { it.goal = stepGoal }
         music = MusicProvider(app) { playing, art -> musicChanged(playing, art) }
         captions = CaptionsEngine(app) { snapshot = snapshot.copy(captions = it) }.also { it.language = captionsLanguage }
@@ -354,6 +384,8 @@ object HudController {
         connect = RemoteServer(app)
         connect.onPeer = { name ->
             remotePeer = name
+            // The iPhone points now: this phone's own aim stops.
+            sensorsChanged()
             if (name != null) {
                 // Paired: the code has done its job.
                 showingConnect = false
@@ -388,7 +420,12 @@ object HudController {
     private fun remoteMessage(o: org.json.JSONObject) {
         when (o.optString("t")) {
             "action" -> RemoteWire.action(o, this)?.let { perform(it) }
-            "gesture" -> RemoteWire.gesture(o)?.let { gesture(it) }
+            // The iPhone's moves are already in the glasses' points, as it would apply them itself.
+            "gesture" -> when (o.optString("g")) {
+                "move" -> aimed(o.optInt("dx").toFloat(), o.optInt("dy").toFloat())
+                "centre" -> { pointer = Pointer(); showCursor(); hover() }
+                else -> RemoteWire.gesture(o)?.let { gesture(it) }
+            }
             "draft" -> draftChanged(o.optString("text"))
             "submit" -> submitTyping()
             "endTyping" -> endTyping()
@@ -399,6 +436,8 @@ object HudController {
     fun startProviders() {
         activity.start()
         music.start()
+        photos.start()
+        photosChanged()
         sensorsChanged()
         lastCalendar = 0
         settingsVersion++
@@ -409,7 +448,7 @@ object HudController {
         val needsLocation = isOnGlasses(HudPanelKind.map) || isOnGlasses(HudPanelKind.sky) || tracker != null
         if (needsLocation) location.start() else location.stop()
         if (isOnGlasses(HudPanelKind.mac)) desktop.start() else desktop.stop()
-        if (pad == PhonePad.remote) remote.start() else remote.stop()
+        if (pad == PhonePad.remote && remotePeer == null) remote.start() else remote.stop()
         if (isOnGlasses(HudPanelKind.youtube)) refreshYouTube(snapshot.youtube.tab)
         else if (youtube?.state?.hasVideo == true) {
             youtube?.stop()
@@ -463,10 +502,26 @@ object HudController {
         val reading = timer.reading(System.currentTimeMillis())
         snapshot = snapshot.copy(clock = clock, timer = reading)
         if (reading.state == HudSnapshot.TimerState.done && previous != HudSnapshot.TimerState.done) timerDone()
+        agendaTick(now, is24)
+        slideshow()
         music.tick()
         captions.tick()
         skyTick()
         main.postDelayed(::tick, 1000L - System.currentTimeMillis() % 1000L)
+    }
+
+    private var lastAgendaMinute = -1L
+
+    /** The calendar app's day and month, read once a minute while it is on the glasses. */
+    private fun agendaTick(now: Date, is24: Boolean) {
+        val minute = now.time / 60_000
+        if (minute == lastAgendaMinute || !isOnGlasses(HudPanelKind.calendar)) return
+        lastAgendaMinute = minute
+        val at = now.time
+        scope.launch {
+            val agenda = withContext(Dispatchers.IO) { calendar.agendaApp(at, is24) }
+            snapshot = snapshot.copy(agenda = agenda)
+        }
     }
 
     private fun cal(d: Date, field: Int) = java.util.Calendar.getInstance().apply { time = d }.get(field)
@@ -485,6 +540,7 @@ object HudController {
     // ------------------------------------------------------------------ the map
 
     private val mapFillsCanvas get() = solo == HudPanelKind.map && !clearView
+    private val mapInCentre get() = solo == null && !clearView && arrangement.centre?.kind == HudPanelKind.map && arrangement.isShown(HudPanelKind.map)
 
     private fun located(minimap: HudSnapshot.Minimap, at: LatLon) {
         here = at
@@ -500,7 +556,7 @@ object HudController {
 
     private fun groundPlan(): GroundPlan {
         val span = mapSpan.toDouble()
-        return if (mapFillsCanvas) {
+        return if (mapFillsCanvas || mapInCentre) {
             val ppm = 470.0 / span
             val safe = GlassesLayout.safeFrame
             val room = max(40.0, span * 0.4)
@@ -822,10 +878,10 @@ object HudController {
         }.also { main.postDelayed(it, 2500) }
     }
 
-    private fun youtubeClick(p: Offset, alone: Boolean) {
+    private fun youtubeClick(p: Offset, size: androidx.compose.ui.geometry.Size, alone: Boolean) {
         val y = snapshot.youtube
         if (!alone) { if (y.hasVideo) youtube?.togglePlay() else perform(PhoneAction.Solo(HudPanelKind.youtube)); return }
-        when (val t = YouTubeAppLayout.target(p, y)) {
+        when (val t = YouTubeAppLayout.target(p, y, size)) {
             is YouTubeAppLayout.Target.Tab -> youtubeAction(YouTubeAction.Tab(t.tab))
             YouTubeAppLayout.Target.NowPlaying -> youtubeAction(YouTubeAction.Page(HudSnapshot.YouTube.Page.player))
             is YouTubeAppLayout.Target.Card -> y.list(y.tab).getOrNull(t.index)?.let(::playYouTube)
@@ -834,7 +890,7 @@ object HudController {
         }
     }
 
-    private fun youtubeScrolled(ticks: Int, alone: Boolean) {
+    private fun youtubeScrolled(ticks: Int, alone: Boolean, size: androidx.compose.ui.geometry.Size = com.thehud.core.fullAppSize) {
         val y = snapshot.youtube
         val watching = !alone || y.page == HudSnapshot.YouTube.Page.player
         youtubeScrollTicks += ticks
@@ -844,7 +900,7 @@ object HudController {
             youtubeScrollTicks -= step * 3
             if (watching) { if (y.hasVideo && !y.isLive) youtube?.seek(step * 5.0) }
             else snapshot = snapshot.copy(youtube = snapshot.youtube.copy(
-                scrollRow = (snapshot.youtube.scrollRow + step).coerceIn(0, YouTubeAppLayout.maxRow(y.list(y.tab).size))))
+                scrollRow = (snapshot.youtube.scrollRow + step).coerceIn(0, YouTubeAppLayout.maxRow(y.list(y.tab).size, size))))
         }
     }
 
@@ -855,6 +911,13 @@ object HudController {
     val overlayServiceEnabled get() = GlassesOverlayService.enabled(app)
 
     // ------------------------------------------------------------------ the remote
+
+    /** The iPhone pointed, or slid its thumb: the cursor moves as it would there. */
+    private fun aimed(dx: Float, dy: Float) {
+        pointer = pointer.moved(dx, dy)
+        showCursor()
+        hover()
+    }
 
     private fun remoteMoved(dx: Int, dy: Int) {
         if (pad != PhonePad.remote) return
@@ -922,7 +985,9 @@ object HudController {
     }
 
     private fun arrange(next: HudArrangement) {
+        val before = padApp
         arrangement = next
+        if (padApp != before) padFollows()
         scenes = scenes.toMutableList().also { it[sceneIndex] = it[sceneIndex].copy(arrangement = next) }
         prefs.edit().putString("scenes", json.encodeToString(ListSerializer(HudScene.serializer()), scenes))
             .putInt("scene", sceneIndex).apply()
@@ -932,7 +997,7 @@ object HudController {
     private fun panelsChanged() {
         when (keyboardTarget) {
             KeyboardTarget.address, KeyboardTarget.page -> if (!isOnGlasses(HudPanelKind.browser)) endTyping()
-            KeyboardTarget.note -> if (!isOnGlasses(HudPanelKind.note)) endTyping()
+            KeyboardTarget.note -> if (!isOnGlasses(HudPanelKind.note) && !isOnGlasses(HudPanelKind.prompter)) endTyping()
             KeyboardTarget.mapSearch -> if (!mapFillsCanvas) endTyping()
             KeyboardTarget.mac -> if (!isOnGlasses(HudPanelKind.mac)) endTyping()
             KeyboardTarget.youtubeSearch -> if (!isOnGlasses(HudPanelKind.youtube)) endTyping()
@@ -942,6 +1007,8 @@ object HudController {
             sensorsChanged()
             groundCheck()
             lastSky = 0
+            lastAgendaMinute = -1
+            photosChanged()
         }
     }
 
@@ -958,13 +1025,16 @@ object HudController {
             PhoneAction.Address -> if (keyboardTarget == KeyboardTarget.address) endTyping() else beginAddress()
             PhoneAction.Keyboard -> if (keyboardTarget != null) endTyping() else beginPageTyping()
             PhoneAction.Settings -> showingSettings = true
-            PhoneAction.ClearView -> { showAlone(null); clearView = !clearView; panelsChanged() }
+            PhoneAction.ClearView -> { showAlone(null); clearView = !clearView; padFollows(); panelsChanged() }
             is PhoneAction.TapPanel -> {
                 if (solo != null) { showAlone(null); panelsChanged(); return }
                 if (clearView) clearView = false
                 arrange(arrangement.toggleHidden(action.kind))
             }
             is PhoneAction.Solo -> { clearView = false; showAlone(action.kind); panelsChanged() }
+            is PhoneAction.Centre -> { clearView = false; showAlone(null); arrange(arrangement.setCentre(action.kind)) }
+            is PhoneAction.Prompter -> prompterAction(action.action)
+            is PhoneAction.Photos -> photosAction(action.action)
             is PhoneAction.Pad -> { pad = action.pad; sensorsChanged() }
             is PhoneAction.Music -> musicAction(action.action)
             PhoneAction.Captions -> captions.toggle()
@@ -995,9 +1065,101 @@ object HudController {
         if (kind == HudPanelKind.youtube && snapshot.youtube.hasVideo)
             snapshot = snapshot.copy(youtube = snapshot.youtube.copy(page = HudSnapshot.YouTube.Page.player))
         solo = kind
-        if (kind?.hasPhoneControls == true) pad = PhonePad.app
-        else if (pad == PhonePad.app) pad = PhonePad.touchpad
+        padFollows()
         if (::location.isInitialized) sensorsChanged()
+    }
+
+    /** An app with controls, alone or in the centre, brings them to the phone; when it goes, the pad returns. */
+    private fun padFollows() {
+        if (padApp != null) pad = PhonePad.app
+        else if (pad == PhonePad.app) pad = PhonePad.touchpad
+    }
+
+    // ------------------------------------------------------------------ teleprompter
+
+    /** Every change starts again from where it is now, so the glasses' smooth scrolling never jumps. */
+    private fun prompterAction(action: PrompterAction) {
+        val now = System.currentTimeMillis()
+        val p = snapshot.prompter
+        val anchored = p.copy(anchorOffset = p.offset(now), anchorTime = now)
+        val next = when (action) {
+            PrompterAction.Toggle -> anchored.copy(isRunning = !p.isRunning)
+            PrompterAction.Faster -> anchored.copy(speed = minOf(p.speed + 30, HudSnapshot.Prompter.MAX_SPEED))
+            PrompterAction.Slower -> anchored.copy(speed = maxOf(p.speed - 30, HudSnapshot.Prompter.MIN_SPEED))
+            PrompterAction.Restart -> anchored.copy(anchorOffset = 0f)
+        }
+        snapshot = snapshot.copy(prompter = next)
+    }
+
+    /** The wheel moves the words by hand, running or not. */
+    private fun prompterNudge(ticks: Int) {
+        val now = System.currentTimeMillis()
+        val p = snapshot.prompter
+        snapshot = snapshot.copy(prompter = p.copy(anchorOffset = maxOf(p.offset(now) + ticks * 24f, 0f), anchorTime = now))
+    }
+
+    // ------------------------------------------------------------------ photos
+
+    /** The library's count and the caption, and the pictures on show loaded: the gallery's page held up alone, otherwise the one photo. */
+    private fun photosChanged() {
+        if (!::photos.isInitialized) return
+        var p = snapshot.photos
+        val last = maxOf(photos.count - 1, 0)
+        p = p.copy(hasAccess = photos.hasAccess, count = photos.count, current = minOf(p.current, last),
+            selected = minOf(p.selected, last), scrollRow = minOf(p.scrollRow, PhotosLayout.maxRow(photos.count)))
+        val gallery = solo == HudPanelKind.photos && !clearView
+        p = p.copy(caption = photos.caption(if (gallery) p.selected else p.current))
+        if (p != snapshot.photos) snapshot = snapshot.copy(photos = p)
+        if (!isOnGlasses(HudPanelKind.photos)) {
+            photos.show(emptyList(), null)
+            if (photoImages.isNotEmpty()) photoImages = emptyMap()
+            return
+        }
+        val perPage = PhotosLayout.COLUMNS * PhotosLayout.ROWS
+        val first = p.scrollRow * PhotosLayout.COLUMNS
+        val page = if (gallery) (first until minOf(first + perPage, p.count)).toList() else emptyList()
+        photos.show(page, if (gallery) (if (p.viewing) p.selected else null) else p.current)
+        photoImages = photos.images
+    }
+
+    private fun photosAction(action: PhotosAction) {
+        val p = snapshot.photos
+        if (p.count <= 0) return
+        when (action) {
+            is PhotosAction.Step -> snapshot = snapshot.copy(photos = if (solo == HudPanelKind.photos) {
+                val selected = (p.selected + action.by).coerceIn(0, p.count - 1)
+                p.copy(selected = selected, scrollRow = PhotosLayout.row(selected, p.scrollRow))
+            } else {
+                lastSlide = System.currentTimeMillis()
+                p.copy(current = ((p.current + action.by) % p.count + p.count) % p.count)
+            })
+            PhotosAction.Open -> {
+                if (solo != HudPanelKind.photos) return
+                snapshot = snapshot.copy(photos = p.copy(viewing = !p.viewing))
+            }
+        }
+        photosChanged()
+    }
+
+    /** The gallery's wheel: a row at a time, or open, photo to photo. */
+    private fun photosScrolled(ticks: Int) {
+        photoScroll += ticks
+        val notches = photoScroll / 3
+        if (notches == 0) return
+        photoScroll -= notches * 3
+        if (snapshot.photos.viewing) return photosAction(PhotosAction.Step(notches))
+        snapshot = snapshot.copy(photos = snapshot.photos.copy(
+            scrollRow = (snapshot.photos.scrollRow + notches).coerceIn(0, PhotosLayout.maxRow(snapshot.photos.count))))
+        photosChanged()
+    }
+
+    /** The widget and the centre show a new photo every few seconds. */
+    private fun slideshow() {
+        val now = System.currentTimeMillis()
+        if (!isOnGlasses(HudPanelKind.photos) || solo == HudPanelKind.photos || snapshot.photos.count <= 1 || now - lastSlide < 8000) return
+        lastSlide = now
+        snapshot = snapshot.copy(photos = snapshot.photos.copy(current = (snapshot.photos.current + 1) % snapshot.photos.count))
+        photosChanged()
     }
 
     private fun timerAction(action: TimerAction) {
@@ -1196,7 +1358,8 @@ object HudController {
                 tab.click(inPage(hit.point), layout.browserFrame?.width ?: 0f, right)
                 if (!right) main.postDelayed({ tab.focusTakesText { if (it) beginPageTyping() } }, 120)
             }
-            is GlassesHit.Widget -> widgetClick(hit.kind, hit.point, hit.size, right)
+            is GlassesHit.Widget -> appClick(hit.kind, hit.point, hit.size, large = solo == hit.kind, right = right)
+            is GlassesHit.Centre -> appClick(hit.kind, hit.point, hit.size, large = true, right = right)
             is GlassesHit.Mac -> {
                 if (keyboardTarget != null && keyboardTarget != KeyboardTarget.mac) endTyping()
                 desktop.send(DesktopWire.Command.Click(hit.point.x.toDouble(), hit.point.y.toDouble(), if (right) 1 else 0))
@@ -1206,11 +1369,12 @@ object HudController {
         }
     }
 
-    private fun widgetClick(kind: HudPanelKind, p: Offset, size: androidx.compose.ui.geometry.Size, right: Boolean) {
-        val alone = solo == kind
+    /** Clicks on apps: as widgets, in the centre, or held up alone (`large` for the last two). */
+    private fun appClick(kind: HudPanelKind, p: Offset, size: androidx.compose.ui.geometry.Size, large: Boolean, right: Boolean) {
+        val alone = large
         when (kind) {
             HudPanelKind.note -> if (keyboardTarget == KeyboardTarget.note) endTyping() else beginNote()
-            HudPanelKind.clock -> if (alone && ClockAppLayout.timerCard.contains(p)) {
+            HudPanelKind.clock -> if (alone && ClockAppLayout.timerCard(size).contains(p)) {
                 timer = if (right) timer.reset() else timer.toggle(System.currentTimeMillis())
                 snapshot = snapshot.copy(timer = timer.reading(System.currentTimeMillis()))
             }
@@ -1224,14 +1388,24 @@ object HudController {
             HudPanelKind.youtube -> {
                 if (alone && right && snapshot.youtube.page == HudSnapshot.YouTube.Page.player)
                     youtubeAction(YouTubeAction.Page(HudSnapshot.YouTube.Page.browse))
-                else if (!right) youtubeClick(p, alone)
+                else if (!right) youtubeClick(p, size, alone)
             }
-            HudPanelKind.map -> if (alone) {
+            HudPanelKind.prompter -> prompterAction(if (right) PrompterAction.Restart else PrompterAction.Toggle)
+            HudPanelKind.photos -> if (solo == HudPanelKind.photos) {
+                // The gallery: a click picks a photo, and on the picked one opens it; open, a click goes back to the grid.
+                val ph = snapshot.photos
+                if (ph.viewing) snapshot = snapshot.copy(photos = ph.copy(viewing = false))
+                else if (!right) PhotosLayout.photo(p, size, ph)?.let { i ->
+                    snapshot = snapshot.copy(photos = ph.copy(selected = i, viewing = i == ph.selected))
+                }
+                photosChanged()
+            } else if (!right) photosAction(PhotosAction.Step(1))
+            HudPanelKind.map -> if (solo == HudPanelKind.map) {
                 val canvas = p + GlassesLayout.safeFrame.topLeft
                 val hit = MapsLayout(snapshot.maps.results.size, snapshot.maps.navigation != null).hitTest(canvas)
                 mapAction(hit.target, hit.index)
             }
-            HudPanelKind.sky -> if (alone) {
+            HudPanelKind.sky -> if (solo == HudPanelKind.sky) {
                 if (right) skyAction(SkyAction.Recentre) else skyClick(p + GlassesLayout.safeFrame.topLeft)
             }
             else -> {}
@@ -1253,7 +1427,10 @@ object HudController {
                 desktop.send(DesktopWire.Command.Scroll(hit.point.x.toDouble(), hit.point.y.toDouble(), 0.0, (-ticks * 48).toDouble()))
                 return
             }
+            is GlassesHit.Centre -> { centreScrolled(hit.kind, ticks, hit.point, hit.size); return }
             is GlassesHit.Widget -> when (hit.kind) {
+                HudPanelKind.photos -> { if (solo == HudPanelKind.photos) photosScrolled(ticks); return }
+                HudPanelKind.prompter -> { if (solo == HudPanelKind.prompter) prompterNudge(ticks); return }
                 HudPanelKind.clock -> {
                     // The wheel sets the timer: up for more.
                     if (solo == HudPanelKind.clock && ClockAppLayout.timerCard.contains(hit.point)) {
@@ -1263,7 +1440,7 @@ object HudController {
                     }
                     return
                 }
-                HudPanelKind.youtube -> { youtubeScrolled(ticks, solo == HudPanelKind.youtube); return }
+                HudPanelKind.youtube -> { youtubeScrolled(ticks, solo == HudPanelKind.youtube, hit.size); return }
                 else -> if (solo != null) return
             }
             else -> {}
@@ -1272,6 +1449,28 @@ object HudController {
         val hit = layout.hitTest(pointer.position)
         val point = (hit as? GlassesHit.Page)?.point ?: Offset(frame.width / 2, frame.height / 2)
         browser?.scroll(ticks, inPage(point), frame.width)
+    }
+
+    /** The wheel over the app in the centre. */
+    private fun centreScrolled(kind: HudPanelKind, ticks: Int, p: Offset, size: androidx.compose.ui.geometry.Size) {
+        when (kind) {
+            HudPanelKind.clock -> if (ClockAppLayout.timerCard(size).contains(p)) {
+                timer = timer.adjust(-ticks)
+                prefs.edit().putInt("timerSeconds", timer.setSeconds).apply()
+                snapshot = snapshot.copy(timer = timer.reading(System.currentTimeMillis()))
+            }
+            HudPanelKind.youtube -> youtubeScrolled(ticks, true, size)
+            HudPanelKind.note -> snapshot = snapshot.copy(note = snapshot.note.copy(scroll = maxOf(snapshot.note.scroll + ticks * 40f, 0f)))
+            HudPanelKind.photos -> {
+                photoScroll += ticks
+                val notches = photoScroll / 3
+                if (notches != 0) { photoScroll -= notches * 3; photosAction(PhotosAction.Step(notches)) }
+            }
+            HudPanelKind.prompter -> prompterNudge(ticks)
+            HudPanelKind.sky -> skyAction(SkyAction.Zoom(1.08.pow(ticks)))
+            HudPanelKind.map -> zoomMap(1.1.pow(ticks))
+            else -> {}
+        }
     }
 
     /** Panel points to the page's: below the bar, when the bar shows. */

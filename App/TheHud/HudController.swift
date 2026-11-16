@@ -921,6 +921,8 @@ final class HudController: ObservableObject {
         case (.scroll, .ended):
             remoteRail.end()
             remote.release()
+        case (.centre, .ended) where isRemote:
+            remoteLink.send(RemoteWire.centreCursor())
         case (.centre, .ended):
             pointer.place(at: CGPoint(x: HudTheme.glassesSize.width / 2, y: HudTheme.glassesSize.height / 2))
             snapshot.cursor = pointer.position

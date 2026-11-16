@@ -26,9 +26,102 @@ data class HudSnapshot(
     val captions: Captions = Captions.preview,
     val youtube: YouTube = YouTube.preview,
     val browser: Browser = Browser(),
+    /** Today and this month, from the phone's calendars. */
+    val agenda: Agenda = Agenda.preview,
+    /** The photo library; the pictures come separately, by index. */
+    val photos: Photos = Photos.preview,
+    /** The teleprompter, which reads the note. */
+    val prompter: Prompter = Prompter(),
     /** Where the pointer is, in canvas points. Null hides it. */
     val cursor: Offset? = null,
 ) {
+    /** Today and this month, from the phone's calendars: the calendar app, as the iPhone's. */
+    data class Agenda(
+        /** False until the calendars may be read; the app says so rather than showing nothing. */
+        val hasAccess: Boolean = true,
+        /** "MONDAY · 16 NOVEMBER". */
+        val dayTitle: String = "",
+        /** Today, all-day first, then by start. */
+        val today: List<Entry> = emptyList(),
+        /** Minutes since midnight, for the timeline's now line. */
+        val nowMinute: Int = 0,
+        /** What comes next (or is on now), and how soon: "IN 25 MIN", "NOW", "AT 18:40". */
+        val next: Entry? = null,
+        val nextIn: String = "",
+        val later: List<Entry> = emptyList(),
+        /** "NOVEMBER 2026". */
+        val monthTitle: String = "",
+        /** "MON" … "SUN", in the order the phone's calendar starts its week. */
+        val weekdays: List<String> = emptyList(),
+        /** Whole weeks covering the month: 35 or 42 days. */
+        val days: List<Day> = emptyList(),
+    ) {
+        data class Entry(val title: String, val time: String, val endTime: String = "", val startMinute: Int = 0,
+                         val endMinute: Int = 0, val allDay: Boolean = false, val location: String = "", val tint: Int = 0)
+        data class Day(val number: Int, val inMonth: Boolean = true, val isToday: Boolean = false,
+                       val titles: List<String> = emptyList(), val more: Int = 0)
+
+        companion object {
+            val preview: Agenda = run {
+                val today = listOf(
+                    Entry("Ana's birthday", "ALL DAY", allDay = true, tint = 2),
+                    Entry("Stand-up", "09:00", "09:15", 540, 555, tint = 0),
+                    Entry("Design review", "10:30", "11:30", 630, 690, location = "Room 4", tint = 1),
+                    Entry("Lunch with Rui", "13:00", "14:00", 780, 840, location = "Time Out Market", tint = 3),
+                    Entry("Ship the HUD build", "16:00", "17:30", 960, 1050, tint = 0),
+                    Entry("Flight to Porto", "18:40", "19:40", 1120, 1180, location = "Gate B32", tint = 4),
+                )
+                val sample = mapOf(3 to listOf("Dentist"), 7 to listOf("Market"), 10 to listOf("Review", "Gym"),
+                    15 to listOf("Design review", "Lunch with Rui", "Ship"), 18 to listOf("Porto"), 19 to listOf("Porto"),
+                    21 to listOf("Dinner"), 24 to listOf("Release"), 27 to listOf("Ana", "Cinema"))
+                Agenda(dayTitle = "WEDNESDAY · 15 NOVEMBER", today = today, nowMinute = 9 * 60 + 41, next = today[2],
+                    nextIn = "IN 49 MIN", later = listOf(today[3], today[4]), monthTitle = "NOVEMBER 2026",
+                    weekdays = listOf("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"),
+                    days = (0 until 35).map { cell ->
+                        val n = cell - 5 + 1
+                        when {
+                            n < 1 -> Day(26 + cell, inMonth = false)
+                            n > 30 -> Day(n - 30, inMonth = false)
+                            else -> sample[n].orEmpty().let { Day(n, isToday = n == 15, titles = it.take(3), more = max(it.size - 3, 0)) }
+                        }
+                    })
+            }
+        }
+    }
+
+    /** The phone's photo library, newest first. */
+    data class Photos(
+        val hasAccess: Boolean = true,
+        val count: Int = 0,
+        /** The one shown: the widget's slideshow and the centre. */
+        val current: Int = 0,
+        /** Fullscreen: the gallery's picked photo, the first row shown, and whether it is open. */
+        val selected: Int = 0,
+        val scrollRow: Int = 0,
+        val viewing: Boolean = false,
+        /** "12 OCTOBER 2026", for whichever is shown. */
+        val caption: String = "",
+    ) {
+        companion object { val preview = Photos(count = 248, current = 3, selected = 3, caption = "12 OCTOBER 2026") }
+    }
+
+    /**
+     * The teleprompter reads the note. Scrolling is worked out from when it last changed, so the
+     * glasses move it smoothly every frame without anything being sent.
+     */
+    data class Prompter(
+        val isRunning: Boolean = false,
+        /** Points a second. */
+        val speed: Double = 60.0,
+        val anchorOffset: Float = 0f,
+        /** System.currentTimeMillis() at the anchor. */
+        val anchorTime: Long = 0L,
+    ) {
+        fun offset(at: Long): Float = if (!isRunning) anchorOffset else anchorOffset + ((at - anchorTime) / 1000.0 * speed).toFloat()
+        /** The speed as the phone shows it: 1 to 10. */
+        val step: Int get() = Math.round(speed / 30).toInt()
+        companion object { const val MIN_SPEED = 30.0; const val MAX_SPEED = 300.0 }
+    }
     data class Clock(
         val time: String,
         val meridiem: String? = null,
@@ -344,6 +437,7 @@ data class HudSnapshot(
     companion object {
         /** What the device starts from: the time, and nothing it has not been told. */
         val blank = HudSnapshot(weather = null, minimap = Minimap.locating, activity = null, music = null,
+            agenda = Agenda(), photos = Photos(),
             captions = Captions(), youtube = YouTube())
     }
 }

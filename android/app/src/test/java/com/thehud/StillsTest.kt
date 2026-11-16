@@ -72,6 +72,18 @@ class StillsTest {
     @Test fun sky() = shot("glasses-sky", snapshot.copy(cursor = null, sky = skyAt(full = true),
         skyView = SkyView(selected = "moon")), GlassesLayout(solo = HudPanelKind.sky))
 
+    // Any app in the centre, and the new apps alone.
+    private fun centre(kind: HudPanelKind) = GlassesLayout(HudArrangement.standard.setCentre(kind))
+    @Test fun centreClock() = shot("glasses-centre-clock", snapshot.copy(cursor = null), centre(HudPanelKind.clock))
+    @Test fun centreCalendar() = shot("glasses-centre-calendar", snapshot.copy(cursor = null), centre(HudPanelKind.calendar))
+    @Test fun centrePrompter() = shot("glasses-centre-prompter", snapshot.copy(cursor = null,
+        note = HudSnapshot.Note("Good morning. Today we ship the heads-up display: three apps, one centre, and the phone as the remote.")),
+        centre(HudPanelKind.prompter))
+    @Test fun centreYouTube() = shot("glasses-centre-youtube", snapshot.copy(cursor = null), centre(HudPanelKind.youtube))
+    @Test fun centreMusic() = shot("glasses-centre-music", snapshot.copy(cursor = null), centre(HudPanelKind.music))
+    @Test fun calendar() = shot("glasses-calendar", snapshot.copy(cursor = null), GlassesLayout(solo = HudPanelKind.calendar))
+    @Test fun photos() = shot("glasses-photos", snapshot.copy(cursor = null), GlassesLayout(solo = HudPanelKind.photos))
+
     @Test fun desk2() = shot("glasses-mac", snapshot.copy(cursor = null), GlassesLayout(HudScene.presets[0].arrangement))
 
     private fun skyAt(full: Boolean = false): HudSnapshot.Sky {

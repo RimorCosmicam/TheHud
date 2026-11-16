@@ -30,10 +30,24 @@ class CoreTest {
         assertTrue(hidden.toggleHidden(HudPanelKind.weather).isShown(HudPanelKind.weather))
     }
 
+    @Test fun anyAppTakesTheCentre() {
+        val a = standard.setCentre(HudPanelKind.calendar)
+        assertEquals(HudPanelKind.calendar, a.centre?.kind)
+        assertTrue(a.isShown(HudPanelKind.calendar))
+        // And back with the picker.
+        assertEquals(HudPanelKind.browser, a.setCentre(HudPanelKind.browser).centre?.kind)
+        // A widget moved into the centre swaps with what was there; the wheel and clicks find it.
+        val clock = standard.setCentre(HudPanelKind.clock)
+        assertEquals(HudPanelKind.clock, clock.centre?.kind)
+        assertFalse(HudPanelKind.clock in clock.left)
+        val hit = GlassesLayout(clock).let { it.hitTest(it.centre!!.second.center) }
+        assertTrue(hit is GlassesHit.Centre && hit.kind == HudPanelKind.clock)
+    }
+
     @Test fun placingOnATakenSlotSwaps() {
         val moved = standard.place(HudPanelKind.clock, HudSpot.Slot(HudSide.left, 2))
         assertEquals(HudPanelKind.clock, moved.left[2])
-        assertEquals(HudPanelKind.note, moved.left[0])
+        assertEquals(HudPanelKind.map, moved.left[0])
     }
 
     @Test fun theBrowserTakesTheRestOfTheCanvas() {
@@ -51,7 +65,8 @@ class CoreTest {
         val row = standard.setStrip(HudEdge.top)
         val layout = GlassesLayout(row)
         val frames = layout.widgetFrames
-        assertEquals(4, frames.size)
+        // The standard's three widgets, along the top.
+        assertEquals(3, frames.size)
         assertTrue(frames.all { it.second.top == 64f })
         assertTrue(layout.browserFrame!!.top > frames[0].second.bottom)
     }

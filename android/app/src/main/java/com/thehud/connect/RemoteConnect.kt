@@ -14,6 +14,8 @@ import com.thehud.HudController
 import com.thehud.MusicAction
 import com.thehud.NoteAction
 import com.thehud.PhoneAction
+import com.thehud.PhotosAction
+import com.thehud.PrompterAction
 import com.thehud.SkyAction
 import com.thehud.TimerAction
 import com.thehud.YouTubeAction
@@ -234,8 +236,20 @@ object RemoteWire {
         "closeTab" -> PhoneAction.CloseTab(o.optInt("i"))
         "tapPanel" -> kind(o)?.let { PhoneAction.TapPanel(it) }
         "solo" -> kind(o)?.let { PhoneAction.Solo(it) }
-        // The app picker: here only the browser and the Mac have the middle.
-        "centre" -> kind(o)?.takeIf { it.isBig }?.let { PhoneAction.Place(it, HudSpot.Middle) }
+        // The APP picker: any app in the centre, as on the iPhone.
+        "centre" -> kind(o)?.let { PhoneAction.Centre(it) }
+        "prompter" -> when (o.optString("c")) {
+            "toggle" -> PrompterAction.Toggle
+            "faster" -> PrompterAction.Faster
+            "slower" -> PrompterAction.Slower
+            "restart" -> PrompterAction.Restart
+            else -> null
+        }?.let { PhoneAction.Prompter(it) }
+        "photos" -> when (o.optString("c")) {
+            "step" -> PhoneAction.Photos(PhotosAction.Step(o.optInt("by", 1)))
+            "open" -> PhoneAction.Photos(PhotosAction.Open)
+            else -> null
+        }
         "place" -> kind(o)?.let { k -> spot(o.optString("spot"))?.let { PhoneAction.Place(k, it) } }
         "scene" -> PhoneAction.Scene(o.optInt("i"))
         "resetScene" -> PhoneAction.ResetScene(o.optInt("i"))
@@ -342,6 +356,10 @@ object RemoteWire {
             .put("query", y.query).put("isEditingQuery", y.isEditingQuery).put("home", videos(y.home))
             .put("subscriptions", videos(y.subscriptions)).put("results", videos(y.results))
             .put("upNext", videos(y.upNext)).put("queue", videos(y.queue)))
+        val p = s.photos
+        o.put("photos", JSONObject().put("hasAccess", p.hasAccess).put("count", p.count).put("current", p.current)
+            .put("selected", p.selected).put("scrollRow", p.scrollRow).put("viewing", p.viewing).put("caption", p.caption))
+        o.put("prompter", JSONObject().put("isRunning", s.prompter.isRunning).put("speed", s.prompter.speed))
         return o.toString()
     }
 }

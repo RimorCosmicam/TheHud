@@ -61,6 +61,12 @@ fun youtubeVideoBox(snapshot: HudSnapshot, layout: com.thehud.core.GlassesLayout
         return YouTubeAppLayout.tileVideo.translate(inset) to 12f
     }
     if (layout.solo != null) return null
+    layout.centreApp?.let { (kind, frame) ->
+        if (kind == com.thehud.core.HudPanelKind.youtube) {
+            val box = if (y.page == HudSnapshot.YouTube.Page.player) YouTubeAppLayout.centreVideo(frame.size) else YouTubeAppLayout.tileVideo(frame.size)
+            return box.translate(frame.topLeft) to 12f
+        }
+    }
     return layout.widgetFrames.firstOrNull { it.first == com.thehud.core.HudPanelKind.youtube }?.second?.let { it to HudTheme.CORNER }
 }
 
@@ -138,10 +144,11 @@ fun YouTubeWidget(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean) {
 }
 
 @Composable
-fun YouTubeApp(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean, hover: Offset?) {
-    val target = hover?.let { YouTubeAppLayout.target(it, y) }
+fun YouTubeApp(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean, hover: Offset?, size: Size = YouTubeAppLayout.size) {
+    val target = hover?.let { YouTubeAppLayout.target(it, y, size) }
     val shape = RoundedCornerShape(HudTheme.CORNER.dp)
-    Box(Modifier.fillMaxSize().hole(if (live && y.hasVideo) YouTubeAppLayout.tileVideo else null, 12f)
+    val wide = YouTubeAppLayout.wide(size)
+    Box(Modifier.fillMaxSize().hole(if (live && y.hasVideo) YouTubeAppLayout.tileVideo(size) else null, 12f)
         .clip(shape).background(HudTheme.surface).border(1.dp, HudTheme.edge, shape)) {
         y.tabs.forEachIndexed { i, tab ->
             YtChip(tab.title, tab == HudSnapshot.YouTube.Tab.search, y.tab == tab, target == YouTubeAppLayout.Target.Tab(tab),
@@ -149,7 +156,8 @@ fun YouTubeApp(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean, hover: O
         }
         if (y.tab == HudSnapshot.YouTube.Tab.search) {
             val last = YouTubeAppLayout.tabFrame(y.tabs.size - 1, y.tabs)
-            Box(Modifier.at(Rect(Offset(last.right + 24, last.top), Size(YouTubeAppLayout.nowPlayingTile.left - last.right - 48, last.height))),
+            Box(Modifier.at(Rect(Offset(last.right + 24, last.top),
+                Size(maxOf((if (wide) YouTubeAppLayout.nowPlayingTile(size).left else size.width) - last.right - 48, 0f), last.height))),
                 contentAlignment = Alignment.CenterStart) {
                 BasicText(buildString {
                     if (y.query.isEmpty() && !y.isEditingQuery) append("Search from the phone") else append("“${y.query}”")
@@ -159,11 +167,11 @@ fun YouTubeApp(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean, hover: O
                 }, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (y.hasVideo) NowPlayingTile(y, live, standIn, target == YouTubeAppLayout.Target.NowPlaying, Modifier.at(YouTubeAppLayout.nowPlayingTile))
+        if (y.hasVideo) NowPlayingTile(y, live, standIn, target == YouTubeAppLayout.Target.NowPlaying, Modifier.at(YouTubeAppLayout.nowPlayingTile(size)))
 
         val list = y.list(y.tab)
         if (list.isEmpty()) {
-            Box(Modifier.at(Rect(72f, 150f, 1720f, 750f)), contentAlignment = Alignment.Center) {
+            Box(Modifier.at(Rect(Offset(72f, 150f), Size(size.width - 144, size.height - 300))), contentAlignment = Alignment.Center) {
                 BasicText(when {
                     y.loading -> "Loading…"
                     y.problem.isNotEmpty() -> y.problem
@@ -173,14 +181,17 @@ fun YouTubeApp(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean, hover: O
                 }, style = HudTheme.mont(30f, FontWeight.SemiBold, color = HudTheme.inkFaint))
             }
         } else {
-            val first = y.scrollRow * YouTubeAppLayout.COLUMNS
-            for (slot in 0 until YouTubeAppLayout.COLUMNS * YouTubeAppLayout.VISIBLE_ROWS) {
+            val columns = YouTubeAppLayout.columns(size)
+            val visibleRows = YouTubeAppLayout.visibleRows(size)
+            val first = y.scrollRow * columns
+            for (slot in 0 until columns * visibleRows) {
                 val video = list.getOrNull(first + slot) ?: continue
+                val frame = YouTubeAppLayout.cardFrame(slot, size)
                 VideoCard(video, y.queue.indexOf(video).takeIf { it >= 0 }, video.id == y.videoId,
-                    target == YouTubeAppLayout.Target.Card(first + slot), Modifier.at(YouTubeAppLayout.cardFrame(slot)))
+                    target == YouTubeAppLayout.Target.Card(first + slot), Modifier.at(frame), frame.width)
             }
-            val rows = (list.size + YouTubeAppLayout.COLUMNS - 1) / YouTubeAppLayout.COLUMNS
-            if (rows > YouTubeAppLayout.VISIBLE_ROWS) {
+            val rows = (list.size + columns - 1) / columns
+            if (rows > visibleRows && size == YouTubeAppLayout.size) {
                 BasicText("ROWS ${y.scrollRow + 1}–${min(y.scrollRow + 2, rows)} OF $rows · SCROLL FOR MORE",
                     style = HudTheme.mont(18f, tracking = 3f, color = HudTheme.inkFaint), modifier = Modifier.at(Rect(72f, 872f, 1720f, 902f)))
             }
@@ -231,9 +242,10 @@ fun Thumbnail(video: YouTubeVideo, corner: Float, modifier: Modifier, badge: Flo
 }
 
 @Composable
-private fun VideoCard(video: YouTubeVideo, queued: Int?, playing: Boolean, hovered: Boolean, modifier: Modifier) {
+private fun VideoCard(video: YouTubeVideo, queued: Int?, playing: Boolean, hovered: Boolean, modifier: Modifier,
+                      width: Float = YouTubeAppLayout.CARD_WIDTH) {
     Column(modifier.scale(if (hovered) 1.02f else 1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.size(YouTubeAppLayout.CARD_WIDTH.dp, YouTubeAppLayout.THUMB_HEIGHT.dp)
+        Box(Modifier.size(width.dp, (width * YouTubeAppLayout.THUMB_HEIGHT / YouTubeAppLayout.CARD_WIDTH).dp)
             .border(4.dp, if (hovered) HudTheme.accent else Color.Transparent, RoundedCornerShape(18.dp))) {
             Thumbnail(video, 18f, Modifier.fillMaxSize())
             if (playing || queued != null) {
@@ -272,6 +284,28 @@ fun YouTubeFullscreen(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Watching in the centre: the video as large as the centre allows, with what it is and how far
+ * along under it. The live video is the layer underneath; its place is cut out.
+ */
+@Composable
+fun YouTubeCentreWatch(y: HudSnapshot.YouTube, live: Boolean, standIn: Boolean, size: Size) {
+    val video = YouTubeAppLayout.centreVideo(size)
+    val shape = RoundedCornerShape(HudTheme.CORNER.dp)
+    Box(Modifier.fillMaxSize().hole(if (live && y.hasVideo) video else null, 16f)
+        .clip(shape).background(HudTheme.surface).border(1.dp, HudTheme.edge, shape)) {
+        if (!live) Box(Modifier.at(video).clip(RoundedCornerShape(16.dp)).background(Color.Black)) { if (standIn) StandInFrame(Modifier.fillMaxSize()) }
+        Column(Modifier.at(Rect(Offset(video.left, video.bottom + 24), Size(video.width, size.height - video.bottom - 48))),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            BasicText(if (y.isAd) "AD" else if (y.isPlaying) "NOW PLAYING" else "PAUSED",
+                style = HudTheme.mont(16f, tracking = 3f, color = if (y.isPlaying) HudTheme.accent else HudTheme.inkDim))
+            BasicText(y.title, style = HudTheme.mont(32f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            BasicText(y.channel, style = HudTheme.mont(22f, FontWeight.SemiBold, color = HudTheme.inkDim), maxLines = 1)
+            if (y.duration > 0) ProgressLine(y.progress, Modifier.padding(top = 6.dp).fillMaxWidth().height(6.dp))
         }
     }
 }

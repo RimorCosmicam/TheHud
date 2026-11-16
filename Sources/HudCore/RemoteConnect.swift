@@ -73,6 +73,9 @@ public struct RemoteState: Sendable {
     public var note = HudSnapshot.Note()
     public var captions = HudSnapshot.Captions()
     public var youtube = HudSnapshot.YouTube()
+    public var photos = HudSnapshot.Photos()
+    /// Running and how fast; where the words are is the Android phone's business.
+    public var prompter = HudSnapshot.Prompter()
 
     public init() {}
 
@@ -86,6 +89,8 @@ public struct RemoteState: Sendable {
         s.note = note
         s.captions = captions
         s.youtube = youtube
+        s.photos = photos
+        s.prompter = prompter
         return s
     }
 }
@@ -161,8 +166,20 @@ public enum RemoteWire {
             case let .dequeue(i): return act("youtube", ["c": "dequeue", "i": i])
             case let .page(p): return act("youtube", ["c": "page", "page": p == .player ? "player" : "browse"])
             }
+        case let .prompter(p):
+            switch p {
+            case .toggle: return act("prompter", ["c": "toggle"])
+            case .faster: return act("prompter", ["c": "faster"])
+            case .slower: return act("prompter", ["c": "slower"])
+            case .restart: return act("prompter", ["c": "restart"])
+            }
+        case let .photos(p):
+            switch p {
+            case let .step(by): return act("photos", ["c": "step", "by": by])
+            case .open: return act("photos", ["c": "open"])
+            }
         case .settings, .editGlasses, .showWindows, .pad, .remote, .captionsSessions, .captionsLanguage,
-             .prompter, .photos, .remoteConnect:
+             .remoteConnect:
             return nil
         }
     }
@@ -196,6 +213,9 @@ public enum RemoteWire {
         case .dragEnd: return g("dragEnd")
         }
     }
+
+    /// The remote's middle: the cursor back to the middle of the glasses.
+    public static func centreCursor() -> [String: Any] { ["t": "gesture", "g": "centre"] }
 
     // ------------------------------------------------------------------ from the Android phone
 
@@ -271,6 +291,19 @@ public enum RemoteWire {
             v.upNext = videos(y["upNext"])
             v.queue = videos(y["queue"])
             s.youtube = v
+        }
+        if let p = o["photos"] as? [String: Any] {
+            s.photos.hasAccess = p["hasAccess"] as? Bool ?? true
+            s.photos.count = p["count"] as? Int ?? 0
+            s.photos.current = p["current"] as? Int ?? 0
+            s.photos.selected = p["selected"] as? Int ?? 0
+            s.photos.scrollRow = p["scrollRow"] as? Int ?? 0
+            s.photos.viewing = p["viewing"] as? Bool ?? false
+            s.photos.caption = p["caption"] as? String ?? ""
+        }
+        if let p = o["prompter"] as? [String: Any] {
+            s.prompter.isRunning = p["isRunning"] as? Bool ?? false
+            s.prompter.speed = (p["speed"] as? NSNumber)?.doubleValue ?? 60
         }
         return s
     }

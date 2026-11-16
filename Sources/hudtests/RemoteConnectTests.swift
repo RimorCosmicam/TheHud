@@ -42,6 +42,12 @@ func runRemoteConnectTests() {
         expect(RemoteWire.message(for: .settings) == nil)
         expect(RemoteWire.message(for: .editGlasses(true)) == nil)
         expect(RemoteWire.message(for: .pad(.touchpad)) == nil)
+        // Any app in the centre, and the new apps' buttons, act on the Android phone.
+        expectEqual(RemoteWire.message(for: .centre(.photos))?["kind"] as? String, "photos")
+        expectEqual(RemoteWire.message(for: .prompter(.faster))?["c"] as? String, "faster")
+        expectEqual(RemoteWire.message(for: .photos(.step(-1)))?["by"] as? Int, -1)
+        expectEqual(RemoteWire.message(for: .photos(.open))?["c"] as? String, "open")
+        expectEqual(RemoteWire.centreCursor()["g"] as? String, "centre")
         let move = RemoteWire.message(for: GestureEvent.move(dx: 3, dy: -4, isDragging: true))
         expectEqual(move["g"] as? String, "move")
         expectEqual(move["dy"] as? Int, -4)
@@ -69,7 +75,9 @@ func runRemoteConnectTests() {
         "youtube":{"hasVideo":true,"videoId":"v1","title":"T","channel":"C","isPlaying":false,"isLive":false,\
         "elapsed":3,"duration":60,"isAd":false,"canSkipAd":false,"notice":"","page":"player","tab":"search",\
         "showsSubscriptions":false,"query":"cats","isEditingQuery":false,"home":[],"subscriptions":[],\
-        "results":[{"id":"r1","title":"Cats","channel":"Ch","duration":"1:00","meta":"1K views"}],"upNext":[],"queue":[]}}
+        "results":[{"id":"r1","title":"Cats","channel":"Ch","duration":"1:00","meta":"1K views"}],"upNext":[],"queue":[]},\
+        "photos":{"hasAccess":true,"count":248,"current":3,"selected":7,"scrollRow":1,"viewing":true,"caption":"12 OCTOBER 2026"},\
+        "prompter":{"isRunning":true,"speed":120}}
         """
         let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] ?? [:]
         let s = RemoteWire.state(from: object)
@@ -94,12 +102,19 @@ func runRemoteConnectTests() {
         expectEqual(s.youtube.page, .player)
         expectEqual(s.youtube.tab, .search)
         expectEqual(s.youtube.results.first?.meta, "1K views")
+        expectEqual(s.photos.count, 248)
+        expectEqual(s.photos.selected, 7)
+        expect(s.photos.viewing)
+        expectEqual(s.photos.caption, "12 OCTOBER 2026")
+        expect(s.prompter.isRunning)
+        expectEqual(s.prompter.step, 4)
         // Applied, it replaces the apps but keeps this phone's own sky.
         var mine = HudSnapshot.blank
         mine.skyView.fov = 33
         let shown = s.applied(to: mine)
         expectEqual(shown.browser.title, "Wikipedia")
         expectEqual(shown.skyView.fov, 33)
+        expectEqual(shown.photos.count, 248)
     }
 
     // Against a real Android phone, when asked: HUD_REMOTE_LINK="thehud://connect?…" swift run hudtests

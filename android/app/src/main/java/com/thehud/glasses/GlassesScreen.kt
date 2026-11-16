@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -86,6 +87,8 @@ class GlassesContent(
     val mac: (@Composable () -> Unit)? = null,
     val mapGround: ImageBitmap? = null,
     val artwork: ImageBitmap? = null,
+    /** The photo library's pictures on show, by index. */
+    val photos: Map<Int, ImageBitmap> = emptyMap(),
     val standIn: Boolean = true,
     /** The heading as the glasses draw it, eased every frame; null uses the snapshot's. */
     val heading: (() -> Double)? = null,
@@ -119,6 +122,10 @@ fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesCon
                 else -> Box(Modifier.at(safe)) { SoloApp(solo, snapshot, live, cursor?.let { it - safe.topLeft }) }
             }
         }
+        layout.centreApp?.let { (kind, frame) ->
+            live.origin = frame.topLeft
+            Box(Modifier.at(frame)) { CentreApp(kind, snapshot, live, frame.size, cursor?.takeIf { frame.contains(it) }?.let { it - frame.topLeft }) }
+        }
         for ((kind, frame) in layout.bigFrames) {
             Box(Modifier.at(frame)) {
                 when (kind) {
@@ -130,7 +137,14 @@ fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesCon
         }
         for ((kind, frame) in layout.widgetFrames) {
             live.origin = frame.topLeft
-            Box(Modifier.at(frame)) { Widget(kind, snapshot, live, frame.size) }
+            Box(Modifier.at(frame)) {
+                when (kind) {
+                    // In a slot the browser and the Mac are live previews of the same content.
+                    HudPanelKind.browser -> Preview(frame.size) { BrowserPanel(snapshot.browser, GlassesLayout(), null, live.page) }
+                    HudPanelKind.mac -> MacPanel(snapshot.desktop, live.standIn && live.mac == null, live.mac)
+                    else -> Widget(kind, snapshot, live, frame.size)
+                }
+            }
         }
         if (snapshot.timer.state == HudSnapshot.TimerState.done && solo != HudPanelKind.clock && !layout.clearView) {
             Box(Modifier.fillMaxSize().padding(top = 96.dp), contentAlignment = Alignment.TopCenter) {
@@ -191,7 +205,46 @@ fun Widget(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, size
         HudPanelKind.music -> MusicWidget(snapshot.music, live.artwork, live.local(snapshot.cursor), size)
         HudPanelKind.captions -> CaptionsWidget(snapshot.captions)
         HudPanelKind.youtube -> YouTubeWidget(snapshot.youtube, live.youtube != null, live.standIn)
+        HudPanelKind.calendar -> CalendarWidget(snapshot.agenda)
+        HudPanelKind.photos -> PhotosWidget(snapshot.photos, live.photos[snapshot.photos.current])
+        HudPanelKind.prompter -> PrompterWidget(snapshot.note.text, snapshot.prompter)
         else -> Placeholder(kind)
+    }
+}
+
+/** Something laid out at the centre's width, scaled down into a slot. */
+@Composable
+private fun Preview(size: Size, content: @Composable () -> Unit) {
+    val scale = size.width / 944f
+    Box(Modifier.fillMaxSize().clip(panelShape)) {
+        Box(Modifier.requiredSize(944.dp, (size.height / scale).dp).graphicsLayer {
+            scaleX = scale; scaleY = scale
+            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+        }) { content() }
+    }
+}
+
+/** The app in the centre, at the centre's size. */
+@Composable
+fun CentreApp(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, size: Size, hover: Offset?) {
+    when (kind) {
+        HudPanelKind.clock -> ClockApp(snapshot.clock, snapshot.timer, hover, size)
+        HudPanelKind.weather -> WeatherApp(snapshot.weather, size)
+        HudPanelKind.activity -> ActivityApp(snapshot.activity, size)
+        HudPanelKind.music -> MusicApp(snapshot.music, live.artwork, hover, size)
+        HudPanelKind.note -> NoteApp(snapshot.note, size)
+        HudPanelKind.captions -> CaptionsApp(snapshot.captions, size)
+        HudPanelKind.map -> MapWidget(snapshot.minimap, live.mapGround, live.standIn, live.heading ?: { snapshot.minimap.heading })
+        HudPanelKind.sky -> Box(Modifier.fillMaxSize().clip(panelShape)) {
+            SkyApp(snapshot.sky, snapshot.overhead, snapshot.skyView, live.heading ?: { snapshot.minimap.heading }, size)
+        }
+        HudPanelKind.youtube -> if (snapshot.youtube.page == HudSnapshot.YouTube.Page.player)
+            YouTubeCentreWatch(snapshot.youtube, live.youtube != null, live.standIn, size)
+            else YouTubeApp(snapshot.youtube, live.youtube != null, live.standIn, hover, size)
+        HudPanelKind.calendar -> CalendarDayView(snapshot.agenda, size)
+        HudPanelKind.photos -> PhotoView(snapshot.photos, live.photos[snapshot.photos.current])
+        HudPanelKind.prompter -> PrompterView(snapshot.note.text, snapshot.prompter, 64f)
+        HudPanelKind.browser, HudPanelKind.mac -> {}
     }
 }
 
@@ -206,6 +259,9 @@ fun SoloApp(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, hov
         HudPanelKind.music -> MusicApp(snapshot.music, live.artwork, hover)
         HudPanelKind.captions -> CaptionsApp(snapshot.captions)
         HudPanelKind.youtube -> YouTubeApp(snapshot.youtube, live.youtube != null, live.standIn, hover)
+        HudPanelKind.calendar -> CalendarMonthView(snapshot.agenda)
+        HudPanelKind.photos -> PhotosGallery(snapshot.photos, live.photos, hover = hover)
+        HudPanelKind.prompter -> PrompterView(snapshot.note.text, snapshot.prompter, 96f)
         else -> Placeholder(kind)
     }
 }

@@ -40,7 +40,8 @@ class CoverActivity : ComponentActivity() {
         // Everything the panels read, asked for once; each panel says what it lacks if refused.
         val wanted = arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.RECORD_AUDIO, Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.READ_CALENDAR,
-            Manifest.permission.POST_NOTIFICATIONS)
+            Manifest.permission.POST_NOTIFICATIONS,
+            if (android.os.Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE)
         val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }

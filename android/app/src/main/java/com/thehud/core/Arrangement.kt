@@ -8,21 +8,24 @@ import kotlinx.serialization.Serializable
 // A port of the iPhone app's Arrangement.swift: the same rules, so a scene behaves the same on
 // either phone.
 
-/** Everything the glasses can show: two big things for the middle, and the widgets beside it. */
+/**
+ * Every app. Each has three sizes, as on the iPhone: a widget in a slot, the one app in the
+ * centre (the Apps Center), or fullscreen when held.
+ */
 @Serializable
 enum class HudPanelKind {
     browser, mac,
-    clock, weather, map, activity, sky, music, note, captions, youtube;
+    clock, weather, map, activity, sky, music, note, captions, youtube,
+    calendar, photos, prompter;
 
-    /** The browser and the Mac: the middle, reaching over a side, worked by the cursor. */
+    /** The browser and the Mac: panels of their own with live content, worked by the cursor. In a slot they are a live preview. */
     val isBig: Boolean get() = this == browser || this == mac
 
     val title: String get() = name.uppercase()
 
     companion object {
-        val bigs = listOf(browser, mac)
-        val widgets = listOf(clock, weather, map, activity, sky, music, note, captions, youtube)
-        /** Everything: the iPhone's panels. */
+        /** Every app, in the order the iPhone's picker lists them. */
+        val apps = listOf(browser, mac, youtube, map, music, calendar, photos, prompter, note, sky, weather, clock, activity, captions)
         val available: Set<HudPanelKind> = entries.toSet()
     }
 }
@@ -44,10 +47,12 @@ sealed interface HudSpot {
 data class Big(val kind: HudPanelKind, val side: HudSide? = null)
 
 /**
- * What is on the glasses and where, in one of two layouts. Columns: three widget slots down each
- * side, big panels in the middle, each able to reach over a side. Row: four widgets along the top
- * or bottom and one big panel in the rest. Each layout keeps its own places.
+ * What is on the glasses and where: a port of the iPhone app's Arrangement.swift, the same rules
+ * so the two phones agree. Columns: three widget slots down each side and the centre between,
+ * which can reach over one side. Row: four widgets along the top or bottom and the centre in
+ * the rest. The centre holds any one app. Each layout keeps its own slots; the centre is shared.
  *
+ * `bigs` is the centre as a list of at most one, as the iPhone stores it.
  * Immutable: every change returns a new arrangement, which is what Compose wants to watch.
  */
 @Serializable
@@ -61,41 +66,42 @@ data class HudArrangement(
 ) {
     val isRow: Boolean get() = strip != null
 
+    /** The Apps Center: the one app in the middle, whether switched off for now or not. */
+    val centre: Big? get() = bigs.firstOrNull()
+
     fun slots(side: HudSide) = if (side == HudSide.left) left else right
 
-    private val rowBig: Big? get() = bigs.firstOrNull()
-
     fun spot(kind: HudPanelKind): HudSpot {
+        if (centre?.kind == kind) return HudSpot.Middle
         if (isRow) {
             val i = row.indexOf(kind)
-            if (i >= 0) return HudSpot.Row(i)
-            return if (rowBig?.kind == kind) HudSpot.Middle else HudSpot.Off
+            return if (i >= 0) HudSpot.Row(i) else HudSpot.Off
         }
         for (side in HudSide.entries) {
             val i = slots(side).indexOf(kind)
             if (i >= 0) return HudSpot.Slot(side, i)
         }
-        return if (bigs.any { it.kind == kind }) HudSpot.Middle else HudSpot.Off
+        return HudSpot.Off
     }
 
     fun isPlaced(kind: HudPanelKind) = spot(kind) != HudSpot.Off
     fun isShown(kind: HudPanelKind) = isPlaced(kind) && kind !in hidden
 
-    fun sideOf(kind: HudPanelKind): HudSide? = if (isRow) null else bigs.firstOrNull { it.kind == kind }?.side
+    fun sideOf(kind: HudPanelKind): HudSide? = if (isRow) null else centre?.takeIf { it.kind == kind }?.side
 
-    /** The big panels on the glasses, left to right. */
+    /** The centre as it is on the glasses: nothing when switched off, never over a side in the row. */
     val orderedBigs: List<Big>
         get() {
-            if (isRow) return rowBig?.takeIf { it.kind !in hidden }?.let { listOf(Big(it.kind)) } ?: emptyList()
-            val shown = bigs.filter { it.kind !in hidden }
-            return shown.filter { it.side == HudSide.left } + shown.filter { it.side == null } +
-                shown.filter { it.side == HudSide.right }
+            val c = centre ?: return emptyList()
+            if (c.kind in hidden) return emptyList()
+            return listOf(if (isRow) Big(c.kind) else c)
         }
 
     val takenSides: Set<HudSide> get() = orderedBigs.mapNotNull { it.side }.toSet()
 
     data class Placed(val kind: HudPanelKind, val side: HudSide, val index: Int)
 
+    /** Widgets drawn: placed, not switched off, and not under the centre's side. */
     val shownWidgets: List<Placed>
         get() {
             if (isRow) return emptyList()
@@ -111,15 +117,15 @@ data class HudArrangement(
         get() = if (!isRow) emptyList() else
             row.mapIndexedNotNull { i, kind -> kind?.takeIf { it !in hidden }?.let { it to i } }
 
+    /** The centre as placed, switched off or not: what the phone's miniature draws. */
     val placedBigsInOrder: List<Big>
-        get() = if (isRow) listOfNotNull(bigs.firstOrNull()?.let { Big(it.kind) })
-        else bigs.filter { it.side == HudSide.left } + bigs.filter { it.side == null } +
-            bigs.filter { it.side == HudSide.right }
+        get() = centre?.let { listOf(if (isRow) Big(it.kind) else it) } ?: emptyList()
 
-    val unplaced: List<HudPanelKind> get() = HudPanelKind.entries.filter { !isPlaced(it) }
+    val unplaced: List<HudPanelKind> get() = HudPanelKind.apps.filter { !isPlaced(it) }
 
     // ------------------------------------------------------------------ changes
 
+    /** Switches layout. The first time into the row it takes the first four widgets showing. */
     fun setStrip(edge: HudEdge?): HudArrangement {
         var next = this
         if (edge != null && !isRow && row.all { it == null }) {
@@ -129,63 +135,82 @@ data class HudArrangement(
         return next.copy(strip = edge)
     }
 
+    /** A tap: off the glasses for now, keeping its place; or back on. */
     fun toggleHidden(kind: HudPanelKind): HudArrangement {
         if (!isPlaced(kind)) return this
         return copy(hidden = if (kind in hidden) hidden - kind else hidden + kind)
     }
 
+    private fun withSlot(side: HudSide, index: Int, kind: HudPanelKind?): HudArrangement =
+        if (side == HudSide.left) copy(left = left.toMutableList().also { it[index] = kind })
+        else copy(right = right.toMutableList().also { it[index] = kind })
+
+    /** Takes a kind off the glasses. */
     fun remove(kind: HudPanelKind): HudArrangement {
-        if (isRow) {
-            var bigs = bigs
-            if (rowBig?.kind == kind) bigs = bigs.drop(1)
-            val next = copy(row = row.map { if (it == kind) null else it }, bigs = bigs)
-            return if (!next.isPlaced(kind)) next.copy(hidden = hidden - kind) else next
-        }
-        return copy(
-            left = left.map { if (it == kind) null else it },
-            right = right.map { if (it == kind) null else it },
-            bigs = bigs.filter { it.kind != kind },
-            hidden = hidden - kind,
-        )
+        var next = this
+        if (centre?.kind == kind) next = next.copy(bigs = emptyList())
+        next = if (isRow) next.copy(row = row.map { if (it == kind) null else it })
+        else next.copy(left = left.map { if (it == kind) null else it }, right = right.map { if (it == kind) null else it })
+        return if (!next.isPlaced(kind)) next.copy(hidden = next.hidden - kind) else next
     }
 
     /**
-     * Drops a kind somewhere, as the editor does. A widget on a slot takes it and whatever was
-     * there swaps into its old slot (or goes back to the icons). A big panel in the middle sits
-     * there; on a side it reaches over that side.
+     * Puts an app in the centre, as the phone's app picker does. Where it came from takes the
+     * app that was there, so two apps swap; from nowhere, the old one goes back with the icons.
+     * The centre keeps the side it reaches over.
+     */
+    fun setCentre(kind: HudPanelKind): HudArrangement = makeCentre(kind, centre?.side)
+
+    private fun makeCentre(kind: HudPanelKind, side: HudSide?): HudArrangement {
+        val old = centre
+        if (old?.kind == kind) return copy(bigs = listOf(Big(kind, side)), hidden = hidden - kind)
+        val swapIn = old?.kind
+        var next = when (val from = spot(kind)) {
+            is HudSpot.Slot -> withSlot(from.side, from.index, swapIn)
+            is HudSpot.Row -> copy(row = row.toMutableList().also { it[from.index] = swapIn })
+            else -> this
+        }
+        // The other layout's slots keep their places, but not a copy of the centre.
+        next = next.copy(
+            left = next.left.map { if (it == kind) null else it },
+            right = next.right.map { if (it == kind) null else it },
+            row = next.row.map { if (it == kind) null else it },
+            bigs = listOf(Big(kind, side)),
+        )
+        var hid = next.hidden - kind
+        if (swapIn != null) hid = hid - swapIn
+        return next.copy(hidden = hid)
+    }
+
+    /**
+     * Drops a kind somewhere, as the editor does. On the middle it becomes the centre app. On a
+     * slot it is a widget there and whatever was there swaps into its old place (or goes back to
+     * the icons); the centre itself dropped on a side reaches over that side instead.
      */
     fun place(kind: HudPanelKind, at: HudSpot): HudArrangement {
         if (at == HudSpot.Off) return remove(kind)
+        if (at == HudSpot.Middle) return makeCentre(kind, null)
         if (isRow) return placeInRow(kind, at)
-        if (kind.isBig) {
-            val side = (at as? HudSpot.Slot)?.side
-            var list = bigs.map { if (side != null && it.side == side && it.kind != kind) it.copy(side = null) else it }
-            list = if (list.any { it.kind == kind }) list.map { if (it.kind == kind) it.copy(side = side) else it }
-            else list + Big(kind, side)
-            return copy(bigs = list, hidden = hidden - kind)
-        }
         val slot = at as? HudSpot.Slot ?: return this
         if (slot.index !in 0 until SLOTS) return this
+        if (centre?.kind == kind) return copy(bigs = listOf(Big(kind, slot.side)), hidden = hidden - kind)
         val from = spot(kind)
         val occupant = slots(slot.side)[slot.index]
         if (occupant == kind) return copy(hidden = hidden - kind)
-        val l = left.toMutableList()
-        val r = right.toMutableList()
-        fun set(side: HudSide, i: Int, k: HudPanelKind?) { if (side == HudSide.left) l[i] = k else r[i] = k }
+        var next = this
         var hid = hidden
-        if (from is HudSpot.Slot) set(from.side, from.index, occupant) else if (occupant != null) hid = hid - occupant
-        set(slot.side, slot.index, kind)
-        return copy(left = l, right = r, hidden = hid - kind)
+        if (from is HudSpot.Slot) next = next.withSlot(from.side, from.index, occupant)
+        else if (occupant != null) hid = hid - occupant
+        next = next.withSlot(slot.side, slot.index, kind)
+        return next.copy(hidden = hid - kind)
     }
 
+    /** The row: widgets swap places along it. The centre dropped on the row swaps with the widget there. */
     private fun placeInRow(kind: HudPanelKind, at: HudSpot): HudArrangement {
-        if (kind.isBig) {
-            val existing = bigs.firstOrNull { it.kind == kind } ?: Big(kind)
-            return copy(bigs = listOf(existing) + bigs.filter { it.kind != kind }, hidden = hidden - kind)
-        }
         val r = at as? HudSpot.Row ?: return this
         if (r.index !in row.indices) return this
         val occupant = row[r.index]
+        if (centre?.kind == kind) return occupant?.let { makeCentre(it, null) } ?: this
         if (occupant == kind) return copy(hidden = hidden - kind)
         val next = row.toMutableList()
         var hid = hidden
@@ -204,12 +229,12 @@ data class HudArrangement(
 
         fun of(
             left: List<HudPanelKind?> = emptyList(), right: List<HudPanelKind?> = emptyList(),
-            bigs: List<Big> = emptyList(), row: List<HudPanelKind?> = emptyList(), strip: HudEdge? = null,
-        ) = HudArrangement(padded(left), padded(right), bigs, emptySet(), padded(row, ROW), strip)
+            centre: Big? = null, row: List<HudPanelKind?> = emptyList(), strip: HudEdge? = null,
+        ) = HudArrangement(padded(left), padded(right), listOfNotNull(centre), emptySet(), padded(row, ROW), strip)
 
-        val standard = of(left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.note),
-                          right = listOf(HudPanelKind.music, HudPanelKind.activity, HudPanelKind.captions),
-                          bigs = listOf(Big(HudPanelKind.browser)))
+        /** The browser in the centre; the clock, the weather and the map down the left. */
+        val standard = of(left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.map),
+                          centre = Big(HudPanelKind.browser))
     }
 }
 
@@ -218,26 +243,27 @@ data class HudArrangement(
 data class HudScene(val name: String, val arrangement: HudArrangement) {
     companion object {
         /** Bumped when a preset changes enough that saved scenes should take it. */
-        const val VERSION = 2
+        const val VERSION = 3
 
+        // The iPhone's presets.
         val presets = listOf(
-            // At a desk: the browser in the middle, the Mac over the right.
+            // At a desk: the browser in the centre, the Mac live in a slot to swap in.
             HudScene("DESK", HudArrangement.of(
-                left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.note),
-                right = listOf(HudPanelKind.music, HudPanelKind.activity, HudPanelKind.captions),
-                bigs = listOf(Big(HudPanelKind.browser), Big(HudPanelKind.mac, HudSide.right)))),
-            // Walking: one row of widgets along the top and a single app under it.
+                left = listOf(HudPanelKind.clock, HudPanelKind.calendar, HudPanelKind.weather),
+                right = listOf(HudPanelKind.mac, HudPanelKind.music, HudPanelKind.note),
+                centre = Big(HudPanelKind.browser))),
+            // Walking: one row of widgets along the top and the map under it.
             HudScene("STREET", HudArrangement.of(
-                left = listOf(HudPanelKind.map, HudPanelKind.weather, HudPanelKind.clock),
+                left = listOf(HudPanelKind.calendar, HudPanelKind.weather, HudPanelKind.clock),
                 right = listOf(HudPanelKind.music, HudPanelKind.activity, HudPanelKind.captions),
-                bigs = listOf(Big(HudPanelKind.browser)),
-                row = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.map, HudPanelKind.music),
+                centre = Big(HudPanelKind.map),
+                row = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.calendar, HudPanelKind.music),
                 strip = HudEdge.top)),
-            // Evening: something to read, and the sky.
+            // Evening: something to watch, and the sky.
             HudScene("NIGHT", HudArrangement.of(
                 left = listOf(HudPanelKind.clock, HudPanelKind.weather, HudPanelKind.sky),
-                right = listOf(HudPanelKind.music, HudPanelKind.note, HudPanelKind.activity),
-                bigs = listOf(Big(HudPanelKind.browser)))),
+                right = listOf(HudPanelKind.music, HudPanelKind.photos, HudPanelKind.browser),
+                centre = Big(HudPanelKind.youtube))),
         )
     }
 }

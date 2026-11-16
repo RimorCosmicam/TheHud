@@ -69,15 +69,16 @@ import com.thehud.core.HudSnapshot
 import com.thehud.core.HudTheme
 import com.thehud.core.MapsLayout
 import com.thehud.core.MusicLayout
+import com.thehud.core.fullAppSize
+import com.thehud.core.isWide
 import kotlin.math.max
 
 // The widgets held up alone, as the iPhone app's *App views draw them, at the safe frame's
 // 1792 by 952 points. And the Mac, the big panel that shows something else.
 
-private val appSize = Size(1792f, 952f)
 
 @Composable
-private fun AppSurface(content: @Composable () -> Unit) {
+internal fun AppSurface(content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(HudTheme.CORNER.dp)
     Box(Modifier.fillMaxSize().clip(shape).background(HudTheme.surface).border(1.dp, HudTheme.edge, shape)) { content() }
 }
@@ -91,12 +92,16 @@ private fun Divider(vertical: Boolean = false) {
 // ------------------------------------------------------------------ clock
 
 @Composable
-fun ClockApp(clock: HudSnapshot.Clock, timer: HudSnapshot.TimerReading, hover: Offset?) = AppSurface {
+fun ClockApp(clock: HudSnapshot.Clock, timer: HudSnapshot.TimerReading, hover: Offset?, size: Size = fullAppSize) = AppSurface {
+    val wide = isWide(size)
+    val card = ClockAppLayout.timerCard(size)
     Box(Modifier.at(Rect(72f, 56f, 400f, 80f))) { Label("CLOCK") }
-    ClockDial(clock, Modifier.at(Rect(Offset(60f, 126f), Size(700f, 700f))))
-    Column(Modifier.at(Rect(Offset(824f, 40f), Size(916f, 270f))), verticalArrangement = Arrangement.Bottom) {
+    // In the centre the digits are the clock; the dial needs the whole canvas.
+    if (wide) ClockDial(clock, Modifier.at(Rect(Offset(60f, 126f), Size(700f, 700f))))
+    Column(Modifier.at(if (wide) Rect(Offset(824f, 40f), Size(916f, 270f)) else Rect(Offset(48f, 30f), Size(size.width - 96, 250f))),
+        verticalArrangement = Arrangement.Bottom) {
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            BasicText(clock.time, style = HudTheme.mont(176f, tracking = -6f), maxLines = 1)
+            BasicText(clock.time, style = HudTheme.mont(if (wide) 176f else 150f, tracking = -6f), maxLines = 1)
             Column(Modifier.padding(bottom = 34.dp)) {
                 clock.meridiem?.let { BasicText(it, style = HudTheme.mont(34f)) }
                 BasicText(clock.seconds, style = HudTheme.mont(64f, color = HudTheme.accent))
@@ -104,8 +109,9 @@ fun ClockApp(clock: HudSnapshot.Clock, timer: HudSnapshot.TimerReading, hover: O
         }
         BasicText("${clock.weekday}  ·  ${clock.date}", style = HudTheme.mont(28f, tracking = 4f, color = HudTheme.inkDim), maxLines = 1)
     }
-    TimerCard(timer, hover?.let { ClockAppLayout.timerCard.contains(it) } ?: false, Modifier.at(ClockAppLayout.timerCard))
-    Column(Modifier.at(Rect(Offset(1300f, 340f), Size(440f, 310f))), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    TimerCard(timer, hover?.let { card.contains(it) } ?: false, Modifier.at(card))
+    Column(Modifier.at(Rect(Offset(card.right + 36, card.top + 10), Size(size.width - card.right - 36 - (if (wide) 52 else 48), 310f))),
+        verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Label("TODAY")
         val events = clock.agenda.take(3)
         if (events.isEmpty()) BasicText("Nothing else today", style = HudTheme.mont(26f, FontWeight.SemiBold, color = HudTheme.inkFaint))
@@ -118,7 +124,7 @@ fun ClockApp(clock: HudSnapshot.Clock, timer: HudSnapshot.TimerReading, hover: O
             }
         }
     }
-    Row(Modifier.at(Rect(Offset(824f, 730f), Size(916f, 170f))), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.at(Rect(Offset(card.left, 730f), Size(size.width - card.left - (if (wide) 52 else 48), 170f))), verticalAlignment = Alignment.CenterVertically) {
         clock.worldClocks.forEachIndexed { i, w ->
             if (i > 0) Box(Modifier.width(1.dp).height(110.dp).background(Color.White.copy(alpha = 0.1f)))
             Column(Modifier.weight(1f).padding(horizontal = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -199,7 +205,7 @@ fun ClockDial(clock: HudSnapshot.Clock, modifier: Modifier) {
 // ------------------------------------------------------------------ weather
 
 @Composable
-fun WeatherApp(weather: HudSnapshot.Weather?) = AppSurface {
+fun WeatherApp(weather: HudSnapshot.Weather?, size: Size = fullAppSize) = AppSurface {
     if (weather == null) {
         Column(Modifier.padding(52.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Label("WEATHER")
@@ -208,7 +214,7 @@ fun WeatherApp(weather: HudSnapshot.Weather?) = AppSurface {
         return@AppSurface
     }
     Row(Modifier.fillMaxSize().padding(52.dp), horizontalArrangement = Arrangement.spacedBy(60.dp)) {
-        Column(Modifier.width(900.dp).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+        Column((if (isWide(size)) Modifier.width(900.dp) else Modifier.fillMaxWidth()).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column {
                     Label(weather.place)
@@ -266,7 +272,8 @@ fun WeatherApp(weather: HudSnapshot.Weather?) = AppSurface {
                 }
             }
         }
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // In the centre there is room for today only.
+        if (isWide(size)) Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Label("THIS WEEK")
             val lo = weather.days.minOfOrNull { it.low } ?: 0
             val hi = weather.days.maxOfOrNull { it.high } ?: 1
@@ -293,40 +300,45 @@ fun WeatherApp(weather: HudSnapshot.Weather?) = AppSurface {
 // ------------------------------------------------------------------ activity
 
 @Composable
-fun ActivityApp(activity: HudSnapshot.Activity?) = AppSurface {
+fun ActivityApp(activity: HudSnapshot.Activity?, size: Size = fullAppSize) = AppSurface {
+    val wide = isWide(size)
     if (activity == null) {
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Label("ACTIVITY")
             Spacer(Modifier.height(16.dp))
-            BasicText("Allow physical activity in TheHud's settings on the phone", style = HudTheme.mont(34f, FontWeight.SemiBold, color = HudTheme.inkDim))
+            BasicText("Allow physical activity in TheHud's settings on the phone",
+                style = HudTheme.mont(34f, FontWeight.SemiBold, color = HudTheme.inkDim).copy(textAlign = TextAlign.Center), modifier = Modifier.padding(40.dp))
         }
         return@AppSurface
     }
     Box(Modifier.at(Rect(72f, 56f, 400f, 80f))) { Label("ACTIVITY") }
-    Box(Modifier.at(Rect(Offset(90f, 156f), Size(640f, 640f))), contentAlignment = Alignment.Center) {
+    Box(Modifier.at(if (wide) Rect(Offset(90f, 156f), Size(640f, 640f)) else Rect(Offset((size.width - 470) / 2, 48f), Size(470f, 470f))),
+        contentAlignment = Alignment.Center) {
         ProgressRing(activity.fraction, 44f, Modifier.fillMaxSize())
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            BasicText(activity.steps.grouped(), style = HudTheme.mont(110f, tracking = -3f))
+            BasicText(activity.steps.grouped(), style = HudTheme.mont(if (wide) 110f else 84f, tracking = -3f))
             BasicText("OF ${activity.goal.grouped()} STEPS", style = HudTheme.mont(24f, tracking = 3f, color = HudTheme.inkDim))
         }
     }
-    Row(Modifier.at(Rect(Offset(820f, 150f), Size(900f, 120f)))) {
+    Row(Modifier.at(if (wide) Rect(Offset(820f, 150f), Size(900f, 120f)) else Rect(Offset(56f, 556f), Size(size.width - 112, 110f)))) {
         for ((label, value) in listOf("DISTANCE" to (activity.distanceKm?.let { "%.1f KM".format(it) } ?: "—"),
             "FLOORS" to (activity.floors?.toString() ?: "—"), "GOAL" to "${(activity.fraction * 100).toInt()}%")) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Label(label)
-                BasicText(value, style = HudTheme.mont(56f))
+                BasicText(value, style = HudTheme.mont(if (wide) 56f else 44f))
             }
         }
     }
-    Column(Modifier.at(Rect(Offset(820f, 420f), Size(900f, 400f))), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val bars = if (wide) 260f else 150f
+    Column(Modifier.at(if (wide) Rect(Offset(820f, 420f), Size(900f, 400f)) else Rect(Offset(56f, 700f), Size(size.width - 112, 230f))),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Label("BY THE HOUR")
         val peak = max(activity.hourly.maxOrNull() ?: 1, 1)
         val now = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        Row(Modifier.fillMaxWidth().height(260.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().height(bars.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (h in 0 until 24) {
                 val steps = activity.hourly.getOrElse(h) { 0 }
-                Box(Modifier.weight(1f).height(max(6f, 260f * steps / peak).dp).background(when {
+                Box(Modifier.weight(1f).height(max(6f, bars * steps / peak).dp).background(when {
                     h == now -> HudTheme.accent; steps > 0 -> Color.White.copy(alpha = 0.55f); else -> Color.White.copy(alpha = 0.1f)
                 }, RoundedCornerShape(4.dp)))
             }
@@ -343,19 +355,24 @@ fun ActivityApp(activity: HudSnapshot.Activity?) = AppSurface {
 // ------------------------------------------------------------------ music
 
 @Composable
-fun MusicApp(music: HudSnapshot.NowPlaying?, artwork: ImageBitmap?, hover: Offset?) = AppSurface {
-    Artwork(artwork, 36f, Modifier.at(Rect(Offset(72f, 136f), Size(560f, 560f))))
-    Column(Modifier.at(Rect(Offset(700f, 140f), Size(1020f, 360f))), verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom)) {
+fun MusicApp(music: HudSnapshot.NowPlaying?, artwork: ImageBitmap?, hover: Offset?, size: Size = fullAppSize) = AppSurface {
+    val wide = isWide(size)
+    Artwork(artwork, 36f, Modifier.at(if (wide) Rect(Offset(72f, 136f), Size(560f, 560f)) else Rect(Offset((size.width - 400) / 2, 52f), Size(400f, 400f))))
+    Column(Modifier.at(if (wide) Rect(Offset(700f, 140f), Size(1020f, 360f)) else Rect(Offset(56f, 470f), Size(size.width - 112, 220f))),
+        verticalArrangement = if (wide) Arrangement.spacedBy(10.dp, Alignment.Bottom) else Arrangement.spacedBy(10.dp),
+        horizontalAlignment = if (wide) Alignment.Start else Alignment.CenterHorizontally) {
         Label(if (music?.isPlaying == true) "NOW PLAYING" + (music.app.takeIf { it.isNotEmpty() }?.let { " · ${it.uppercase()}" } ?: "")
             else "MUSIC", accent = music?.isPlaying == true)
-        BasicText(music?.title ?: "Nothing playing", style = HudTheme.mont(68f, tracking = -1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        BasicText(music?.title ?: "Nothing playing", style = HudTheme.mont(if (wide) 68f else 52f, tracking = -1f), maxLines = if (wide) 2 else 1,
+            overflow = TextOverflow.Ellipsis)
         BasicText(music?.artist ?: "Play something on the phone", style = HudTheme.mont(36f, FontWeight.SemiBold, color = HudTheme.inkDim),
             maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (!music?.album.isNullOrEmpty()) BasicText(music!!.album, style = HudTheme.mont(26f, FontWeight.SemiBold, color = HudTheme.inkFaint),
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     if (music != null && music.duration > 0) {
-        Column(Modifier.at(Rect(Offset(700f, 540f), Size(1020f, 60f))), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.at(if (wide) Rect(Offset(700f, 540f), Size(1020f, 60f)) else Rect(Offset(72f, 700f), Size(size.width - 144, 60f))),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ProgressLine(music.progress, Modifier.fillMaxWidth().height(8.dp))
             Row(Modifier.fillMaxWidth()) {
                 BasicText(HudSnapshot.NowPlaying.time(music.elapsed), style = HudTheme.mont(22f, color = HudTheme.inkDim))
@@ -364,7 +381,7 @@ fun MusicApp(music: HudSnapshot.NowPlaying?, artwork: ImageBitmap?, hover: Offse
             }
         }
     }
-    for ((control, frame) in MusicLayout.buttons(appSize, large = true)) {
+    for ((control, frame) in MusicLayout.buttons(size, large = true)) {
         MusicButton(control, music?.isPlaying ?: false, true, hover?.let { frame.contains(it) } ?: false, Modifier.at(frame))
     }
 }
@@ -372,24 +389,26 @@ fun MusicApp(music: HudSnapshot.NowPlaying?, artwork: ImageBitmap?, hover: Offse
 // ------------------------------------------------------------------ note and captions
 
 @Composable
-fun NoteApp(note: HudSnapshot.Note) = AppSurface {
+fun NoteApp(note: HudSnapshot.Note, size: Size = fullAppSize) = AppSurface {
+    val font = if (isWide(size)) 64f else 48f
     Box(Modifier.at(Rect(72f, 56f, 600f, 80f))) { Label(if (note.isEditing) "WRITING" else "NOTE", accent = note.isEditing) }
-    Box(Modifier.at(Rect(0f, 110f, appSize.width, appSize.height - 40)).clip(RoundedCornerShape(0.dp))) {
+    Box(Modifier.at(Rect(0f, 110f, size.width, size.height - 40)).clip(RoundedCornerShape(0.dp))) {
         if (note.text.isEmpty() && !note.isEditing) {
-            BasicText("Click to write a note", style = HudTheme.mont(64f, FontWeight.SemiBold, color = HudTheme.inkFaint),
+            BasicText("Click to write a note", style = HudTheme.mont(font, FontWeight.SemiBold, color = HudTheme.inkFaint),
                 modifier = Modifier.offset(116.dp, 10.dp))
         } else {
             BasicText(buildAnnotatedString {
                 append(note.text)
                 if (note.isEditing) withStyle(SpanStyle(color = HudTheme.accent)) { append("|") }
-            }, style = HudTheme.mont(64f, FontWeight.SemiBold), modifier = Modifier.offset(116.dp, (10 - note.scroll).dp).width(1560.dp))
+            }, style = HudTheme.mont(font, FontWeight.SemiBold), modifier = Modifier.offset(116.dp, (10 - note.scroll).dp).width((size.width - 232).dp))
         }
     }
 }
 
 @Composable
-fun CaptionsApp(captions: HudSnapshot.Captions) = AppSurface {
-    Row(Modifier.at(Rect(Offset(72f, 52f), Size(1648f, 40f))), verticalAlignment = Alignment.CenterVertically,
+fun CaptionsApp(captions: HudSnapshot.Captions, size: Size = fullAppSize) = AppSurface {
+    val wide = isWide(size)
+    Row(Modifier.at(Rect(Offset(72f, 52f), Size(size.width - 144, 40f))), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(18.dp)) {
         Label("CAPTIONS")
         Spacer(Modifier.weight(1f))
@@ -397,11 +416,12 @@ fun CaptionsApp(captions: HudSnapshot.Captions) = AppSurface {
         BasicText(captions.status + if (captions.isListening) "" else " · CLICK TO START",
             style = HudTheme.mont(20f, tracking = 2.5f, color = if (captions.isListening) HudTheme.accent else HudTheme.inkFaint), maxLines = 1)
     }
-    Box(Modifier.at(Rect(Offset(120f, 120f), Size(1552f, 760f))), contentAlignment = Alignment.BottomStart) {
+    Box(Modifier.at(Rect(Offset(if (wide) 120f else 72f, 120f), Size(size.width - (if (wide) 240 else 144), size.height - 192))),
+        contentAlignment = Alignment.BottomStart) {
         if (captions.lines.isEmpty() && captions.partial.isEmpty()) {
             BasicText(if (captions.isListening) "Listening…" else "Click to start listening",
-                style = HudTheme.mont(54f, FontWeight.SemiBold, color = HudTheme.inkFaint))
-        } else CaptionLines(captions, 54f, 7)
+                style = HudTheme.mont(if (wide) 54f else 44f, FontWeight.SemiBold, color = HudTheme.inkFaint))
+        } else CaptionLines(captions, if (wide) 54f else 44f, 7)
     }
 }
 

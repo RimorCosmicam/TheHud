@@ -41,6 +41,8 @@ sealed interface GlassesHit {
     /** A point on the Mac's picture, 0 to 1 across it. */
     data class Mac(val point: Offset) : GlassesHit
     data class Widget(val kind: HudPanelKind, val point: Offset, val size: Size) : GlassesHit
+    /** The app in the centre (not the browser or the Mac, which have their own): the point inside it, and its size. */
+    data class Centre(val kind: HudPanelKind, val point: Offset, val size: Size) : GlassesHit
     data object None : GlassesHit
 }
 
@@ -111,17 +113,25 @@ class GlassesLayout(
             return arrangement.shownWidgets.map { it.kind to slotFrame(it.side, it.index) }
         }
 
+    /** The Apps Center: whatever app is in the centre, and where. Null when switched off or something is fullscreen. */
+    val centre: Pair<HudPanelKind, Rect>?
+        get() {
+            if (!drawsArrangement) return null
+            val big = arrangement.orderedBigs.firstOrNull() ?: return null
+            arrangement.strip?.let { return big.kind to rowMain(it) }
+            return big.kind to bigSpan(arrangement.takenSides)
+        }
+
+    /** The centre when it holds an app other than the browser or the Mac. */
+    val centreApp: Pair<HudPanelKind, Rect>? get() = centre?.takeIf { !it.first.isBig }
+
+    /** The browser's and the Mac's panels: in the centre, held up alone, or the page fullscreen. In a slot they are widgets. */
     val bigFrames: List<Pair<HudPanelKind, Rect>>
         get() {
             if (clearView) return emptyList()
             if (fullscreen) return listOf(HudPanelKind.browser to Rect(Offset.Zero, canvas))
             solo?.let { return if (it.isBig) listOf(it to safeFrame) else emptyList() }
-            val bigs = arrangement.orderedBigs
-            if (bigs.isEmpty()) return emptyList()
-            arrangement.strip?.let { return listOf(bigs[0].kind to rowMain(it)) }
-            val span = bigSpan(arrangement.takenSides)
-            val width = (span.width - GAP * (bigs.size - 1)) / bigs.size
-            return bigs.mapIndexed { i, b -> b.kind to Rect(Offset(span.left + i * (width + GAP), span.top), Size(width, span.height)) }
+            return listOfNotNull(centre?.takeIf { it.first.isBig })
         }
 
     val soloWidgetFrame: Rect? get() = if (!clearView && !fullscreen && solo != null && !solo.isBig) safeFrame else null
@@ -129,6 +139,7 @@ class GlassesLayout(
     fun frameOf(kind: HudPanelKind): Rect? = when {
         kind.isBig -> bigFrames.firstOrNull { it.first == kind }?.second
         solo == kind -> soloWidgetFrame
+        centre?.first == kind -> centre?.second
         else -> widgetFrames.firstOrNull { it.first == kind }?.second
     }
 
@@ -173,6 +184,7 @@ class GlassesLayout(
             if (pic.contains(p)) return GlassesHit.Mac(Offset((p.x - pic.left) / pic.width, (p.y - pic.top) / pic.height))
         }
         for ((kind, f) in widgetFrames) if (f.contains(p)) return GlassesHit.Widget(kind, p - f.topLeft, f.size)
+        centreApp?.let { (kind, f) -> if (f.contains(p)) return GlassesHit.Centre(kind, p - f.topLeft, f.size) }
         val frame = browserFrame
         if (frame == null || !frame.contains(p)) return GlassesHit.None
         barFrame?.let { bar ->
@@ -234,8 +246,17 @@ class MapsLayout(val resultCount: Int = 0, val navigating: Boolean = false) {
 }
 
 /** The clock app's timer card, in the app's own points: scroll to set, click to start, right-click to reset. */
+/** The safe canvas an app has when held up alone; in the centre it gets less. */
+val fullAppSize = Size(1792f, 952f)
+
+/** Whether an app has the whole canvas's width or the centre's. */
+fun isWide(size: Size) = size.width >= 1400f
+
 object ClockAppLayout {
     val timerCard = Rect(Offset(824f, 330f), Size(440f, 320f))
+
+    /** The timer card for an app of this size: in the centre, under the time, on the left. */
+    fun timerCard(size: Size): Rect = if (isWide(size)) timerCard else Rect(Offset(48f, 300f), Size((size.width - 120) / 2, 320f))
 }
 
 /** Where Now Playing's buttons are, for drawing and for clicks. */
@@ -247,8 +268,11 @@ object MusicLayout {
         val height = if (large) 110f else 56f
         val spacing = if (large) 28f else 12f
         val total = width * 3 + spacing * 2
-        val x0 = if (large) 700f else (size.width - total) / 2
-        val y = if (large) 640f else size.height - 26 - height
+        // Held up alone they sit under the title, beside the artwork; anywhere narrower (a slot,
+        // the centre) they are centred along the bottom.
+        val besideArtwork = large && size.width >= 1400f
+        val x0 = if (besideArtwork) 700f else (size.width - total) / 2
+        val y = if (besideArtwork) 640f else size.height - (if (large) 60f else 26f) - height
         return Control.entries.mapIndexed { i, c -> c to Rect(Offset(x0 + i * (width + spacing), y), Size(width, height)) }
     }
 
@@ -315,4 +339,90 @@ object YouTubeAppLayout {
     }
 
     fun maxRow(count: Int) = maxOf(0, (count + COLUMNS - 1) / COLUMNS - VISIBLE_ROWS)
+
+    // The same app at other sizes, as the centre app: as many columns as fit, and the tile under
+    // the tabs when there is no room beside them.
+    fun wide(size: Size) = size.width >= 1400f
+    fun columns(size: Size) = if (wide(size)) COLUMNS else 2
+    fun visibleRows(size: Size) = if (size.height >= 900f) VISIBLE_ROWS else 1
+    private fun gridTop(size: Size) = if (wide(size)) GRID_Y else GRID_Y + 100
+
+    fun nowPlayingTile(size: Size): Rect = when {
+        size == this.size -> nowPlayingTile
+        wide(size) -> Rect(Offset(size.width - 72 - 480, 34f), Size(480f, 84f))
+        else -> Rect(Offset(72f, 128f), Size(size.width - 144, 84f))
+    }
+
+    fun tileVideo(size: Size): Rect = nowPlayingTile(size).let { Rect(Offset(it.left + 2, it.top + 2), Size(142f, 80f)) }
+
+    fun cardFrame(slot: Int, size: Size): Rect {
+        if (size == this.size) return cardFrame(slot)
+        val cols = columns(size)
+        val width = (size.width - GRID_X * 2 - CARD_GAP * (cols - 1)) / cols
+        val height = minOf(CARD_HEIGHT, width * THUMB_HEIGHT / CARD_WIDTH + 112)
+        return Rect(Offset(GRID_X + (slot % cols) * (width + CARD_GAP), gridTop(size) + (slot / cols) * (height + ROW_GAP)), Size(width, height))
+    }
+
+    /** Watching in the centre: the video as large as fits, with its title under it. */
+    fun centreVideo(size: Size): Rect {
+        val width = minOf(size.width - 64, (size.height - 200) * 16 / 9)
+        return Rect(Offset((size.width - width) / 2, 32f), Size(width, width * 9 / 16))
+    }
+
+    fun target(p: Offset, youtube: HudSnapshot.YouTube, size: Size): Target? {
+        if (size == this.size) return target(p, youtube)
+        if (youtube.page == HudSnapshot.YouTube.Page.player) return Target.Video
+        youtube.tabs.forEachIndexed { i, tab -> if (tabFrame(i, youtube.tabs).contains(p)) return Target.Tab(tab) }
+        if (youtube.hasVideo && nowPlayingTile(size).contains(p)) return Target.NowPlaying
+        val list = youtube.list(youtube.tab)
+        val cols = columns(size)
+        for (slot in 0 until cols * visibleRows(size)) {
+            if (cardFrame(slot, size).contains(p)) {
+                val index = youtube.scrollRow * cols + slot
+                return if (index < list.size) Target.Card(index) else null
+            }
+        }
+        return null
+    }
+
+    fun maxRow(count: Int, size: Size): Int {
+        val cols = columns(size)
+        return maxOf(0, (count + cols - 1) / cols - visibleRows(size))
+    }
+}
+
+/** Where the gallery's photos are, for drawing and for clicks. */
+object PhotosLayout {
+    const val COLUMNS = 6
+    const val ROWS = 3
+    private const val INSET = 56f
+    private const val TOP = 120f
+    private const val GAP = 16f
+
+    fun tile(slot: Int, size: Size): Rect {
+        val width = (size.width - INSET * 2 - GAP * (COLUMNS - 1)) / COLUMNS
+        val height = (size.height - TOP - INSET - GAP * (ROWS - 1)) / ROWS
+        return Rect(Offset(INSET + (slot % COLUMNS) * (width + GAP), TOP + (slot / COLUMNS) * (height + GAP)), Size(width, height))
+    }
+
+    /** The photo under a point of the gallery, as an index into the library. */
+    fun photo(p: Offset, size: Size, photos: HudSnapshot.Photos): Int? {
+        for (slot in 0 until COLUMNS * ROWS) if (tile(slot, size).contains(p)) {
+            val index = photos.scrollRow * COLUMNS + slot
+            return if (index < photos.count) index else null
+        }
+        return null
+    }
+
+    fun maxRow(count: Int) = maxOf(0, (count + COLUMNS - 1) / COLUMNS - ROWS)
+
+    /** The row to show so that a photo is on screen. */
+    fun row(showing: Int, from: Int): Int {
+        val r = showing / COLUMNS
+        return when {
+            r < from -> r
+            r >= from + ROWS -> r - ROWS + 1
+            else -> from
+        }
+    }
 }
