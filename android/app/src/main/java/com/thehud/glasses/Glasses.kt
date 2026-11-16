@@ -119,7 +119,14 @@ private fun LivePage() {
 /** The YouTube player's web view: one view, made once, placed by the layer and never moved between views. */
 @Composable
 private fun LiveVideo(player: com.thehud.youtube.YouTubePlayer) {
-    AndroidView(factory = { player.detach(); player.view }, modifier = Modifier.fillMaxSize(), onRelease = { player.detach() })
+    // Each place holds the player in a frame of its own, and lets go of it only if it still has it:
+    // going into Host mode (or out), the new place takes the player before the old one is released,
+    // and a plain detach there took it straight back out of the new one, playing with no picture.
+    AndroidView(
+        factory = { c -> android.widget.FrameLayout(c).also { frame -> player.detach(); frame.addView(player.view) } },
+        update = { frame -> if (player.view.parent !== frame) { player.detach(); frame.addView(player.view) } },
+        modifier = Modifier.fillMaxSize(),
+        onRelease = { frame -> if (player.view.parent === frame) frame.removeView(player.view) })
 }
 
 /**
