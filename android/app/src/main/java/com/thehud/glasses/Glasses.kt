@@ -200,6 +200,8 @@ object GlassesPresenter {
     private var presentation: Presentation? = null
     private var overlay: GlassesOverlay? = null
     private var shownOn: Int? = null
+    /** Attempts left at the overlay before settling for the window below the taskbar. */
+    private var overlayRetries = 0
     private lateinit var app: Context
     private var phoneDisplays: () -> Set<Int> = { emptySet() }
 
@@ -207,7 +209,7 @@ object GlassesPresenter {
     val shownDisplay: Display? get() = shownOn?.let { app.getSystemService(DisplayManager::class.java).getDisplay(it) }
 
     private val listener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) = refresh()
+        override fun onDisplayAdded(displayId: Int) { overlayRetries = 0; refresh() }
         override fun onDisplayRemoved(displayId: Int) = refresh()
         override fun onDisplayChanged(displayId: Int) {}
     }
@@ -244,7 +246,7 @@ object GlassesPresenter {
     /** The accessibility service came or went: the glasses move between the overlay and the presentation. */
     fun serviceChanged() {
         if (!::app.isInitialized) return
-        Handler(Looper.getMainLooper()).post { shownOn = null; refresh() }
+        Handler(Looper.getMainLooper()).post { shownOn = null; overlayRetries = 0; refresh() }
     }
 
     fun refresh() {
@@ -264,7 +266,14 @@ object GlassesPresenter {
         if (service != null) {
             val shown = runCatching { GlassesOverlay(service, display) }
                 .onFailure { Log.w(TAG, "No overlay on ${display.displayId}", it) }.getOrNull()
-            if (shown != null) { overlay = shown; shownOn = display.displayId; return }
+            if (shown != null) { overlay = shown; shownOn = display.displayId; overlayRetries = 0; return }
+            // Just after the app or the glasses (re)start, the service may not be allowed on the
+            // display yet ("token null is not valid"). Show the glasses below the taskbar for now,
+            // and try again over the next few seconds rather than staying there.
+            if (overlayRetries < 6) {
+                val delay = 300L shl overlayRetries++
+                Handler(Looper.getMainLooper()).postDelayed({ if (overlay == null) refresh() }, delay)
+            }
         }
         // From the application rather than an activity: a window of its own, which stays up
         // whatever the cover screen does.
