@@ -136,6 +136,12 @@ class CoreTest {
         assertEquals(WeatherIcon.moon, w.hours[2].icon)
     }
 
+    @Test
+    fun themeAccentsMatchTheIPhone() {
+        val expected = listOf(0xFFD8A628, 0xFF9ABE50, 0xFF00CBA9, 0xFF36BCFC, 0xFFA6A2FF, 0xFFE18BDA, 0xFFF985A2, 0xFFFA8C66)
+        assertEquals(expected, com.thehud.core.ThemeColor.entries.map { com.thehud.core.OKLCH.rotate(0xFFD8A628, it.shift) })
+    }
+
     private companion object {
         const val HudTheme_SAFE_RIGHT = 1920f - 64f
     }

@@ -34,4 +34,6 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: App/TheHud/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The theme colours' icons (made by `hudshot --icons`), for setAlternateIconName.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "AppIcon-Lime AppIcon-Mint AppIcon-Sky AppIcon-Iris AppIcon-Orchid AppIcon-Rose AppIcon-Coral"
         ENABLE_USER_SCRIPT_SANDBOXING: YES

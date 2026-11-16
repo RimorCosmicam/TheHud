@@ -93,6 +93,16 @@ final class HudController: ObservableObject {
     @Published private(set) var remoteHosting = UserDefaults.standard.bool(forKey: "remoteHosting")
     private var hostStreamer: HostStreamer?
     /// Host mode: YouTube's sound from this phone (for headphones) instead of the glasses. Saved.
+    /// The app's colour: the accent everywhere, the touchpad, the icon, and the Android phone's
+    /// glasses while connected. Saved.
+    @Published var themeColor: ThemeColor = ThemeColor(rawValue: UserDefaults.standard.string(forKey: "theme") ?? "") ?? .mustard {
+        didSet {
+            guard themeColor != oldValue else { return }
+            UserDefaults.standard.set(themeColor.rawValue, forKey: "theme")
+            themeChanged()
+        }
+    }
+
     @Published var hostSoundHere = UserDefaults.standard.bool(forKey: "hostSoundHere") {
         didSet {
             UserDefaults.standard.set(hostSoundHere, forKey: "hostSoundHere")
@@ -1853,6 +1863,7 @@ final class HudController: ObservableObject {
             if case .connected = status {
                 // In: the code has done its job.
                 self.showingRemoteConnect = false
+                self.sendTheme()
             } else if self.remoteState != nil {
                 self.remoteState = nil
                 self.remoteDraft = ""
@@ -1991,12 +2002,28 @@ final class HudController: ObservableObject {
         defaults.set(trackpad.naturalScrolling, forKey: "naturalScrolling")
         defaults.set(trackpad.tapToClick, forKey: "tapToClick")
         defaults.set(trackpad.momentumScrolling, forKey: "momentumScrolling")
-        defaults.set(config.colorway.label, forKey: "palette")
         defaults.set(config.pitch, forKey: "pitch")
         defaults.set(config.contrast, forKey: "contrast")
     }
 
-    static let palettes: [Colorway] = [.mustardFlat, .mono, .paperFlat, .signal]
+    /// The theme reaches the store every view reads its accent from, the touchpad, the icon and the
+    /// Android phone.
+    func themeChanged() {
+        ThemeStore.shared.color = themeColor
+        config.colorway = themeColor.colorway
+        sendTheme()
+        let app = UIApplication.shared
+        guard app.supportsAlternateIcons, app.alternateIconName != themeColor.iconName else { return }
+        app.setAlternateIconName(themeColor.iconName) { error in
+            if let error { print("icon: \(error.localizedDescription)") }
+        }
+    }
+
+    /// The Android phone draws its own glasses in Remote mode, and its phone screen in both.
+    private func sendTheme() {
+        guard case .connected = remoteStatus else { return }
+        remoteLink.send(RemoteWire.theme(themeColor))
+    }
 
     private func loadSettings() {
         let defaults = UserDefaults.standard
@@ -2008,14 +2035,12 @@ final class HudController: ObservableObject {
             trackpad.momentumScrolling = defaults.bool(forKey: "momentumScrolling")
             config.pitch = defaults.float(forKey: "pitch")
             config.contrast = defaults.float(forKey: "contrast")
-            if let label = defaults.string(forKey: "palette"),
-               let palette = Self.palettes.first(where: { $0.label == label }) {
-                config.colorway = palette
-            }
         }
         recognizer.settings = trackpad
         rail.scrollSpeed = trackpad.scrollSpeed
         rail.naturalScrolling = trackpad.naturalScrolling
+        ThemeStore.shared.color = themeColor
+        config.colorway = themeColor.colorway
     }
 
     func surfaceSizeChanged(to size: CGSize) {

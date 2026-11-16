@@ -228,18 +228,15 @@ struct SettingsSheet: View {
                     Text("YouTube's sound plays here, for headphones, instead of on the glasses. It keeps playing with the iPhone locked.")
                 }
 
+                Section {
+                    ThemePicker(selection: $controller.themeColor)
+                } header: {
+                    Text("Theme")
+                } footer: {
+                    Text("\(controller.themeColor.title): the glasses, the phone, the touchpad and the app icon.")
+                }
+
                 Section("Surface") {
-                    Picker("Palette", selection: Binding(
-                        get: { controller.config.colorway.label },
-                        set: { label in
-                            if let palette = HudController.palettes.first(where: { $0.label == label }) {
-                                controller.config.colorway = palette
-                            }
-                        })) {
-                        ForEach(HudController.palettes, id: \.label) { palette in
-                            Text(palette.label).tag(palette.label)
-                        }
-                    }
                     slider("Dot pitch", value: $controller.config.pitch, range: 12...40)
                     slider("Contrast", value: $controller.config.contrast, range: 0.2...1.0)
                 }
@@ -253,12 +250,12 @@ struct SettingsSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .tint(HudTheme.accent)
         .onChange(of: controller.trackpad.trackingSpeed) { controller.settingsChanged() }
         .onChange(of: controller.trackpad.scrollSpeed) { controller.settingsChanged() }
         .onChange(of: controller.trackpad.naturalScrolling) { controller.settingsChanged() }
         .onChange(of: controller.trackpad.momentumScrolling) { controller.settingsChanged() }
         .onChange(of: controller.trackpad.tapToClick) { controller.settingsChanged() }
-        .onChange(of: controller.config.colorway.label) { controller.settingsChanged() }
         .onChange(of: controller.config.pitch) { controller.settingsChanged() }
         .onChange(of: controller.config.contrast) { controller.settingsChanged() }
     }
@@ -275,5 +272,34 @@ struct SettingsSheet: View {
             }
             Slider(value: value, in: range)
         }
+    }
+}
+
+/// The eight theme colours as swatches, the chosen one ringed.
+private struct ThemePicker: View {
+    @Binding var selection: ThemeColor
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 14) {
+            ForEach(ThemeColor.allCases) { theme in
+                let chosen = theme == selection
+                Button { selection = theme } label: {
+                    VStack(spacing: 6) {
+                        Circle().fill(theme.accent)
+                            .frame(width: 40, height: 40)
+                            .overlay(Circle().strokeBorder(Color.black.opacity(0.85), lineWidth: chosen ? 3 : 0).padding(3))
+                            .overlay(Image(systemName: "checkmark").font(.system(size: 15, weight: .heavy))
+                                .foregroundStyle(.black).opacity(chosen ? 1 : 0))
+                        Text(theme.title).font(.caption2.weight(chosen ? .bold : .regular))
+                            .foregroundStyle(chosen ? .primary : .secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(theme.title)
+                .accessibilityAddTraits(chosen ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 6)
     }
 }

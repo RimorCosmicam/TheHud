@@ -17,6 +17,8 @@ import android.view.TextureView
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.thehud.apps.GlassesOverlayService
+import com.thehud.core.ThemeColor
+import com.thehud.core.ThemeState
 import com.thehud.core.BrowserMetrics
 import com.thehud.core.ClockAppLayout
 import com.thehud.core.MapsLayout
@@ -367,6 +369,7 @@ object HudController {
         snapshot = HudSnapshot.blank.copy(note = HudSnapshot.Note(prefs.getString("note", "") ?: ""))
         timer = HudTimer(setSeconds = prefs.getInt("timerSeconds", 300))
         trackpadSpeed = prefs.getFloat("trackpadSpeed", 1f)
+        ThemeState.color = ThemeColor.named(prefs.getString("theme", null)) ?: ThemeColor.mustard
         mapSpan = prefs.getInt("mapSpan", 300).coerceIn(120, 8000)
         stepGoal = prefs.getInt("stepGoal", 8000)
         captionsLanguage = prefs.getString("captionsLanguage", null) ?: CaptionsEngine.defaultLanguage
@@ -503,6 +506,7 @@ object HudController {
                 "centre" -> { pointer = Pointer(); showCursor(); hover() }
                 else -> RemoteWire.gesture(o)?.let { gesture(it) }
             }
+            "theme" -> ThemeColor.named(o.optString("color"))?.let { changeTheme(it) }
             "draft" -> draftChanged(o.optString("text"))
             "submit" -> submitTyping()
             "endTyping" -> endTyping()
@@ -837,6 +841,38 @@ object HudController {
         stepGoal = goal.coerceIn(1000, 50_000)
         activity.goal = stepGoal
         prefs.edit().putInt("stepGoal", stepGoal).apply()
+    }
+
+    /** The theme colour, picked here or sent by the iPhone. The launcher icon follows when the app is left. */
+    fun changeTheme(color: ThemeColor) {
+        if (ThemeState.color == color) return
+        ThemeState.color = color
+        prefs.edit().putString("theme", color.name).apply()
+    }
+
+    /**
+     * The launcher icon to match the theme: one activity-alias per colour, only the chosen one enabled.
+     * Done as the app is left rather than at once, since a launcher may close the task whose alias
+     * it saw switched.
+     */
+    fun applyThemeIcon() {
+        if (!::app.isInitialized) return
+        val pm = app.packageManager
+        val chosen = ThemeState.color
+        fun alias(t: ThemeColor) = android.content.ComponentName(app, "com.thehud.Theme${t.title}")
+        fun enabled(t: ThemeColor) = when (pm.getComponentEnabledSetting(alias(t))) {
+            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> t == ThemeColor.mustard
+            else -> false
+        }
+        if (enabled(chosen) && ThemeColor.entries.none { it != chosen && enabled(it) }) return
+        // The new one first, so there is never a moment with no icon at all.
+        val flags = android.content.pm.PackageManager.DONT_KILL_APP
+        runCatching {
+            pm.setComponentEnabledSetting(alias(chosen), android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED, flags)
+            for (t in ThemeColor.entries) if (t != chosen && enabled(t))
+                pm.setComponentEnabledSetting(alias(t), android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED, flags)
+        }
     }
 
     fun changeTrackpadSpeed(speed: Float) {

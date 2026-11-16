@@ -19,6 +19,7 @@ runGridTests()
 runSkyTests()
 runYouTubeTests()
 runRemoteConnectTests()
+runThemeTests()
 MainActor.assumeIsolated { runPageScriptTests() }
 
 exit(TestKit.summarise())

@@ -13,6 +13,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -844,6 +845,8 @@ private fun SettingsPage() {
             BasicText(display?.let { "${it.name} · ${it.mode.physicalWidth}×${it.mode.physicalHeight}" } ?: "Not connected",
                 style = HudTheme.mont(15f, FontWeight.SemiBold))
         }
+        item { SettingsTitle("THEME") }
+        item { ThemePicker() }
         item { SettingsTitle("TRACKPAD") }
         item {
             SettingsStepper("Speed", "%.1f×".format(c.trackpadSpeed),
@@ -913,6 +916,29 @@ private fun SettingsPage() {
             SettingsNote("Routes are worked out by routing.openstreetmap.de from where you are, to about ten metres. Searches, weather and " +
                 "the sky's aircraft only get your position rounded to a kilometre or so.")
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** The eight theme colours as swatches, the chosen one ringed. The icon follows once the app is left. */
+@Composable
+private fun ThemePicker() {
+    val view = LocalView.current
+    val chosen = com.thehud.core.ThemeState.color
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (row in com.thehud.core.ThemeColor.entries.chunked(4)) {
+            Row(Modifier.fillMaxWidth()) {
+                for (theme in row) {
+                    val on = theme == chosen
+                    Column(Modifier.weight(1f).clickable { view.tick(); HudController.changeTheme(theme) },
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Box(Modifier.size(36.dp).clip(CircleShape).background(theme.accent), contentAlignment = Alignment.Center) {
+                            if (on) Box(Modifier.size(28.dp).clip(CircleShape).border(3.dp, Color.Black, CircleShape))
+                        }
+                        BasicText(theme.title.uppercase(), style = HudTheme.mont(9f, tracking = 1.2f, color = if (on) HudTheme.ink else HudTheme.inkDim))
+                    }
+                }
+            }
         }
     }
 }

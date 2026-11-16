@@ -14,8 +14,9 @@ public enum HudTheme {
     public static let inkDim = Color.white.opacity(0.55)
     public static let inkFaint = Color.white.opacity(0.28)
 
-    /// MiniMate's Mustard accent (`uC2` of the default colorway), for the few marks that carry state.
-    public static let accent = Color(red: 0xD8 / 255, green: 0xA6 / 255, blue: 0x28 / 255)
+    /// The theme colour, for the few marks that carry state. Mustard unless another is chosen; read
+    /// through the observed store, so a view that shows it redraws when the theme changes.
+    public static var accent: Color { ThemeStore.shared.accent }
 
     /// One corner for every panel on the glasses.
     public static let cornerRadius: CGFloat = 28

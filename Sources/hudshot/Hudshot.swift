@@ -27,6 +27,13 @@ struct Hudshot {
         let outDir = parseOutDir()
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
+        // --icons makes the theme icons from the mustard one, and nothing else.
+        if CommandLine.arguments.contains("--icons") {
+            let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            try ThemeIcons.make(root: root, sheet: outDir.appendingPathComponent("theme-icons.png"))
+            return
+        }
+
         // --live fetches real weather and a real map. Off by default so CI stays deterministic
         // and the tool works with no network.
         let live = CommandLine.arguments.contains("--live")
@@ -307,6 +314,20 @@ struct Hudshot {
             try write(GlassesScreen(snapshot: centreStill, arrangement: fullGrid, solo: kind),
                       to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
         }
+
+        // Every theme colour: the phone and the glasses, then back to mustard.
+        for theme in ThemeColor.allCases where theme != .mustard {
+            ThemeStore.shared.color = theme
+            var config = HalftoneConfig.miniMateDefault
+            config.colorway = theme.colorway
+            let surface = try renderer.render(width: surfaceW, height: surfaceH, config: config)
+            try write(PhoneScreen(surface: surface), to: outDir, "theme-\(theme.rawValue)-phone", scale: scale)
+            var arranged = HudArrangement(left: [.clock, .calendar, .weather], right: [.browser, .music, .note])
+            arranged.setCentre(.sky)
+            try write(GlassesScreen(snapshot: centreStill, arrangement: arranged),
+                      to: outDir, "theme-\(theme.rawValue)-glasses", scale: 1)
+        }
+        ThemeStore.shared.color = .mustard
 
         print("\nimages in \(outDir.path)")
     }

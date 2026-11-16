@@ -66,9 +66,9 @@ half4 main(float2 fragCoord){
 }
 """
 
-/** MiniMate's Mustard: a near-black ground with dim gold dots. */
-private val GROUND = androidx.compose.ui.graphics.Color(0xFF141210)
-private val INK = androidx.compose.ui.graphics.Color(0xFF3A2E0E)
+/** A near-black ground with dim dots, in the theme colour (mustard's are 141210 and 3A2E0E). */
+private const val GROUND = 0xFF141210
+private const val INK = 0xFF3A2E0E
 
 @Composable
 fun HalftoneBackground(modifier: Modifier = Modifier) {
@@ -82,8 +82,9 @@ fun HalftoneBackground(modifier: Modifier = Modifier) {
         }
     }
 
-    val ground = GROUND
-    val ink = INK
+    val theme = com.thehud.core.ThemeState.color
+    val ground = remember(theme) { theme.color(GROUND) }
+    val ink = remember(theme) { theme.color(INK) }
 
     val shader = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

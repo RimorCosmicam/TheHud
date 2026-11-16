@@ -58,6 +58,12 @@ class CoverActivity : ComponentActivity() {
         HudController.startProviders()
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Out of the app: the launcher icon can take the theme colour now.
+        HudController.applyThemeIcon()
+    }
+
     override fun onResume() {
         super.onResume()
         // Back from the system's settings (notification access, accessibility): pick up what changed.

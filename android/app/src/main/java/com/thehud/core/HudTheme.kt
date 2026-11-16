@@ -12,7 +12,7 @@ import com.thehud.R
 
 /**
  * MiniMate's "Mont" panel material, as on the iPhone: black at ninety-two percent, Mont in white,
- * state carried by brightness alone, one gold accent.
+ * state carried by brightness alone, one accent in the theme colour.
  *
  * On the glasses one dp is one point of the 1920x1080 canvas (the glasses window sets its density
  * so), which keeps every number here the same as the iPhone app's.
@@ -28,7 +28,8 @@ object HudTheme {
     val ink = Color.White
     val inkDim = Color.White.copy(alpha = 0.55f)
     val inkFaint = Color.White.copy(alpha = 0.28f)
-    val accent = Color(0xFFD8A628)
+    /** The theme colour: mustard unless another is chosen. Compose state, so it redraws on change. */
+    val accent: Color get() = ThemeState.accent
     val edge = Color.White.copy(alpha = 0.09f)
 
     val mont = FontFamily(

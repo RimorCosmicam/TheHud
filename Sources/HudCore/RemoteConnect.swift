@@ -184,6 +184,12 @@ public enum RemoteWire {
         }
     }
 
+    /// The theme colour, sent on connecting and whenever it changes: the Android phone takes it
+    /// as its own.
+    public static func theme(_ color: ThemeColor) -> [String: Any] {
+        ["t": "theme", "color": color.rawValue]
+    }
+
     public static func spotName(_ spot: HudSpot) -> String {
         switch spot {
         case let .slot(side, i): "\(side.rawValue):\(i)"

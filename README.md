@@ -65,6 +65,11 @@ The rest of the phone is the input:
 
 The cursor hides after a minute untouched, or when the phone locks.
 
+Settings has a theme colour: Mustard, Lime, Mint, Sky, Iris, Orchid, Rose or Coral. It colours
+every accent on the glasses and the phone, the touchpad, and the app icon. Each colour is the
+mustard turned round the colour wheel at the same lightness, so all of them read the same on the
+dark app. The paired Android phone takes the iPhone's colour.
+
 <br clear="right">
 
 ## The Mac
