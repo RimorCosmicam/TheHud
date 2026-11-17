@@ -112,10 +112,7 @@ public final class BookPager: NSObject, WKNavigationDelegate {
     private var laidOutSize = CGSize.zero
 
     public override init() {
-        let configuration = WKWebViewConfiguration()
-        configuration.userContentController.addUserScript(
-            WKUserScript(source: BookScripts.page, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 944, height: 952), configuration: configuration)
+        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 944, height: 952), configuration: WKWebViewConfiguration())
         super.init()
         webView.navigationDelegate = self
         #if os(iOS)
@@ -188,7 +185,9 @@ public final class BookPager: NSObject, WKNavigationDelegate {
     private func layout() {
         let current = generation
         laidOutSize = webView.bounds.size
-        webView.evaluateJavaScript(BookScripts.layout(style, columns: columns)) { [weak self] result, _ in
+        // The script goes with every layout, rather than as a user script: it is there whatever
+        // the page, and whenever it loaded.
+        webView.evaluateJavaScript(BookScripts.page + "\n" + BookScripts.layout(style, columns: columns)) { [weak self] result, _ in
             guard let self, current == self.generation else { return }
             let screens = max((result as? NSNumber)?.intValue ?? 1, 1)
             let screen: Int
