@@ -121,7 +121,14 @@ func runBookTests() {
             s = (v as? String) ?? "error \(String(describing: e))"
         }
         spin { s != nil }
-        return s ?? "no answer"
+        var tried: String?
+        pager.webView.evaluateJavaScript("try { " + BookScripts.page + "; String(" +
+            BookScripts.layout(BookStyle(), columns: 1) + ") + ' ' + getComputedStyle(document.body).columnCount + ' ' + " +
+            "document.getElementById('hud-book-style').namespaceURI } catch (e) { 'threw ' + e }") { v, e in
+            tried = (v as? String) ?? "error \(String(describing: e))"
+        }
+        spin { tried != nil }
+        return (s ?? "no answer") + " || again: " + (tried ?? "no answer")
     }
 
     test("a long chapter is several pages, and a page on scrolls one view across") {
