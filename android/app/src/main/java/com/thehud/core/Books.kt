@@ -41,6 +41,13 @@ object BookScripts {
         if (!e) { e = document.createElement(tag); e.id = id; parent.appendChild(e); }
         return e;
       }
+      // The page's own frame goes on as inline styles, which every WebKit applies.
+      function set(e, css) {
+        css.split(';').forEach(function (d) {
+          var i = d.indexOf(':');
+          if (i > 0) e.style.setProperty(d.slice(0, i).trim(), d.slice(i + 1).trim(), 'important');
+        });
+      }
       window.hudBook = {
         layout: function (o) {
           var root = document.documentElement;
@@ -48,15 +55,12 @@ object BookScripts {
           W = window.innerWidth;
           var k = o.points > 0 ? W / o.points : 1;
           var m = o.margin * k, g = 2 * m, f = o.footer * k;
+          set(root, 'margin:0;padding:0;height:100vh;overflow:hidden;background:' + o.paper + ';-webkit-text-size-adjust:100%');
+          set(document.body, 'margin:0;padding:' + m + 'px ' + m + 'px ' + (m + f) + 'px;box-sizing:border-box;' +
+            'width:100vw;height:100vh;max-width:none;column-count:' + o.columns + ';column-gap:' + g + 'px;' +
+            'column-fill:auto;font-size:' + (o.font * k) + 'px;line-height:1.5;color:' + o.ink + ';background:transparent;' +
+            'overflow:visible;font-family:Georgia,"Noto Serif",serif');
           el('style', 'hud-book-style', head).textContent =
-            'html{margin:0!important;padding:0!important;height:100vh!important;overflow:hidden!important;' +
-            'background:' + o.paper + '!important;-webkit-text-size-adjust:100%!important;}' +
-            'body{margin:0!important;padding:' + m + 'px ' + m + 'px ' + (m + f) + 'px!important;' +
-            'box-sizing:border-box!important;width:100vw!important;height:100vh!important;max-width:none!important;' +
-            'column-count:' + o.columns + '!important;column-gap:' + g + 'px!important;column-fill:auto!important;' +
-            'font-size:' + (o.font * k) + 'px!important;line-height:1.5!important;color:' + o.ink + '!important;' +
-            'background:transparent!important;overflow:visible!important;' +
-            'font-family:Georgia,"Noto Serif",serif;}' +
             'body *{color:inherit!important;background-color:transparent!important;max-width:100%!important;}' +
             'img,svg,video,table{max-height:calc(100vh - ' + (2 * m + f) + 'px)!important;' +
             'object-fit:contain;break-inside:avoid;}' +
