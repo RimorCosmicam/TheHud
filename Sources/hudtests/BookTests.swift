@@ -112,9 +112,21 @@ func runBookTests() {
     pager.open(epub, in: shelf.folder(book.id), at: BookPlace())
     settle()
 
+    /// What the web view has, when a page count is not what it should be.
+    func page() -> String {
+        var s: String?
+        pager.webView.evaluateJavaScript(
+            "[location.href, document.body ? document.body.innerText.length : -1, window.innerWidth, window.innerHeight, " +
+            "document.documentElement.scrollWidth, getComputedStyle(document.body).columnCount].join(' | ')") { v, e in
+            s = (v as? String) ?? "error \(String(describing: e))"
+        }
+        spin { s != nil }
+        return s ?? "no answer"
+    }
+
     test("a long chapter is several pages, and a page on scrolls one view across") {
         expect(pager.state.ready)
-        expect(pager.state.screens > 2, "\(pager.state.screens) pages")
+        expect(pager.state.screens > 2, "\(pager.state.screens) pages: \(page())")
         pager.turn(1)
         settle()
         expectEqual(pager.state.screen, 1)
