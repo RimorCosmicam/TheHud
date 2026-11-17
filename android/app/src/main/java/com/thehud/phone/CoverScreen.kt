@@ -151,6 +151,13 @@ import com.thehud.PhoneAction
 import com.thehud.PhonePad
 import com.thehud.PhotosAction
 import com.thehud.CameraAction
+import com.thehud.BooksAction
+import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.TextDecrease
+import androidx.compose.material.icons.rounded.TextIncrease
+import androidx.compose.material.icons.rounded.Contrast
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.Bookmark
 import com.thehud.PrompterAction
 import com.thehud.TimerAction
 import com.thehud.core.BrowserMetrics
@@ -195,6 +202,7 @@ val HudPanelKind.icon: ImageVector
         HudPanelKind.calendar -> Icons.Rounded.CalendarMonth
         HudPanelKind.photos -> Icons.Rounded.PhotoLibrary
         HudPanelKind.camera -> Icons.Rounded.PhotoCamera
+        HudPanelKind.books -> Icons.Rounded.AutoStories
         HudPanelKind.prompter -> Icons.Rounded.FormatAlignLeft
     }
 
@@ -698,6 +706,7 @@ private fun AppControls(kind: HudPanelKind) {
             HudPanelKind.prompter -> PrompterControls(HudController.snapshot.prompter, HudController.snapshot.note)
             HudPanelKind.photos -> PhotosControls(HudController.snapshot.photos, inGallery = HudController.solo == HudPanelKind.photos)
             HudPanelKind.camera -> CameraControls(HudController.snapshot.camera)
+            HudPanelKind.books -> BooksControls(HudController.snapshot.books)
             else -> {}
         }
     }
@@ -838,6 +847,93 @@ private fun PhotosControls(photos: HudSnapshot.Photos, inGallery: Boolean) {
             if (photos.viewing) "BACK TO THE GRID" else "OPEN", Modifier.fillMaxWidth().height(72.dp)) {
             c.perform(PhoneAction.Photos(PhotosAction.Open))
         }
+    }
+}
+
+// ------------------------------------------------------------------ books
+
+/**
+ * Pages on and back, big; the type, the colours and the see-through; and the shelf, to open
+ * another book or add one. As the iPhone's BooksControls.
+ */
+@Composable
+private fun BooksControls(books: HudSnapshot.Books) {
+    val c = HudController
+    fun act(a: BooksAction) { c.perform(PhoneAction.Books(a)) }
+    var shelf by remember { mutableStateOf(false) }
+    if (shelf || books.open == null) return BookShelf(books, onBack = { shelf = false }, ::act)
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        PadCard(Modifier.fillMaxWidth().clickable { shelf = true }) {
+            Row(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    BasicText(books.open.title, style = HudTheme.mont(17f), maxLines = 1)
+                    BasicText(books.notice.ifEmpty { (if (books.chapter.isEmpty()) "" else books.chapter + " \u00B7 ") + books.percent },
+                        style = HudTheme.mont(12f, tracking = 1.2f, color = HudTheme.inkDim), maxLines = 1)
+                }
+                Image(Icons.Rounded.AutoStories, null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(HudTheme.inkDim))
+            }
+        }
+        // Next is the one pressed most: the bigger target.
+        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PadButton(Icons.Rounded.ChevronLeft, "BACK", Modifier.weight(0.36f)) { act(BooksAction.Turn(-1)) }
+            PadButton(Icons.Rounded.ChevronRight, "NEXT", Modifier.weight(0.64f)) { act(BooksAction.Turn(1)) }
+        }
+        Row(Modifier.height(72.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PadButton(Icons.Rounded.TextDecrease, "SMALLER", Modifier.weight(1f)) { act(BooksAction.Font(-1)) }
+            PadButton(Icons.Rounded.TextIncrease, "LARGER", Modifier.weight(1f)) { act(BooksAction.Font(1)) }
+            PadButton(Icons.Rounded.Contrast, if (books.inverted) "DARK" else "PAPER", Modifier.weight(1f),
+                lit = books.inverted) { act(BooksAction.Invert) }
+            PadButton(Icons.Rounded.Visibility, if (books.transparency == 0.0) "SOLID" else "${(books.transparency * 100).toInt()}%",
+                Modifier.weight(1f), lit = books.transparency > 0) { act(BooksAction.Transparency) }
+        }
+    }
+}
+
+/** The books on the phone: tap one to read it, hold one to take it off the shelf. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookShelf(books: HudSnapshot.Books, onBack: () -> Unit, act: (BooksAction) -> Unit) {
+    val view = LocalView.current
+    var removing by remember { mutableStateOf<String?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicText("SHELF", style = HudTheme.mont(12f, tracking = 2f, color = HudTheme.inkDim), modifier = Modifier.weight(1f))
+            if (books.open != null) BasicText("BACK TO THE BOOK", style = HudTheme.mont(12f, tracking = 1.5f, color = HudTheme.accent),
+                modifier = Modifier.clickable { onBack() })
+        }
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (books.library.isEmpty()) item {
+                BasicText("No books yet. Add an EPUB, or copy them into Android/data/com.thehud/files/Books.",
+                    style = HudTheme.mont(15f, FontWeight.SemiBold, color = HudTheme.inkDim), modifier = Modifier.padding(vertical = 30.dp))
+            }
+            items(books.library.size, key = { books.library[it].id }) { i ->
+                val book = books.library[i]
+                PadCard(Modifier.fillMaxWidth().combinedClickable(
+                    onLongClick = { view.thud(); removing = if (removing == book.id) null else book.id }) {
+                    view.tick()
+                    removing = null
+                    act(BooksAction.Open(book.id))
+                    onBack()
+                }) {
+                    Row(Modifier.padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            BasicText(book.title, style = HudTheme.mont(16f), maxLines = 1)
+                            BasicText(book.author, style = HudTheme.mont(12f, FontWeight.SemiBold, color = HudTheme.inkDim), maxLines = 1)
+                        }
+                        if (removing == book.id) {
+                            Box(Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFFF453A))
+                                .clickable { view.thud(); removing = null; act(BooksAction.Remove(book.id)) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                BasicText("REMOVE", style = HudTheme.mont(11f, tracking = 1.5f, color = Color.White))
+                            }
+                        } else if (book.id == books.open?.id) {
+                            Image(Icons.Rounded.Bookmark, null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(HudTheme.accent))
+                        }
+                    }
+                }
+            }
+        }
+        PadButton(Icons.Rounded.Add, "ADD AN EPUB", Modifier.fillMaxWidth().height(64.dp)) { act(BooksAction.Add) }
     }
 }
 

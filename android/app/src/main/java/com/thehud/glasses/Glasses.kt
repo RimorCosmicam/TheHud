@@ -72,6 +72,8 @@ fun GlassesRoot() {
                     artwork = HudController.artwork,
                     photos = HudController.photoImages,
                     camera = { fill -> LiveCamera(fill) },
+                    book = { columns -> LiveBook(columns) },
+                    bookCover = HudController.bookCover,
                     standIn = false,
                     heading = { eased.doubleValue }))
             }
@@ -148,6 +150,25 @@ private fun LiveCamera(fill: Boolean) {
             onRelease = { camera.detach(it) },
             modifier = Modifier.fillMaxSize())
         camera.frozenFrame?.let { androidx.compose.foundation.Image(it, null, Modifier.fillMaxSize()) }
+    }
+}
+
+/** The open book's web view, moved into the reader's place, laid out in `columns`. */
+@Composable
+private fun LiveBook(columns: Int) {
+    val pager = HudController.bookPager ?: return
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // One dp here is one of the glasses' points.
+        val points = maxWidth.value
+        AndroidView(
+            factory = { c -> android.widget.FrameLayout(c).also { frame -> pager.detach(); frame.addView(pager.view) } },
+            update = { frame ->
+                if (pager.view.parent !== frame) { pager.detach(); frame.addView(pager.view) }
+                pager.columns = columns
+                pager.place(points)
+            },
+            modifier = Modifier.fillMaxSize(),
+            onRelease = { frame -> if (pager.view.parent === frame) frame.removeView(pager.view) })
     }
 }
 

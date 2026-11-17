@@ -9,10 +9,14 @@ let package = Package(
         .executable(name: "hudshot", targets: ["hudshot"]),
         .executable(name: "hudcast", targets: ["hudcast"]),
     ],
+    dependencies: [
+        // EPUB books are zip files; this opens them, on the phone and in the tests alike.
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.19"),
+    ],
     targets: [
         // Shared by the iOS app and the macOS preview tool. No platform-specific code here
         // beyond what Metal itself provides, so what the preview renders is what the app renders.
-        .target(name: "HudCore", dependencies: ["CAstronomy"],
+        .target(name: "HudCore", dependencies: ["CAstronomy", .product(name: "ZIPFoundation", package: "ZIPFoundation")],
                 resources: [.copy("Resources/Fonts"), .copy("Resources/Sky")]),
 
         // Astronomy Engine (MIT, Don Cross), vendored as its single C file: where the sun, the
@@ -28,7 +32,7 @@ let package = Package(
         // An executable rather than a .testTarget: XCTest and swift-testing both ship with
         // Xcode, and this machine has only the Command Line Tools. A plain binary that exits
         // non-zero runs identically here and on a GitHub runner, with nothing installed.
-        .executableTarget(name: "hudtests", dependencies: ["HudCore"]),
+        .executableTarget(name: "hudtests", dependencies: ["HudCore", .product(name: "ZIPFoundation", package: "ZIPFoundation")]),
 
         // macOS: HudCast, the Mac side of the desktop panel. It streams the screen, or one
         // window, to the phone over the local network and plays the phone's cursor and keys

@@ -36,6 +36,8 @@ public struct HudSnapshot: Sendable {
     public var photos: Photos = .preview
     /// The phone's camera, seen through the glasses.
     public var camera: Camera = .preview
+    /// The reader: EPUBs on the phone.
+    public var books: Books = .preview
     /// The teleprompter, reading the note.
     public var prompter: Prompter = Prompter()
     public var browser: Browser
@@ -720,6 +722,7 @@ public struct HudSnapshot: Sendable {
         snapshot.agenda = Agenda()
         snapshot.photos = Photos()
         snapshot.camera = Camera()
+        snapshot.books = Books()
         return snapshot
     }
 }

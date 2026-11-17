@@ -86,6 +86,10 @@ class StillsTest {
     @Test fun camera() = shot("glasses-camera-magnifier", snapshot.copy(cursor = null, camera = HudSnapshot.Camera(
         mode = HudSnapshot.Camera.Mode.magnify, zoom = 4.0, frozen = true, bright = true)), GlassesLayout(solo = HudPanelKind.camera))
     @Test fun centreCamera() = shot("glasses-centre-camera", snapshot.copy(cursor = null), centre(HudPanelKind.camera))
+    @Test fun centreBooks() = shot("glasses-centre-books", snapshot.copy(cursor = null), centre(HudPanelKind.books))
+    @Test fun soloBooks() = shot("glasses-solo-books", snapshot.copy(cursor = null), GlassesLayout(solo = HudPanelKind.books))
+    @Test fun soloBooksPaper() = shot("glasses-solo-books-paper", snapshot.copy(cursor = null,
+        books = HudSnapshot.Books.preview.copy(inverted = true, transparency = 0.25)), GlassesLayout(solo = HudPanelKind.books))
 
     @Test fun desk2() = shot("glasses-mac", snapshot.copy(cursor = null), GlassesLayout(HudScene.presets[0].arrangement))
 

@@ -29,6 +29,23 @@
 	<key>UILaunchScreen</key>
 	<dict/>
 
+	<!-- EPUBs: "Open in TheHud" from Files and the share sheet puts the book on the shelf. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>EPUB book</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.idpf.epub-container</string>
+			</array>
+		</dict>
+	</array>
+
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

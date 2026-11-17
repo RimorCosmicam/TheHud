@@ -22,6 +22,11 @@ public struct GlassesScreen: View {
     /// The camera's live picture, filling its place (true) or fitted in it. Nil draws a stand-in
     /// when `placeholders` is on.
     public var cameraContent: ((Bool) -> AnyView)?
+    /// The open book's pages, laid out in so many columns. Nil draws a stand-in when
+    /// `placeholders` is on.
+    public var bookContent: ((Int) -> AnyView)?
+    /// The open book's cover, for the widget.
+    public var bookCover: Image?
     /// The map raster, when one has arrived.
     public var mapGround: Image?
     /// The Music app's artwork for what is playing.
@@ -46,6 +51,8 @@ public struct GlassesScreen: View {
                 desktopContent: AnyView? = nil,
                 youtubeContent: AnyView? = nil,
                 cameraContent: ((Bool) -> AnyView)? = nil,
+                bookContent: ((Int) -> AnyView)? = nil,
+                bookCover: Image? = nil,
                 mapGround: Image? = nil,
                 artwork: Image? = nil,
                 photoImages: [Int: Image] = [:],
@@ -60,6 +67,8 @@ public struct GlassesScreen: View {
         self.desktopContent = desktopContent
         self.youtubeContent = youtubeContent
         self.cameraContent = cameraContent
+        self.bookContent = bookContent
+        self.bookCover = bookCover
         self.mapGround = mapGround
         self.artwork = artwork
         self.photoImages = photoImages
@@ -223,6 +232,7 @@ public struct GlassesScreen: View {
         case .browser: preview(frame.size) { browserPanel(nil) }
         case .mac: macPanel
         case .camera: CameraWidget(snapshot.camera, content: cameraContent, standIn: placeholders)
+        case .books: BooksWidget(snapshot.books, cover: bookCover)
         }
     }
 
@@ -265,6 +275,8 @@ public struct GlassesScreen: View {
             PrompterView(text: snapshot.note.text, prompter: snapshot.prompter, fontSize: 64)
         case .camera:
             CameraApp(snapshot.camera, content: cameraContent, standIn: placeholders, corner: HudTheme.cornerRadius)
+        case .books:
+            BookPages(snapshot.books, content: bookContent, standIn: placeholders, columns: 1, corner: HudTheme.cornerRadius)
         case .browser, .mac: EmptyView()
         }
     }
@@ -286,6 +298,8 @@ public struct GlassesScreen: View {
             PhotosGallery(snapshot.photos, images: photoImages, size: GlassesLayout.safeFrame.size, hover: hover)
         case .prompter:
             PrompterView(text: snapshot.note.text, prompter: snapshot.prompter, fontSize: 96)
+        case .books:
+            BookPages(snapshot.books, content: bookContent, standIn: placeholders, columns: 2, corner: HudTheme.cornerRadius)
         case .map, .sky, .browser, .mac, .camera: EmptyView()
         }
     }

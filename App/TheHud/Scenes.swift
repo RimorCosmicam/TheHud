@@ -44,6 +44,11 @@ final class PhoneSceneDelegate: UIResponder, UIWindowSceneDelegate {
     private func openRemoteLink(_ url: URL) {
         MainActor.assumeIsolated {
             let controller = HudController.shared
+            // A book shared to TheHud, or opened in it from Files.
+            if url.isFileURL {
+                controller.importBooks([url])
+                return
+            }
             controller.showingRemoteConnect = true
             controller.pair(with: url.absoluteString)
         }
@@ -101,6 +106,10 @@ struct GlassesHost: View {
                           browserContent: AnyView(WebBrowserView(controller.browser)),
                           desktopContent: AnyView(DesktopVideoView(layer: controller.desktopLink.displayLayer)),
                           youtubeContent: AnyView(YouTubePlayerView(controller.youtubePlayer)),
+                          bookContent: { columns in
+                              AnyView(BookPageView(pager: controller.bookPager, columns: columns))
+                          },
+                          bookCover: controller.bookCover,
                           cameraContent: { fill in
                               AnyView(CameraPictureView(camera: controller.camera, filmed: !liveGlass, fill: fill))
                           },

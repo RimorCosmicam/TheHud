@@ -186,7 +186,7 @@ struct Hudshot {
         phoneSky.skyView.selected = "plane:4951d6"
         try write(PhoneScreen(surface: plain, solo: .sky, pad: .app, appSnapshot: phoneSky),
                   to: outDir, "phone-pad-sky", scale: scale)
-        for kind in [HudPanelKind.music, .clock, .captions, .note, .prompter, .photos, .camera] {
+        for kind in [HudPanelKind.music, .clock, .captions, .note, .prompter, .photos, .camera, .books] {
             try write(PhoneScreen(surface: plain, solo: kind, pad: .app, appSnapshot: skyStill),
                       to: outDir, "phone-pad-\(kind.rawValue)", scale: scale)
         }
@@ -342,6 +342,37 @@ struct Hudshot {
         try write(GlassesScreen(snapshot: cameraPaused, arrangement: centred),
                   to: outDir, "glasses-centre-camera-paused", scale: 1)
 
+        // Books: the sample laid out by WebKit, as the phone lays it out. One page in the centre,
+        // two across the glasses, and dark ink on paper half see-through.
+        var reading = centreStill
+        reading.books.chapter = "I. The Lamp"
+        reading.books.progress = 0.08
+        var bookCentre = HudArrangement(left: [.clock, .books, .weather], right: [.browser, .music, .note])
+        bookCentre.setCentre(.books)
+        let centreSize = GlassesLayout(arrangement: bookCentre).centreApp?.frame.size ?? CGSize(width: 944, height: 952)
+        if let page = renderBookPages(size: centreSize, columns: 1, style: reading.books.style) {
+            try write(GlassesScreen(snapshot: reading, arrangement: bookCentre,
+                                    bookContent: { _ in AnyView(Image(decorative: page, scale: CGFloat(page.width) / centreSize.width)) }),
+                      to: outDir, "glasses-centre-books", scale: 1)
+        }
+        if let spread = renderBookPages(size: GlassesLayout.safeFrame.size, columns: 2, style: reading.books.style) {
+            try write(GlassesScreen(snapshot: reading, arrangement: fullGrid, solo: .books,
+                                    bookContent: { _ in AnyView(Image(decorative: spread, scale: CGFloat(spread.width) / GlassesLayout.safeFrame.width)) }),
+                      to: outDir, "glasses-solo-books", scale: 1)
+        }
+        var paper = reading
+        paper.books.inverted = true
+        paper.books.transparency = 0.5
+        if let spread = renderBookPages(size: GlassesLayout.safeFrame.size, columns: 2, style: paper.books.style) {
+            try write(GlassesScreen(snapshot: paper, arrangement: fullGrid, solo: .books,
+                                    bookContent: { _ in AnyView(Image(decorative: spread, scale: CGFloat(spread.width) / GlassesLayout.safeFrame.width)) }),
+                      to: outDir, "glasses-solo-books-paper", scale: 1)
+        }
+        var shelfOnly = centreStill
+        shelfOnly.books.open = nil
+        try write(PhoneScreen(surface: plain, solo: .books, pad: .app, appSnapshot: shelfOnly),
+                  to: outDir, "phone-pad-books-shelf", scale: scale)
+
         // Every theme colour: the phone and the glasses, then back to mustard.
         for theme in ThemeColor.allCases where theme != .mustard {
             ThemeStore.shared.color = theme
@@ -475,6 +506,42 @@ struct Hudshot {
                 .padding(48)
             }
         }
+    }
+
+    /// The sample book's first pages through a real WebKit, as `BookPager` lays them out.
+    @MainActor
+    private static func renderBookPages(size: CGSize, columns: Int, style: BookStyle) -> CGImage? {
+        _ = NSApplication.shared
+        let manager = FileManager.default
+        let work = manager.temporaryDirectory.appendingPathComponent("hudshot-book-\(UUID().uuidString)")
+        defer { try? manager.removeItem(at: work) }
+        let file = work.appendingPathComponent("sample.epub")
+        guard (try? manager.createDirectory(at: work, withIntermediateDirectories: true)) != nil,
+              (try? BookSample.write(to: file)) != nil else { return nil }
+        let shelf = BookLibrary(root: work.appendingPathComponent("shelf"))
+        guard let book = try? shelf.add(file), let epub = shelf.epub(book.id) else { return nil }
+        let pager = BookPager()
+        pager.webView.frame = CGRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: pager.webView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = pager.webView
+        pager.style = style
+        pager.columns = columns
+        pager.open(epub, in: shelf.folder(book.id), at: BookPlace())
+        let deadline = Date().addingTimeInterval(15)
+        while !pager.state.ready, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        var result: CGImage?
+        var done = false
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = CGRect(origin: .zero, size: size)
+        configuration.snapshotWidth = NSNumber(value: Double(size.width))
+        pager.webView.takeSnapshot(with: configuration) { image, _ in
+            result = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            done = true
+        }
+        while !done, Date() < deadline.addingTimeInterval(5) { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        print(result == nil ? "book: WebKit snapshot failed" : "book: \(pager.state.screens) screens, rendered by WebKit")
+        return result
     }
 
     /// The start page through a real WebKit, at the size the browser panel gives it. Favicons

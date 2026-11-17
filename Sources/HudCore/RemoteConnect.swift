@@ -75,6 +75,7 @@ public struct RemoteState: Sendable {
     public var youtube = HudSnapshot.YouTube()
     public var photos = HudSnapshot.Photos()
     public var camera = HudSnapshot.Camera()
+    public var books = HudSnapshot.Books()
     /// Running and how fast; where the words are is the Android phone's business.
     public var prompter = HudSnapshot.Prompter()
 
@@ -92,6 +93,7 @@ public struct RemoteState: Sendable {
         s.youtube = youtube
         s.photos = photos
         s.camera = camera
+        s.books = books
         s.prompter = prompter
         return s
     }
@@ -189,6 +191,16 @@ public enum RemoteWire {
             case .freeze: return act("camera", ["c": "freeze"])
             case .light: return act("camera", ["c": "light"])
             case .bright: return act("camera", ["c": "bright"])
+            }
+        case let .books(b):
+            switch b {
+            case let .turn(by): return act("books", ["c": "turn", "by": by])
+            case let .font(by): return act("books", ["c": "font", "by": by])
+            case .invert: return act("books", ["c": "invert"])
+            case .transparency: return act("books", ["c": "transparency"])
+            case let .open(id): return act("books", ["c": "open", "id": id])
+            case .add: return act("books", ["c": "add"])
+            case let .remove(id): return act("books", ["c": "remove", "id": id])
             }
         case .settings, .editGlasses, .showWindows, .pad, .remote, .captionsSessions, .captionsLanguage,
              .remoteConnect:
@@ -334,6 +346,9 @@ public enum RemoteWire {
             s.photos.viewing = p["viewing"] as? Bool ?? false
             s.photos.caption = p["caption"] as? String ?? ""
         }
+        if let b = o["books"] as? [String: Any] {
+            s.books = books(from: b)
+        }
         if let c = o["camera"] as? [String: Any] {
             s.camera = camera(from: c)
         }
@@ -342,6 +357,26 @@ public enum RemoteWire {
             s.prompter.speed = (p["speed"] as? NSNumber)?.doubleValue ?? 60
         }
         return s
+    }
+
+    /// The reader as the Android phone sends it.
+    public static func books(from b: [String: Any]) -> HudSnapshot.Books {
+        func info(_ any: Any?) -> BookInfo? {
+            guard let o = any as? [String: Any], let id = o["id"] as? String else { return nil }
+            return BookInfo(id: id, title: o["title"] as? String ?? "", author: o["author"] as? String ?? "")
+        }
+        var v = HudSnapshot.Books()
+        v.library = (b["library"] as? [Any] ?? []).compactMap(info)
+        v.open = info(b["open"])
+        v.chapter = b["chapter"] as? String ?? ""
+        v.screen = b["screen"] as? Int ?? 0
+        v.screens = max(b["screens"] as? Int ?? 1, 1)
+        v.progress = number(b["progress"])
+        v.fontSize = (b["fontSize"] as? NSNumber)?.doubleValue ?? 34
+        v.inverted = b["inverted"] as? Bool ?? false
+        v.transparency = number(b["transparency"])
+        v.notice = b["notice"] as? String ?? ""
+        return v
     }
 
     /// The camera as the Android phone sends it. Times go as seconds ago, not clock times: the

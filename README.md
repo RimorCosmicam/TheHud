@@ -2,7 +2,7 @@
 
 A heads-up display for Xreal glasses, run from your phone. Plug the glasses into an iPhone and
 they become a screen of apps. These include a browser, your Mac, YouTube, maps, the night sky,
-music, calendar, photos, the camera, live captions and more. The phone becomes the trackpad and keyboard
+music, calendar, photos, the camera, a book reader, live captions and more. The phone becomes the trackpad and keyboard
 that work them.
 
 ![The glasses: clock, calendar and weather on the left, the sky in the centre, a browser, music and a note on the right](docs/glasses.png)
@@ -33,6 +33,7 @@ three sizes:
 | Calendar | Today's agenda and the month |
 | Photos | The photo library, newest first, as a gallery or slideshow |
 | Camera | The phone's camera on the glasses: photos and video into the library, and a magnifier that zooms close, holds the picture still and brightens it |
+| Books | An EPUB reader: the cover as a widget, one page in the centre, two side by side held fullscreen. Turn pages from the pad, the wheel or a click; change the type size, swap to dark ink on paper, and let the world show through the page. Books come from the Files picker, or from a Books folder the phone checks each time TheHud comes back: Files › On My iPhone › TheHud › Books on the iPhone, `Android/data/com.thehud/files/Books` on Android |
 | Teleprompter | Your text scrolling at a pace you set from the phone |
 | Note | A note typed on the phone |
 | Weather | Now, the next days, air quality, UV and pollen |

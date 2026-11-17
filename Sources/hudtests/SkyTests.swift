@@ -106,6 +106,6 @@ func runSkyTests() {
     }
 
     test("apps with their own phone controls") {
-        expectEqual(Set(HudPanelKind.allCases.filter(\.hasPhoneControls)), [.sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos, .camera])
+        expectEqual(Set(HudPanelKind.allCases.filter(\.hasPhoneControls)), [.sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos, .camera, .books])
     }
 }

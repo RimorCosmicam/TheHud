@@ -56,6 +56,8 @@ import com.thehud.youtube.YouTubeData
 import com.thehud.youtube.YouTubePlayer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import com.thehud.core.BookInfo
+import com.thehud.core.BookPlace
 import kotlinx.coroutines.withContext
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -137,6 +139,21 @@ sealed interface PhoneAction {
     data class Prompter(val action: PrompterAction) : PhoneAction
     data class Photos(val action: PhotosAction) : PhoneAction
     data class Camera(val action: CameraAction) : PhoneAction
+    data class Books(val action: BooksAction) : PhoneAction
+}
+
+sealed interface BooksAction {
+    /** A page on (positive) or back; two at a time where two are shown. */
+    data class Turn(val by: Int) : BooksAction
+    /** The type a size up or down. */
+    data class Font(val by: Int) : BooksAction
+    data object Invert : BooksAction
+    /** The next step of see-through. */
+    data object Transparency : BooksAction
+    data class Open(val id: String) : BooksAction
+    /** Choose an EPUB on the phone to put on the shelf. */
+    data object Add : BooksAction
+    data class Remove(val id: String) : BooksAction
 }
 
 sealed interface CameraAction {
@@ -214,7 +231,7 @@ sealed interface NoteAction {
 /** The apps whose controls can take the cover screen's lower half. */
 val HudPanelKind.hasPhoneControls get() = this in setOf(HudPanelKind.sky, HudPanelKind.music, HudPanelKind.clock,
     HudPanelKind.captions, HudPanelKind.note, HudPanelKind.youtube, HudPanelKind.map, HudPanelKind.prompter, HudPanelKind.photos,
-    HudPanelKind.camera)
+    HudPanelKind.camera, HudPanelKind.books)
 
 val HudPanelKind.padTitle get() = if (this == HudPanelKind.clock) "TIMER" else title
 
@@ -274,6 +291,14 @@ object HudController {
     /** The photo library's pictures on show, by index. */
     var photoImages by mutableStateOf<Map<Int, ImageBitmap>>(emptyMap())
         private set
+    /** The open book's cover, for its widget. */
+    var bookCover by mutableStateOf<ImageBitmap?>(null)
+        private set
+    /** The open book's pages on the glasses. */
+    var bookPager: com.thehud.data.BookPager? = null
+        private set
+    /** The phone's screen asks Android for EPUBs to put on the shelf: set by the activity. */
+    var pickBooks: (() -> Unit)? = null
     /** Where the phone faces, unwrapped, at the sensor's own rate: read only where it is drawn. */
     val heading = androidx.compose.runtime.mutableDoubleStateOf(0.0)
     var youtube: YouTubePlayer? = null
@@ -412,6 +437,7 @@ object HudController {
         calendar = CalendarProvider(app)
         photos = PhotosProvider(app, scope) { photosChanged() }
         camera = CameraProvider(app, scope) { snapshot = snapshot.copy(camera = it) }
+        startBooks(app)
         activity = ActivityProvider(app, prefs) { snapshot = snapshot.copy(activity = it) }.also { it.goal = stepGoal }
         music = MusicProvider(app) { playing, art -> musicChanged(playing, art) }
         captions = CaptionsEngine(app) { snapshot = snapshot.copy(captions = it) }.also { it.language = captionsLanguage }
@@ -1189,11 +1215,174 @@ object HudController {
         }
     }
 
+    // ------------------------------------------------------------------ books
+
+    private lateinit var bookLibrary: com.thehud.data.BookLibrary
+    /** The books folder, its index and the unzipping: one at a time, off the main thread. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val bookWork = Dispatchers.IO.limitedParallelism(1)
+    private var openEPUB: com.thehud.data.EPUB? = null
+    private var bookNoticeJob: kotlinx.coroutines.Job? = null
+    private var bookScroll = 0
+    /**
+     * Where the phone's own EPUBs go: Android/data/com.thehud/files/Books, which a computer can copy
+     * into over USB or adb. Whatever is put there goes on the shelf.
+     */
+    var booksFolder: java.io.File? = null
+        private set
+
+    private lateinit var appContext: Context
+
+    private fun startBooks(app: Context) {
+        appContext = app
+        bookLibrary = com.thehud.data.BookLibrary(java.io.File(app.filesDir, "books"))
+        booksFolder = app.getExternalFilesDir("Books")?.also { it.mkdirs() }
+        snapshot = snapshot.copy(books = HudSnapshot.Books(
+            fontSize = prefs.getFloat("bookFont", 34f).toDouble(),
+            inverted = prefs.getBoolean("bookInverted", false),
+            transparency = prefs.getFloat("bookTransparency", 0f).toDouble()))
+        scope.launch {
+            val books = withContext(bookWork) { bookLibrary.books }
+            snapshot = snapshot.copy(books = snapshot.books.copy(library = books))
+            (prefs.getString("bookOpen", null) ?: books.firstOrNull()?.id)?.let { openBook(it) }
+            scanBooksFolder()
+        }
+    }
+
+    /** New EPUBs in the books folder go on the shelf; the first book ever opens. */
+    private fun scanBooksFolder() {
+        val folder = booksFolder ?: return
+        if (!::bookLibrary.isInitialized) return
+        scope.launch {
+            val added = withContext(bookWork) { bookLibrary.scan(folder) }
+            if (added.isEmpty()) return@launch
+            val books = withContext(bookWork) { bookLibrary.books }
+            snapshot = snapshot.copy(books = snapshot.books.copy(library = books))
+            if (snapshot.books.open == null) openBook(added[0].id)
+            bookNotice(if (added.size == 1) "ADDED ${added[0].title.uppercase()}" else "ADDED ${added.size} BOOKS")
+        }
+    }
+
+    private fun openBook(id: String) {
+        scope.launch {
+            val found = withContext(bookWork) {
+                val epub = bookLibrary.epub(id)
+                val info = bookLibrary.info(id)
+                if (epub == null || info == null) null else {
+                    val cover = epub.cover?.let { java.io.File(bookLibrary.folder(id), it) }
+                        ?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it.path) }.getOrNull() }
+                    listOf(epub, info, bookLibrary.place(id), cover, bookLibrary.folder(id))
+                }
+            }
+            val books = withContext(bookWork) { bookLibrary.books }
+            if (found == null) {
+                snapshot = snapshot.copy(books = snapshot.books.copy(library = books))
+                return@launch
+            }
+            val epub = found[0] as com.thehud.data.EPUB
+            openEPUB = epub
+            // The web view is made the first time a book opens, not with the app.
+            val pager = bookPager ?: com.thehud.data.BookPager(appContext).also {
+                it.style = snapshot.books.style
+                it.onChange = { bookPageChanged() }
+                bookPager = it
+            }
+            prefs.edit().putString("bookOpen", id).apply()
+            snapshot = snapshot.copy(books = snapshot.books.copy(open = found[1] as BookInfo, library = books))
+            bookCover = (found[3] as? android.graphics.Bitmap)?.asImageBitmap()
+            pager.open(epub, found[4] as java.io.File, found[2] as BookPlace)
+        }
+    }
+
+    private fun bookPageChanged() {
+        val pager = bookPager ?: return
+        val state = pager.state
+        val epub = openEPUB
+        var books = snapshot.books.copy(screen = state.screen, screens = state.screens)
+        if (epub != null && state.spine in epub.chapters.indices) {
+            books = books.copy(chapter = epub.chapters[state.spine].title, progress = epub.progress(pager.place))
+        }
+        if (books != snapshot.books) snapshot = snapshot.copy(books = books)
+        val id = books.open?.id
+        if (state.ready && id != null) {
+            val place = pager.place
+            scope.launch(bookWork) { bookLibrary.set(place, id) }
+        }
+    }
+
+    private fun booksAction(action: BooksAction) {
+        val b = snapshot.books
+        when (action) {
+            is BooksAction.Turn -> bookPager?.turn(action.by)
+            is BooksAction.Font -> {
+                snapshot = snapshot.copy(books = b.copy(fontSize = b.fontSize(action.by)))
+                prefs.edit().putFloat("bookFont", snapshot.books.fontSize.toFloat()).apply()
+            }
+            BooksAction.Invert -> {
+                snapshot = snapshot.copy(books = b.copy(inverted = !b.inverted))
+                prefs.edit().putBoolean("bookInverted", snapshot.books.inverted).apply()
+            }
+            BooksAction.Transparency -> {
+                snapshot = snapshot.copy(books = b.copy(transparency = b.nextTransparency))
+                prefs.edit().putFloat("bookTransparency", snapshot.books.transparency.toFloat()).apply()
+            }
+            is BooksAction.Open -> openBook(action.id)
+            BooksAction.Add -> pickBooks?.invoke()
+            is BooksAction.Remove -> {
+                if (b.open?.id == action.id) {
+                    snapshot = snapshot.copy(books = b.copy(open = null))
+                    openEPUB = null
+                    bookCover = null
+                    bookPager?.close()
+                    prefs.edit().remove("bookOpen").apply()
+                }
+                scope.launch {
+                    val books = withContext(bookWork) { bookLibrary.remove(action.id); bookLibrary.books }
+                    snapshot = snapshot.copy(books = snapshot.books.copy(library = books))
+                }
+            }
+        }
+        bookPager?.style = snapshot.books.style
+    }
+
+    /** From Android's file picker. */
+    fun importBooks(context: Context, uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        val resolver = context.applicationContext.contentResolver
+        scope.launch {
+            val added = withContext(bookWork) {
+                uris.mapNotNull { uri -> runCatching { resolver.openInputStream(uri)?.use { bookLibrary.add(it) } }.getOrNull() }
+            }
+            val books = withContext(bookWork) { bookLibrary.books }
+            snapshot = snapshot.copy(books = snapshot.books.copy(library = books))
+            added.firstOrNull()?.let { openBook(it.id) } ?: bookNotice("COULDN'T OPEN THAT BOOK")
+        }
+    }
+
+    /** Three notches of the wheel a page. */
+    private fun booksScrolled(ticks: Int) {
+        bookScroll += ticks
+        val pages = bookScroll / 3
+        if (pages == 0) return
+        bookScroll -= pages * 3
+        bookPager?.turn(pages)
+    }
+
+    private fun bookNotice(text: String) {
+        snapshot = snapshot.copy(books = snapshot.books.copy(notice = text))
+        bookNoticeJob?.cancel()
+        bookNoticeJob = scope.launch {
+            delay(3000)
+            snapshot = snapshot.copy(books = snapshot.books.copy(notice = ""))
+        }
+    }
+
     // ------------------------------------------------------------------ camera
 
     /** The app came to a screen of the phone's, or left them all. */
     fun appInFront(front: Boolean) {
         inFront = front
+        if (front) scanBooksFolder()
         updateCamera()
     }
 
@@ -1227,6 +1416,7 @@ object HudController {
             is PhoneAction.Prompter -> prompterAction(action.action)
             is PhoneAction.Photos -> photosAction(action.action)
             is PhoneAction.Camera -> camera.perform(action.action)
+            is PhoneAction.Books -> booksAction(action.action)
             is PhoneAction.Pad -> { pad = action.pad; sensorsChanged() }
             is PhoneAction.Music -> musicAction(action.action)
             PhoneAction.Captions -> captions.toggle()
@@ -1601,6 +1791,8 @@ object HudController {
                 if (right) skyAction(SkyAction.Recentre) else skyClick(p + GlassesLayout.safeFrame.topLeft)
             }
             HudPanelKind.camera -> if (!right) camera.perform(CameraAction.Shutter)
+            // The left third of the page, or a right click, turns back; the rest, on.
+            HudPanelKind.books -> if (alone) bookPager?.turn(if (right || p.x < size.width / 3) -1 else 1)
             else -> {}
         }
     }
@@ -1623,6 +1815,7 @@ object HudController {
             is GlassesHit.Centre -> { centreScrolled(hit.kind, ticks, hit.point, hit.size); return }
             is GlassesHit.Widget -> when (hit.kind) {
                 HudPanelKind.photos -> { if (solo == HudPanelKind.photos) photosScrolled(ticks); return }
+                HudPanelKind.books -> { if (solo == HudPanelKind.books) booksScrolled(ticks); return }
                 HudPanelKind.prompter -> { if (solo == HudPanelKind.prompter) prompterNudge(ticks); return }
                 HudPanelKind.clock -> {
                     // The wheel sets the timer: up for more.
@@ -1660,6 +1853,7 @@ object HudController {
                 if (notches != 0) { photoScroll -= notches * 3; photosAction(PhotosAction.Step(notches)) }
             }
             HudPanelKind.prompter -> prompterNudge(ticks)
+            HudPanelKind.books -> booksScrolled(ticks)
             HudPanelKind.sky -> skyAction(SkyAction.Zoom(1.08.pow(ticks)))
             HudPanelKind.map -> zoomMap(1.1.pow(ticks))
             else -> {}

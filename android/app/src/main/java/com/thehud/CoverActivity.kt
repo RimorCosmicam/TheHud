@@ -26,6 +26,10 @@ class CoverActivity : ComponentActivity() {
         result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)?.let { HudController.webSignIn(this, it) }
     }
 
+    private val chooseBooks = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        HudController.importBooks(this, uris)
+    }
+
     /** Picks one of the phone's Google accounts (Android asks the wearer) to sign the glasses' browser in. */
     fun signInWithGoogle() {
         chooseAccount.launch(AccountManager.newChooseAccountIntent(null, null, arrayOf("com.google"), null, null, null, null))
@@ -37,6 +41,7 @@ class CoverActivity : ComponentActivity() {
         // The cover screen sleeps after seconds; while it is the glasses' touchpad it should not.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent { CoverScreen() }
+        HudController.pickBooks = { chooseBooks.launch(arrayOf("application/epub+zip", "application/octet-stream")) }
         // Everything the panels read, asked for once; each panel says what it lacks if refused.
         val wanted = arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA, Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.READ_CALENDAR,
@@ -44,6 +49,11 @@ class CoverActivity : ComponentActivity() {
             if (android.os.Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE)
         val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        HudController.pickBooks = null
     }
 
     override fun onStart() {

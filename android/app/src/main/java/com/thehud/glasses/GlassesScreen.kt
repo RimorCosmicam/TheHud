@@ -91,6 +91,9 @@ class GlassesContent(
     val photos: Map<Int, ImageBitmap> = emptyMap(),
     /** The camera's live picture, filling its place (true) or fitted in it. */
     val camera: (@Composable (Boolean) -> Unit)? = null,
+    /** The open book's pages, in this many columns. */
+    val book: (@Composable (Int) -> Unit)? = null,
+    val bookCover: ImageBitmap? = null,
     val standIn: Boolean = true,
     /** The heading as the glasses draw it, eased every frame; null uses the snapshot's. */
     val heading: (() -> Double)? = null,
@@ -213,6 +216,7 @@ fun Widget(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, size
         HudPanelKind.photos -> PhotosWidget(snapshot.photos, live.photos[snapshot.photos.current])
         HudPanelKind.prompter -> PrompterWidget(snapshot.note.text, snapshot.prompter)
         HudPanelKind.camera -> CameraWidget(snapshot.camera, live.camera, live.standIn)
+        HudPanelKind.books -> BooksWidget(snapshot.books, live.bookCover)
         else -> Placeholder(kind)
     }
 }
@@ -250,6 +254,7 @@ fun CentreApp(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, s
         HudPanelKind.photos -> PhotoView(snapshot.photos, live.photos[snapshot.photos.current])
         HudPanelKind.prompter -> PrompterView(snapshot.note.text, snapshot.prompter, 64f)
         HudPanelKind.camera -> CameraApp(snapshot.camera, live.camera, live.standIn, HudTheme.CORNER)
+        HudPanelKind.books -> BookPages(snapshot.books, live.book, live.standIn, 1, HudTheme.CORNER)
         HudPanelKind.browser, HudPanelKind.mac -> {}
     }
 }
@@ -268,6 +273,7 @@ fun SoloApp(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, hov
         HudPanelKind.calendar -> CalendarMonthView(snapshot.agenda)
         HudPanelKind.photos -> PhotosGallery(snapshot.photos, live.photos, hover = hover)
         HudPanelKind.prompter -> PrompterView(snapshot.note.text, snapshot.prompter, 96f)
+        HudPanelKind.books -> BookPages(snapshot.books, live.book, live.standIn, 2, HudTheme.CORNER)
         else -> Placeholder(kind)
     }
 }

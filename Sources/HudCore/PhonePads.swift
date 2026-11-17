@@ -15,7 +15,7 @@ extension HudPanelKind {
     /// Apps that are better worked with a thumb than a cursor when they fill the glasses.
     public var hasPhoneControls: Bool {
         switch self {
-        case .sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos, .camera: return true
+        case .sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos, .camera, .books: return true
         default: return false
         }
     }
@@ -1040,6 +1040,7 @@ public struct AppPad: View {
             case .prompter: PrompterControls(prompter: snapshot.prompter, note: snapshot.note, action: action)
             case .photos: PhotosControls(photos: snapshot.photos, inGallery: fullscreen, action: action)
             case .camera: CameraControls(camera: snapshot.camera, action: action)
+            case .books: BooksControls(books: snapshot.books, action: action)
             default: Color.black
             }
         }

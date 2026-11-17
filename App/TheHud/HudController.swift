@@ -241,6 +241,22 @@ final class HudController: ObservableObject {
     private var youtubeScroll = 0
     /// The Music app's artwork for what is playing.
     @Published private(set) var artwork: Image?
+    /// The open book's cover, for its widget.
+    @Published private(set) var bookCover: Image?
+    /// The Files picker, to put an EPUB on the shelf.
+    @Published var showingBookImporter = false
+    /// The open book's pages on the glasses.
+    let bookPager = BookPager()
+    /// The books on this phone, unzipped where the Files app does not show them.
+    private lazy var bookLibrary = BookLibrary(root: FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Books"))
+    /// Documents/Books: shown in the Files app (On My iPhone › TheHud), and whatever EPUB is put
+    /// there goes on the shelf.
+    private var booksFolder: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Books")
+    }
+    private var openEPUB: EPUB?
+    private var bookNoticeTimer: Timer?
     /// The photo library's pictures on show, by index.
     @Published private(set) var photoImages: [Int: Image] = [:]
     private let photosProvider = PhotosProvider()
@@ -460,6 +476,8 @@ final class HudController: ObservableObject {
         captions.onChange = { [weak self] captions in self?.snapshot.captions = captions }
         photosProvider.onChange = { [weak self] in self?.photosChanged() }
         camera.onChange = { [weak self] in self?.cameraChanged() }
+        bookPager.onChange = { [weak self] _ in self?.bookPageChanged() }
+        startBooks()
         snapshot.youtube.showsSubscriptions = youtubeSubscriptions
         youtubePlayer.onChange = { [weak self] state in self?.youtubeChanged(state) }
         panelsChanged()
@@ -802,6 +820,8 @@ final class HudController: ObservableObject {
             photosAction(action)
         case let .camera(action):
             camera.perform(action)
+        case let .books(action):
+            booksAction(action)
         case .clearView:
             if solo != nil { solo = nil }
             clearView.toggle()
@@ -1146,6 +1166,9 @@ final class HudController: ObservableObject {
             photosAction(.step(1))
         case .camera:
             camera.perform(.shutter)
+        case .books where large:
+            // The left third of the page turns back; the rest, on.
+            bookPager.turn(point.x < size.width / 3 ? -1 : 1)
         default:
             break
         }
@@ -1184,6 +1207,9 @@ final class HudController: ObservableObject {
             return
         case .widget(.photos, _, _) where solo == .photos:
             photosScrolled(ticks)
+            return
+        case .widget(.books, _, _) where solo == .books:
+            booksScrolled(ticks)
             return
         case .widget(.prompter, _, _) where solo == .prompter:
             prompterNudge(ticks)
@@ -1229,6 +1255,8 @@ final class HudController: ObservableObject {
             photosAction(.step(notches))
         case .prompter:
             prompterNudge(ticks)
+        case .books:
+            booksScrolled(ticks)
         case .sky:
             snapshot.skyView.zoom(notches: ticks)
             saveSkyView()
@@ -1263,6 +1291,121 @@ final class HudController: ObservableObject {
         let now = Date()
         snapshot.prompter.anchorOffset = max(snapshot.prompter.offset(at: now) + CGFloat(ticks) * 24, 0)
         snapshot.prompter.anchorTime = now
+    }
+
+    // ------------------------------------------------------------------ books
+
+    private func startBooks() {
+        let defaults = UserDefaults.standard
+        var books = snapshot.books
+        books.fontSize = defaults.object(forKey: "bookFont") as? Double ?? 34
+        books.inverted = defaults.bool(forKey: "bookInverted")
+        books.transparency = defaults.double(forKey: "bookTransparency")
+        snapshot.books = books
+        bookPager.style = books.style
+        try? FileManager.default.createDirectory(at: booksFolder, withIntermediateDirectories: true)
+        scanBooksFolder()
+        if let id = defaults.string(forKey: "bookOpen") ?? bookLibrary.books.first?.id { openBook(id) }
+    }
+
+    /// New EPUBs in Documents/Books go on the shelf; the first book ever opens.
+    private func scanBooksFolder() {
+        let added = bookLibrary.scan(booksFolder)
+        guard !added.isEmpty else { return }
+        snapshot.books.library = bookLibrary.books
+        if snapshot.books.open == nil { openBook(added[0].id) }
+        bookNotice(added.count == 1 ? "ADDED \(added[0].title.uppercased())" : "ADDED \(added.count) BOOKS")
+    }
+
+    private func openBook(_ id: String) {
+        guard let epub = bookLibrary.epub(id), let info = bookLibrary.info(id) else {
+            snapshot.books.library = bookLibrary.books
+            return
+        }
+        openEPUB = epub
+        UserDefaults.standard.set(id, forKey: "bookOpen")
+        snapshot.books.open = info
+        snapshot.books.library = bookLibrary.books
+        bookCover = epub.cover.flatMap { UIImage(contentsOfFile: bookLibrary.folder(id).appendingPathComponent($0).path) }
+            .map { Image(uiImage: $0) }
+        bookPager.open(epub, in: bookLibrary.folder(id), at: bookLibrary.place(id))
+    }
+
+    private func bookPageChanged() {
+        let state = bookPager.state
+        var books = snapshot.books
+        books.screen = state.screen
+        books.screens = state.screens
+        if let epub = openEPUB, epub.chapters.indices.contains(state.spine) {
+            books.chapter = epub.chapters[state.spine].title
+            books.progress = epub.progress(bookPager.place)
+        }
+        if books != snapshot.books { snapshot.books = books }
+        if state.ready, let id = books.open?.id { bookLibrary.set(bookPager.place, for: id) }
+    }
+
+    private func booksAction(_ action: BooksAction) {
+        let defaults = UserDefaults.standard
+        switch action {
+        case let .turn(by):
+            bookPager.turn(by)
+        case let .font(by):
+            snapshot.books.fontSize = snapshot.books.fontSize(stepping: by)
+            defaults.set(snapshot.books.fontSize, forKey: "bookFont")
+        case .invert:
+            snapshot.books.inverted.toggle()
+            defaults.set(snapshot.books.inverted, forKey: "bookInverted")
+        case .transparency:
+            snapshot.books.transparency = snapshot.books.nextTransparency
+            defaults.set(snapshot.books.transparency, forKey: "bookTransparency")
+        case let .open(id):
+            openBook(id)
+        case .add:
+            showingBookImporter = true
+        case let .remove(id):
+            bookLibrary.remove(id)
+            if snapshot.books.open?.id == id {
+                snapshot.books.open = nil
+                openEPUB = nil
+                bookCover = nil
+                bookPager.close()
+                defaults.removeObject(forKey: "bookOpen")
+            }
+            snapshot.books.library = bookLibrary.books
+        }
+        bookPager.style = snapshot.books.style
+    }
+
+    /// From the Files picker, or opened in TheHud from elsewhere.
+    func importBooks(_ urls: [URL]) {
+        var added: [BookInfo] = []
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            if let book = try? bookLibrary.add(url) { added.append(book) }
+        }
+        snapshot.books.library = bookLibrary.books
+        guard let first = added.first else { return bookNotice("COULDN'T OPEN THAT BOOK") }
+        openBook(first.id)
+    }
+
+    private var bookScroll = 0
+
+    /// Three notches of the wheel a page.
+    private func booksScrolled(_ ticks: Int) {
+        bookScroll += ticks
+        let pages = bookScroll / 3
+        guard pages != 0 else { return }
+        bookScroll -= pages * 3
+        bookPager.turn(pages)
+    }
+
+    private func bookNotice(_ text: String) {
+        snapshot.books.notice = text
+        bookNoticeTimer?.invalidate()
+        bookNoticeTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.snapshot.books.notice = "" }
+        }
     }
 
     // ------------------------------------------------------------------ camera
@@ -2229,6 +2372,7 @@ final class HudController: ObservableObject {
 
     private func phoneCameBack() {
         phoneActive = true
+        scanBooksFolder()
         updateCamera()
         if pad == .remote { remote.start() }
         hostCatchUp()

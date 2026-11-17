@@ -6,7 +6,7 @@ import CoreGraphics
 public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable {
     case browser, mac
     case clock, weather, map, activity, sky, music, note, captions, youtube
-    case calendar, photos, prompter, camera
+    case calendar, photos, prompter, camera, books
 
     public var id: String { rawValue }
 
@@ -17,7 +17,7 @@ public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable 
     /// Every app, in the order the phone's picker lists them. Any of them can be a widget, the
     /// one app in the centre, or fullscreen.
     public static let apps: [HudPanelKind] = [.browser, .mac, .youtube, .map, .music, .calendar,
-                                              .photos, .camera, .prompter, .note, .sky, .weather,
+                                              .photos, .camera, .books, .prompter, .note, .sky, .weather,
                                               .clock, .activity, .captions]
 
     public var symbol: String {
@@ -37,6 +37,7 @@ public enum HudPanelKind: String, CaseIterable, Identifiable, Sendable, Codable 
         case .photos: return "photo.on.rectangle"
         case .prompter: return "text.alignleft"
         case .camera: return "camera"
+        case .books: return "book"
         }
     }
 

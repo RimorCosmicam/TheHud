@@ -23,5 +23,6 @@ runThemeTests()
 runCameraTests()
 runStandInTests()
 MainActor.assumeIsolated { runPageScriptTests() }
+MainActor.assumeIsolated { runBookTests() }
 
 exit(TestKit.summarise())

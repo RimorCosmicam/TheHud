@@ -1,5 +1,6 @@
 import SwiftUI
 import HudCore
+import UniformTypeIdentifiers
 
 /// The phone: icons and settings above, the surface on half the display pinned to the bottom
 /// edge, and the system keyboard rising from the lower edge to push it all up.
@@ -75,6 +76,11 @@ struct PhoneRootView: View {
         .sheet(isPresented: $controller.showingCaptionSessions) {
             NavigationStack { CaptionsSessionsView() }
                 .presentationDetents([.medium, .large])
+        }
+        .fileImporter(isPresented: $controller.showingBookImporter,
+                      allowedContentTypes: [UTType("org.idpf.epub-container") ?? .data],
+                      allowsMultipleSelection: true) { result in
+            if case let .success(urls) = result { controller.importBooks(urls) }
         }
         .preferredColorScheme(.dark)
         .onAppear { controller.start() }

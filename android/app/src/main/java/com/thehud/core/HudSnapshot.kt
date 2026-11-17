@@ -34,6 +34,8 @@ data class HudSnapshot(
     val prompter: Prompter = Prompter(),
     /** The phone's camera, seen through the glasses. */
     val camera: Camera = Camera.preview,
+    /** The reader: the shelf, the book open, and how it is set. */
+    val books: Books = Books.preview,
     /** Where the pointer is, in canvas points. Null hides it. */
     val cursor: Offset? = null,
 ) {
@@ -87,6 +89,49 @@ data class HudSnapshot(
                             else -> sample[n].orEmpty().let { Day(n, isToday = n == 15, titles = it.take(3), more = max(it.size - 3, 0)) }
                         }
                     })
+            }
+        }
+    }
+
+    /** The reader, as the iPhone's HudSnapshot.Books. */
+    data class Books(
+        val library: List<BookInfo> = emptyList(),
+        val open: BookInfo? = null,
+        val chapter: String = "",
+        /** The screen shown in this chapter (one page, or two side by side), and how many it has. */
+        val screen: Int = 0,
+        val screens: Int = 1,
+        /** Through the whole book, 0 to 1. */
+        val progress: Double = 0.0,
+        val fontSize: Double = 34.0,
+        /** Dark ink on light paper, rather than light ink on the glasses' black. */
+        val inverted: Boolean = false,
+        /** How much of the world shows through the page: 0 is solid. */
+        val transparency: Double = 0.0,
+        /** "COULDN'T OPEN THAT BOOK", for a few seconds. */
+        val notice: String = "",
+    ) {
+        /** The next size up (positive) or down. */
+        fun fontSize(stepping: Int): Double {
+            val nearest = FONT_SIZES.indices.minByOrNull { kotlin.math.abs(FONT_SIZES[it] - fontSize) } ?: 3
+            return FONT_SIZES[(nearest + stepping).coerceIn(0, FONT_SIZES.size - 1)]
+        }
+
+        /** Solid, then a quarter, half and three quarters see-through, then solid again. */
+        val nextTransparency: Double get() = TRANSPARENCIES.firstOrNull { it > transparency + 0.01 } ?: 0.0
+
+        val percent: String get() = "${kotlin.math.floor(progress * 100).toInt()}%"
+
+        val style: BookStyle get() = BookStyle(fontSize, inverted)
+
+        companion object {
+            val FONT_SIZES = listOf(22.0, 26.0, 30.0, 34.0, 40.0, 46.0, 54.0, 64.0)
+            val TRANSPARENCIES = listOf(0.0, 0.25, 0.5, 0.75)
+            val preview: Books = run {
+                val book = BookInfo("preview", "The Lighthouse Keeper", "M. Arden")
+                Books(library = listOf(book, BookInfo("b", "Salt and Iron", "R. Okafor"),
+                    BookInfo("c", "A Field Guide to Small Hours", "J. Lind")),
+                    open = book, chapter = "III. The Keeper's Log", screen = 4, screens = 12, progress = 0.37)
             }
         }
     }
@@ -487,7 +532,7 @@ data class HudSnapshot(
     companion object {
         /** What the device starts from: the time, and nothing it has not been told. */
         val blank = HudSnapshot(weather = null, minimap = Minimap.locating, activity = null, music = null,
-            agenda = Agenda(), photos = Photos(), camera = Camera(),
+            agenda = Agenda(), photos = Photos(), camera = Camera(), books = Books(),
             captions = Captions(), youtube = YouTube())
     }
 }

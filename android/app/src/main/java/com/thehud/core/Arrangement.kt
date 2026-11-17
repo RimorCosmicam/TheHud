@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
 enum class HudPanelKind {
     browser, mac,
     clock, weather, map, activity, sky, music, note, captions, youtube,
-    calendar, photos, prompter, camera;
+    calendar, photos, prompter, camera, books;
 
     /** The browser and the Mac: panels of their own with live content, worked by the cursor. In a slot they are a live preview. */
     val isBig: Boolean get() = this == browser || this == mac
@@ -25,7 +25,7 @@ enum class HudPanelKind {
 
     companion object {
         /** Every app, in the order the iPhone's picker lists them. */
-        val apps = listOf(browser, mac, youtube, map, music, calendar, photos, camera, prompter, note, sky, weather, clock, activity, captions)
+        val apps = listOf(browser, mac, youtube, map, music, calendar, photos, camera, books, prompter, note, sky, weather, clock, activity, captions)
         val available: Set<HudPanelKind> = entries.toSet()
     }
 }

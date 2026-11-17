@@ -19,6 +19,7 @@ import com.thehud.NoteAction
 import com.thehud.PhoneAction
 import com.thehud.PhotosAction
 import com.thehud.CameraAction
+import com.thehud.BooksAction
 import com.thehud.PrompterAction
 import com.thehud.SkyAction
 import com.thehud.TimerAction
@@ -310,6 +311,16 @@ object RemoteWire {
             "bright" -> CameraAction.Bright
             else -> null
         }?.let { PhoneAction.Camera(it) }
+        "books" -> when (o.optString("c")) {
+            "turn" -> BooksAction.Turn(o.optInt("by", 1))
+            "font" -> BooksAction.Font(o.optInt("by", 1))
+            "invert" -> BooksAction.Invert
+            "transparency" -> BooksAction.Transparency
+            "open" -> o.optString("id").takeIf { it.isNotEmpty() }?.let { BooksAction.Open(it) }
+            "add" -> BooksAction.Add
+            "remove" -> o.optString("id").takeIf { it.isNotEmpty() }?.let { BooksAction.Remove(it) }
+            else -> null
+        }?.let { PhoneAction.Books(it) }
         "photos" -> when (o.optString("c")) {
             "step" -> PhoneAction.Photos(PhotosAction.Step(o.optInt("by", 1)))
             "open" -> PhoneAction.Photos(PhotosAction.Open)
@@ -397,6 +408,14 @@ object RemoteWire {
         return o
     }
 
+    /** The reader, as the iPhone's RemoteConnect reads it. */
+    fun books(b: HudSnapshot.Books): JSONObject {
+        fun info(i: com.thehud.core.BookInfo) = JSONObject().put("id", i.id).put("title", i.title).put("author", i.author)
+        return JSONObject().put("library", JSONArray(b.library.map(::info))).put("open", b.open?.let(::info) ?: JSONObject.NULL)
+            .put("chapter", b.chapter).put("screen", b.screen).put("screens", b.screens).put("progress", b.progress)
+            .put("fontSize", b.fontSize).put("inverted", b.inverted).put("transparency", b.transparency).put("notice", b.notice)
+    }
+
     fun state(c: HudController): String {
         val s = c.snapshot
         val o = JSONObject().put("t", "state")
@@ -436,6 +455,7 @@ object RemoteWire {
             .put("selected", p.selected).put("scrollRow", p.scrollRow).put("viewing", p.viewing).put("caption", p.caption))
         o.put("prompter", JSONObject().put("isRunning", s.prompter.isRunning).put("speed", s.prompter.speed))
         o.put("camera", camera(s.camera, System.currentTimeMillis()))
+        o.put("books", books(s.books))
         return o.toString()
     }
 }

@@ -161,6 +161,7 @@ public enum PhoneAction: Sendable {
     case prompter(PrompterAction)
     case photos(PhotosAction)
     case camera(CameraAction)
+    case books(BooksAction)
     /// Holding the gear: pair with the Android phone, to work its glasses from here.
     case remoteConnect
 }
