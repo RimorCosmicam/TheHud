@@ -89,6 +89,8 @@ class GlassesContent(
     val artwork: ImageBitmap? = null,
     /** The photo library's pictures on show, by index. */
     val photos: Map<Int, ImageBitmap> = emptyMap(),
+    /** The camera's live picture, filling its place (true) or fitted in it. */
+    val camera: (@Composable (Boolean) -> Unit)? = null,
     val standIn: Boolean = true,
     /** The heading as the glasses draw it, eased every frame; null uses the snapshot's. */
     val heading: (() -> Double)? = null,
@@ -116,6 +118,8 @@ fun GlassesScreen(snapshot: HudSnapshot, layout: GlassesLayout, live: GlassesCon
             val safe = GlassesLayout.safeFrame
             when {
                 solo == HudPanelKind.map -> MapsApp(snapshot.minimap, snapshot.maps, live.mapGround, live.standIn, cursor, heading)
+                // The picture is the whole canvas, as wide as the glasses.
+                solo == HudPanelKind.camera -> CameraApp(snapshot.camera, live.camera, live.standIn, 0f)
                 solo == HudPanelKind.sky -> SkyApp(snapshot.sky, snapshot.overhead, snapshot.skyView, heading)
                 solo == HudPanelKind.youtube && snapshot.youtube.page == HudSnapshot.YouTube.Page.player ->
                     YouTubeFullscreen(snapshot.youtube, live.youtube != null, live.standIn)
@@ -208,6 +212,7 @@ fun Widget(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, size
         HudPanelKind.calendar -> CalendarWidget(snapshot.agenda)
         HudPanelKind.photos -> PhotosWidget(snapshot.photos, live.photos[snapshot.photos.current])
         HudPanelKind.prompter -> PrompterWidget(snapshot.note.text, snapshot.prompter)
+        HudPanelKind.camera -> CameraWidget(snapshot.camera, live.camera, live.standIn)
         else -> Placeholder(kind)
     }
 }
@@ -244,6 +249,7 @@ fun CentreApp(kind: HudPanelKind, snapshot: HudSnapshot, live: GlassesContent, s
         HudPanelKind.calendar -> CalendarDayView(snapshot.agenda, size)
         HudPanelKind.photos -> PhotoView(snapshot.photos, live.photos[snapshot.photos.current])
         HudPanelKind.prompter -> PrompterView(snapshot.note.text, snapshot.prompter, 64f)
+        HudPanelKind.camera -> CameraApp(snapshot.camera, live.camera, live.standIn, HudTheme.CORNER)
         HudPanelKind.browser, HudPanelKind.mac -> {}
     }
 }

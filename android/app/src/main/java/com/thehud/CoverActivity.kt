@@ -39,7 +39,7 @@ class CoverActivity : ComponentActivity() {
         setContent { CoverScreen() }
         // Everything the panels read, asked for once; each panel says what it lacks if refused.
         val wanted = arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.RECORD_AUDIO, Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.READ_CALENDAR,
+            Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA, Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.READ_CALENDAR,
             Manifest.permission.POST_NOTIFICATIONS,
             if (android.os.Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE)
         val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
@@ -50,6 +50,7 @@ class CoverActivity : ComponentActivity() {
         super.onStart()
         // The phone's own screens are never the glasses, whichever this activity is on.
         GlassesPresenter.start(this) { setOfNotNull(display?.displayId, 1) }
+        HudController.appInFront(true)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -60,6 +61,7 @@ class CoverActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        HudController.appInFront(false)
         // Out of the app: the launcher icon can take the theme colour now.
         HudController.applyThemeIcon()
     }

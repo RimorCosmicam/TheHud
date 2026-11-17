@@ -32,6 +32,8 @@ data class HudSnapshot(
     val photos: Photos = Photos.preview,
     /** The teleprompter, which reads the note. */
     val prompter: Prompter = Prompter(),
+    /** The phone's camera, seen through the glasses. */
+    val camera: Camera = Camera.preview,
     /** Where the pointer is, in canvas points. Null hides it. */
     val cursor: Offset? = null,
 ) {
@@ -86,6 +88,54 @@ data class HudSnapshot(
                         }
                     })
             }
+        }
+    }
+
+    /**
+     * The camera: a viewfinder that takes photos and video into the gallery, and a magnifier, close
+     * up, held still and brighter than the room. As the iPhone's HudSnapshot.Camera.
+     */
+    data class Camera(
+        val mode: Mode = Mode.photo,
+        val status: Status = Status.running,
+        /** Times the widest the lens shows. */
+        val zoom: Double = 1.0,
+        val maxZoom: Double = 10.0,
+        val front: Boolean = false,
+        val light: Boolean = false,
+        /** Magnifier: the picture brighter than the room. */
+        val bright: Boolean = false,
+        /** Magnifier: the picture held still. */
+        val frozen: Boolean = false,
+        /** Wall-clock millis recording began. */
+        val recordingSince: Long? = null,
+        /** Wall-clock millis the last photo was taken: the glasses flash. */
+        val shotAt: Long = 0,
+        /** "SAVED TO GALLERY", or why not, for a few seconds. */
+        val notice: String = "",
+    ) {
+        enum class Mode(val title: String) { photo("PHOTO"), video("VIDEO"), magnify("MAGNIFIER") }
+        /** Paused: the app is not on the phone's screen, and Android gives the camera only to the app in front. */
+        enum class Status { running, paused, denied, unavailable }
+
+        val isRecording get() = recordingSince != null
+
+        /** "1×", "2.5×". */
+        val zoomTitle: String get() {
+            val r = Math.round(zoom * 10) / 10.0
+            return if (r == Math.rint(r)) "${r.toInt()}\u00D7" else String.format(java.util.Locale.US, "%.1f\u00D7", r)
+        }
+
+        /** The next zoom a step in (positive) or out: a camera app's stops, and the lens's own top. */
+        fun zoom(stepping: Int): Double {
+            val stops = listOf(1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0).filter { it < maxZoom - 0.01 } + maxZoom
+            return if (stepping > 0) stops.firstOrNull { it > zoom + 0.01 } ?: maxZoom
+            else stops.lastOrNull { it < zoom - 0.01 } ?: 1.0
+        }
+
+        companion object {
+            const val MAGNIFIER_ZOOM = 4.0
+            val preview = Camera(zoom = 2.0)
         }
     }
 
@@ -437,7 +487,7 @@ data class HudSnapshot(
     companion object {
         /** What the device starts from: the time, and nothing it has not been told. */
         val blank = HudSnapshot(weather = null, minimap = Minimap.locating, activity = null, music = null,
-            agenda = Agenda(), photos = Photos(),
+            agenda = Agenda(), photos = Photos(), camera = Camera(),
             captions = Captions(), youtube = YouTube())
     }
 }

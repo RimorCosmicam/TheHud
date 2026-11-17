@@ -71,6 +71,7 @@ fun GlassesRoot() {
                     mapGround = HudController.mapGround,
                     artwork = HudController.artwork,
                     photos = HudController.photoImages,
+                    camera = { fill -> LiveCamera(fill) },
                     standIn = false,
                     heading = { eased.doubleValue }))
             }
@@ -127,6 +128,27 @@ private fun LiveVideo(player: com.thehud.youtube.YouTubePlayer) {
         update = { frame -> if (player.view.parent !== frame) { player.detach(); frame.addView(player.view); player.settle() } },
         modifier = Modifier.fillMaxSize(),
         onRelease = { frame -> if (player.view.parent === frame) frame.removeView(player.view) })
+}
+
+/** The phone's camera: its preview, and the picture held still over it. */
+@Composable
+private fun LiveCamera(fill: Boolean) {
+    val camera = HudController.camera
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { c ->
+                androidx.camera.view.PreviewView(c).apply {
+                    // A TextureView: it moves and clips with the slot it is in, and can be held still.
+                    implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
+                    camera.attach(this)
+                }
+            },
+            update = { it.scaleType = if (fill) androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
+                else androidx.camera.view.PreviewView.ScaleType.FIT_CENTER },
+            onRelease = { camera.detach(it) },
+            modifier = Modifier.fillMaxSize())
+        camera.frozenFrame?.let { androidx.compose.foundation.Image(it, null, Modifier.fillMaxSize()) }
+    }
 }
 
 /**

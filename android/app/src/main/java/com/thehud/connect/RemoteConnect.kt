@@ -18,6 +18,7 @@ import com.thehud.MusicAction
 import com.thehud.NoteAction
 import com.thehud.PhoneAction
 import com.thehud.PhotosAction
+import com.thehud.CameraAction
 import com.thehud.PrompterAction
 import com.thehud.SkyAction
 import com.thehud.TimerAction
@@ -299,6 +300,16 @@ object RemoteWire {
             "restart" -> PrompterAction.Restart
             else -> null
         }?.let { PhoneAction.Prompter(it) }
+        "camera" -> when (o.optString("c")) {
+            "shutter" -> CameraAction.Shutter
+            "mode" -> HudSnapshot.Camera.Mode.entries.firstOrNull { it.name == o.optString("mode") }?.let { CameraAction.Mode(it) }
+            "zoom" -> CameraAction.Zoom(o.optInt("by", 1))
+            "flip" -> CameraAction.Flip
+            "freeze" -> CameraAction.Freeze
+            "light" -> CameraAction.Light
+            "bright" -> CameraAction.Bright
+            else -> null
+        }?.let { PhoneAction.Camera(it) }
         "photos" -> when (o.optString("c")) {
             "step" -> PhoneAction.Photos(PhotosAction.Step(o.optInt("by", 1)))
             "open" -> PhoneAction.Photos(PhotosAction.Open)
@@ -376,6 +387,16 @@ object RemoteWire {
     }
 
     /** Everything the iPhone draws of this phone. */
+    /** The camera, its times as seconds ago: the two phones' clocks need not agree. */
+    fun camera(cam: HudSnapshot.Camera, now: Long): JSONObject {
+        val o = JSONObject().put("mode", cam.mode.name).put("status", cam.status.name).put("zoom", cam.zoom)
+            .put("maxZoom", cam.maxZoom).put("front", cam.front).put("light", cam.light).put("bright", cam.bright)
+            .put("frozen", cam.frozen).put("notice", cam.notice)
+        cam.recordingSince?.let { o.put("recordingFor", (now - it).coerceAtLeast(0) / 1000.0) }
+        if (now - cam.shotAt < 2000) o.put("shotAgo", (now - cam.shotAt).coerceAtLeast(0) / 1000.0)
+        return o
+    }
+
     fun state(c: HudController): String {
         val s = c.snapshot
         val o = JSONObject().put("t", "state")
@@ -414,6 +435,7 @@ object RemoteWire {
         o.put("photos", JSONObject().put("hasAccess", p.hasAccess).put("count", p.count).put("current", p.current)
             .put("selected", p.selected).put("scrollRow", p.scrollRow).put("viewing", p.viewing).put("caption", p.caption))
         o.put("prompter", JSONObject().put("isRunning", s.prompter.isRunning).put("speed", s.prompter.speed))
+        o.put("camera", camera(s.camera, System.currentTimeMillis()))
         return o.toString()
     }
 }

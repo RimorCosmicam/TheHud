@@ -36,6 +36,7 @@ import com.thehud.data.ActivityProvider
 import com.thehud.data.CalendarProvider
 import com.thehud.data.CaptionsEngine
 import com.thehud.data.PhotosProvider
+import com.thehud.data.CameraProvider
 import com.thehud.data.LatLon
 import com.thehud.data.LocationProvider
 import com.thehud.data.MapGround
@@ -135,6 +136,19 @@ sealed interface PhoneAction {
     data class Centre(val kind: HudPanelKind) : PhoneAction
     data class Prompter(val action: PrompterAction) : PhoneAction
     data class Photos(val action: PhotosAction) : PhoneAction
+    data class Camera(val action: CameraAction) : PhoneAction
+}
+
+sealed interface CameraAction {
+    /** A photo, or video started or stopped. */
+    data object Shutter : CameraAction
+    data class Mode(val mode: HudSnapshot.Camera.Mode) : CameraAction
+    /** A stop in (positive) or out. */
+    data class Zoom(val by: Int) : CameraAction
+    data object Flip : CameraAction
+    data object Freeze : CameraAction
+    data object Light : CameraAction
+    data object Bright : CameraAction
 }
 
 enum class PrompterAction { Toggle, Faster, Slower, Restart }
@@ -199,7 +213,8 @@ sealed interface NoteAction {
 
 /** The apps whose controls can take the cover screen's lower half. */
 val HudPanelKind.hasPhoneControls get() = this in setOf(HudPanelKind.sky, HudPanelKind.music, HudPanelKind.clock,
-    HudPanelKind.captions, HudPanelKind.note, HudPanelKind.youtube, HudPanelKind.map, HudPanelKind.prompter, HudPanelKind.photos)
+    HudPanelKind.captions, HudPanelKind.note, HudPanelKind.youtube, HudPanelKind.map, HudPanelKind.prompter, HudPanelKind.photos,
+    HudPanelKind.camera)
 
 val HudPanelKind.padTitle get() = if (this == HudPanelKind.clock) "TIMER" else title
 
@@ -302,6 +317,11 @@ object HudController {
     private lateinit var location: LocationProvider
     private lateinit var calendar: CalendarProvider
     private lateinit var photos: PhotosProvider
+    /** The phone's camera, while it is on the glasses and the app is in front. */
+    lateinit var camera: CameraProvider
+        private set
+    /** One of the app's screens is showing: Android gives the camera only to the app in front. */
+    private var inFront = false
     private var photoScroll = 0
     private var lastSlide = 0L
     private lateinit var activity: ActivityProvider
@@ -391,6 +411,7 @@ object HudController {
         location = LocationProvider(app, onHeading = { heading.doubleValue = it }) { minimap, at, _ -> located(minimap, at) }
         calendar = CalendarProvider(app)
         photos = PhotosProvider(app, scope) { photosChanged() }
+        camera = CameraProvider(app, scope) { snapshot = snapshot.copy(camera = it) }
         activity = ActivityProvider(app, prefs) { snapshot = snapshot.copy(activity = it) }.also { it.goal = stepGoal }
         music = MusicProvider(app) { playing, art -> musicChanged(playing, art) }
         captions = CaptionsEngine(app) { snapshot = snapshot.copy(captions = it) }.also { it.language = captionsLanguage }
@@ -554,6 +575,7 @@ object HudController {
         photos.start()
         photosChanged()
         sensorsChanged()
+        updateCamera()
         lastCalendar = 0
         settingsVersion++
     }
@@ -577,6 +599,7 @@ object HudController {
     fun glassesAttached(context: Context) {
         glassesContext = context
         glassesConnected = true
+        updateCamera()
         if (tabs.isEmpty()) openTab(null)
         if (youtube == null) youtube = YouTubePlayer(context) { youtubeChanged(it) }
     }
@@ -586,6 +609,7 @@ object HudController {
 
     fun glassesDetached() {
         glassesConnected = false
+        updateCamera()
         tabs.forEach { it.detach() }
     }
 
@@ -1161,7 +1185,22 @@ object HudController {
             lastSky = 0
             lastAgendaMinute = -1
             photosChanged()
+            updateCamera()
         }
+    }
+
+    // ------------------------------------------------------------------ camera
+
+    /** The app came to a screen of the phone's, or left them all. */
+    fun appInFront(front: Boolean) {
+        inFront = front
+        updateCamera()
+    }
+
+    /** The camera runs while it is on these glasses and the app is in front; the glasses say it is paused otherwise. */
+    private fun updateCamera() {
+        if (!::camera.isInitialized) return
+        camera.run(glassesConnected && isOnGlasses(HudPanelKind.camera) && inFront)
     }
 
     // ------------------------------------------------------------------ the phone's buttons
@@ -1187,6 +1226,7 @@ object HudController {
             is PhoneAction.Centre -> { clearView = false; showAlone(null); arrange(arrangement.setCentre(action.kind)) }
             is PhoneAction.Prompter -> prompterAction(action.action)
             is PhoneAction.Photos -> photosAction(action.action)
+            is PhoneAction.Camera -> camera.perform(action.action)
             is PhoneAction.Pad -> { pad = action.pad; sensorsChanged() }
             is PhoneAction.Music -> musicAction(action.action)
             PhoneAction.Captions -> captions.toggle()
@@ -1560,6 +1600,7 @@ object HudController {
             HudPanelKind.sky -> if (solo == HudPanelKind.sky) {
                 if (right) skyAction(SkyAction.Recentre) else skyClick(p + GlassesLayout.safeFrame.topLeft)
             }
+            HudPanelKind.camera -> if (!right) camera.perform(CameraAction.Shutter)
             else -> {}
         }
     }

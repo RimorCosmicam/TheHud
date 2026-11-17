@@ -156,6 +156,24 @@ class CoreTest {
     }
 
     @Test
+    fun cameraZoomStepsAsTheIPhones() {
+        var c = HudSnapshot.Camera(maxZoom = 10.0)
+        assertEquals(1.5, c.zoom(1), 0.0)
+        assertEquals(1.0, c.zoom(-1), 0.0)
+        c = c.copy(zoom = 10.0)
+        assertEquals(10.0, c.zoom(1), 0.0)
+        c = HudSnapshot.Camera(zoom = 4.0, maxZoom = 5.0)
+        assertEquals("the lens's own top", 5.0, c.zoom(1), 0.0)
+        c = c.copy(zoom = 2.7)
+        assertEquals(3.0, c.zoom(1), 0.0)
+        assertEquals(2.0, c.zoom(-1), 0.0)
+        assertEquals("1\u00D7", HudSnapshot.Camera().zoomTitle)
+        assertEquals("2.5\u00D7", HudSnapshot.Camera(zoom = 2.5).zoomTitle)
+        assertEquals("4\u00D7", HudSnapshot.Camera(zoom = 3.999).zoomTitle)
+        assertEquals(HudPanelKind.photos, HudPanelKind.apps[HudPanelKind.apps.indexOf(HudPanelKind.camera) - 1])
+    }
+
+    @Test
     fun theIPhonesLayoutReadsHereForTheStandIn() {
         // Exactly what the iPhone's RemoteWire.standIn sends for the standard layout with the sky
         // in the centre: strip left out, as Swift leaves out nil.

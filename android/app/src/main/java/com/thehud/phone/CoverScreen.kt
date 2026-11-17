@@ -48,6 +48,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.runtime.mutableLongStateOf
+import kotlinx.coroutines.delay
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material.icons.rounded.ZoomOut
+import androidx.compose.material.icons.rounded.Cameraswitch
+import androidx.compose.material.icons.rounded.FlashlightOn
+import androidx.compose.material.icons.rounded.FlashlightOff
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.Remove
@@ -140,6 +150,7 @@ import com.thehud.NoteAction
 import com.thehud.PhoneAction
 import com.thehud.PhonePad
 import com.thehud.PhotosAction
+import com.thehud.CameraAction
 import com.thehud.PrompterAction
 import com.thehud.TimerAction
 import com.thehud.core.BrowserMetrics
@@ -183,6 +194,7 @@ val HudPanelKind.icon: ImageVector
         HudPanelKind.youtube -> Icons.Rounded.SmartDisplay
         HudPanelKind.calendar -> Icons.Rounded.CalendarMonth
         HudPanelKind.photos -> Icons.Rounded.PhotoLibrary
+        HudPanelKind.camera -> Icons.Rounded.PhotoCamera
         HudPanelKind.prompter -> Icons.Rounded.FormatAlignLeft
     }
 
@@ -685,6 +697,7 @@ private fun AppControls(kind: HudPanelKind) {
             HudPanelKind.map -> MapsControls()
             HudPanelKind.prompter -> PrompterControls(HudController.snapshot.prompter, HudController.snapshot.note)
             HudPanelKind.photos -> PhotosControls(HudController.snapshot.photos, inGallery = HudController.solo == HudPanelKind.photos)
+            HudPanelKind.camera -> CameraControls(HudController.snapshot.camera)
             else -> {}
         }
     }
@@ -824,6 +837,81 @@ private fun PhotosControls(photos: HudSnapshot.Photos, inGallery: Boolean) {
         if (inGallery) PadButton(if (photos.viewing) Icons.Rounded.GridView else Icons.Rounded.Photo,
             if (photos.viewing) "BACK TO THE GRID" else "OPEN", Modifier.fillMaxWidth().height(72.dp)) {
             c.perform(PhoneAction.Photos(PhotosAction.Open))
+        }
+    }
+}
+
+// ------------------------------------------------------------------ camera
+
+/** The mode, the shutter between zoom out and in, and the mode's own switches, as the iPhone's CameraControls. */
+@Composable
+private fun CameraControls(camera: HudSnapshot.Camera) {
+    val c = HudController
+    fun act(a: CameraAction) { c.perform(PhoneAction.Camera(a)) }
+    val running = camera.status == HudSnapshot.Camera.Status.running
+    val status = when (camera.status) {
+        HudSnapshot.Camera.Status.paused -> "Paused while TheHud is in the background"
+        HudSnapshot.Camera.Status.denied -> "Allow the camera in Settings"
+        HudSnapshot.Camera.Status.unavailable -> "No camera"
+        HudSnapshot.Camera.Status.running -> when {
+            camera.notice.isNotEmpty() -> camera.notice
+            camera.frozen -> "Frozen · ${camera.zoomTitle}"
+            else -> "${if (camera.front) "Front" else "Back"} · ${camera.zoomTitle}"
+        }
+    }
+    val red = Color(0xFFFF453A)
+    Column(Modifier.alpha(if (running) 1f else 0.5f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().height(56.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (mode in HudSnapshot.Camera.Mode.entries) {
+                val icon = when (mode) {
+                    HudSnapshot.Camera.Mode.photo -> Icons.Rounded.PhotoCamera
+                    HudSnapshot.Camera.Mode.video -> Icons.Rounded.Videocam
+                    HudSnapshot.Camera.Mode.magnify -> Icons.Rounded.ZoomIn
+                }
+                PadButton(icon, mode.title, Modifier.weight(1f), lit = camera.mode == mode) {
+                    if (!camera.isRecording) act(CameraAction.Mode(mode))
+                }
+            }
+        }
+        PadCard(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val since = camera.recordingSince
+                if (since != null) {
+                    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                    LaunchedEffect(since) { while (true) { now = System.currentTimeMillis(); delay(500) } }
+                    Box(Modifier.size(10.dp).background(red, CircleShape))
+                    BasicText(com.thehud.glasses.duration(now - since), style = HudTheme.mont(15f, tracking = 1.2f))
+                } else BasicText(status, style = HudTheme.mont(15f, tracking = 1.2f), maxLines = 1)
+            }
+        }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            PadButton(Icons.Rounded.ZoomOut, "OUT", Modifier.weight(1f)) { if (running) act(CameraAction.Zoom(-1)) }
+            // Round, the way a shutter is: white for a photo, red to record, a square to stop.
+            Box(Modifier.weight(1f).fillMaxHeight().clickable(enabled = running) { act(CameraAction.Shutter) },
+                contentAlignment = Alignment.Center) {
+                Box(Modifier.size(92.dp).border(4.dp, Color.White, CircleShape), contentAlignment = Alignment.Center) {
+                    when {
+                        camera.isRecording -> Box(Modifier.size(32.dp).background(red, RoundedCornerShape(7.dp)))
+                        else -> Box(Modifier.size(74.dp).background(
+                            if (camera.mode == HudSnapshot.Camera.Mode.video) red else Color.White, CircleShape))
+                    }
+                }
+            }
+            PadButton(Icons.Rounded.ZoomIn, "IN", Modifier.weight(1f)) { if (running) act(CameraAction.Zoom(1)) }
+        }
+        Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (camera.mode == HudSnapshot.Camera.Mode.magnify) {
+                PadButton(if (camera.frozen) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                    if (camera.frozen) "GO ON" else "FREEZE", Modifier.weight(1f), lit = camera.frozen) { if (running) act(CameraAction.Freeze) }
+                PadButton(Icons.Rounded.WbSunny, "BRIGHTER", Modifier.weight(1f), lit = camera.bright) { if (running) act(CameraAction.Bright) }
+            } else {
+                PadButton(Icons.Rounded.Cameraswitch, "FLIP", Modifier.weight(1f)) {
+                    if (running && !camera.isRecording) act(CameraAction.Flip)
+                }
+            }
+            PadButton(if (camera.light) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff, "LIGHT",
+                Modifier.weight(1f), lit = camera.light) { if (running && !camera.front) act(CameraAction.Light) }
         }
     }
 }

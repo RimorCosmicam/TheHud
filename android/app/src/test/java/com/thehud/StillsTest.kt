@@ -83,6 +83,9 @@ class StillsTest {
     @Test fun centreMusic() = shot("glasses-centre-music", snapshot.copy(cursor = null), centre(HudPanelKind.music))
     @Test fun calendar() = shot("glasses-calendar", snapshot.copy(cursor = null), GlassesLayout(solo = HudPanelKind.calendar))
     @Test fun photos() = shot("glasses-photos", snapshot.copy(cursor = null), GlassesLayout(solo = HudPanelKind.photos))
+    @Test fun camera() = shot("glasses-camera-magnifier", snapshot.copy(cursor = null, camera = HudSnapshot.Camera(
+        mode = HudSnapshot.Camera.Mode.magnify, zoom = 4.0, frozen = true, bright = true)), GlassesLayout(solo = HudPanelKind.camera))
+    @Test fun centreCamera() = shot("glasses-centre-camera", snapshot.copy(cursor = null), centre(HudPanelKind.camera))
 
     @Test fun desk2() = shot("glasses-mac", snapshot.copy(cursor = null), GlassesLayout(HudScene.presets[0].arrangement))
 
