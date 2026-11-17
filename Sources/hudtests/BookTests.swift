@@ -123,8 +123,8 @@ func runBookTests() {
         spin { s != nil }
         var tried: String?
         pager.webView.evaluateJavaScript("try { " + BookScripts.page + "; String(" +
-            BookScripts.layout(BookStyle(), columns: 1) + ") + ' ' + getComputedStyle(document.body).columnCount + ' ' + " +
-            "document.getElementById('hud-book-style').namespaceURI } catch (e) { 'threw ' + e }") { v, e in
+            BookScripts.layout(BookStyle(), columns: 1) + ") + ' columns ' + getComputedStyle(document.body).columnCount + '/' + getComputedStyle(document.body).columnWidth + ' end ' + " +
+            "document.getElementById('hud-book-end').getBoundingClientRect().left + ',' + document.getElementById('hud-book-end').getBoundingClientRect().top } catch (e) { 'threw ' + e }") { v, e in
             tried = (v as? String) ?? "error \(String(describing: e))"
         }
         spin { tried != nil }

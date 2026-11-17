@@ -52,10 +52,12 @@ public enum BookScripts {
           var meta = el('meta', 'hud-book-viewport', head);
           meta.setAttribute('name', 'viewport');
           meta.setAttribute('content', 'width=device-width, initial-scale=1, user-scalable=no');
+          W = window.innerWidth;
           var m = o.margin, g = 2 * m;
           set(root, 'margin:0;padding:0;height:100vh;overflow:hidden;background:' + o.paper + ';-webkit-text-size-adjust:100%');
           set(document.body, 'margin:0;padding:' + m + 'px ' + m + 'px ' + (m + o.footer) + 'px;box-sizing:border-box;' +
             'width:100vw;height:100vh;max-width:none;column-count:' + o.columns + ';column-gap:' + g + 'px;' +
+            'column-width:' + ((W - 2 * m - (o.columns - 1) * g) / o.columns) + 'px;' +
             'column-fill:auto;font-size:' + o.font + 'px;line-height:1.5;color:' + o.ink + ';background:transparent;' +
             'overflow:visible;font-family:Georgia,"Noto Serif",serif');
           el('style', 'hud-book-style', head).textContent =
@@ -65,7 +67,6 @@ public enum BookScripts {
             'p{orphans:2;widows:2;}' +
             'a{text-decoration:none!important;}';
           var end = el('span', 'hud-book-end', document.body || root);
-          W = window.innerWidth;
           window.scrollTo(0, 0);
           void document.body.offsetHeight;
           var x = end.getBoundingClientRect().left + window.scrollX;
