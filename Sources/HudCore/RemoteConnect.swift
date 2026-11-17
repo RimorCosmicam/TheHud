@@ -74,6 +74,7 @@ public struct RemoteState: Sendable {
     public var captions = HudSnapshot.Captions()
     public var youtube = HudSnapshot.YouTube()
     public var photos = HudSnapshot.Photos()
+    public var camera = HudSnapshot.Camera()
     /// Running and how fast; where the words are is the Android phone's business.
     public var prompter = HudSnapshot.Prompter()
 
@@ -90,6 +91,7 @@ public struct RemoteState: Sendable {
         s.captions = captions
         s.youtube = youtube
         s.photos = photos
+        s.camera = camera
         s.prompter = prompter
         return s
     }
@@ -177,6 +179,16 @@ public enum RemoteWire {
             switch p {
             case let .step(by): return act("photos", ["c": "step", "by": by])
             case .open: return act("photos", ["c": "open"])
+            }
+        case let .camera(c):
+            switch c {
+            case .shutter: return act("camera", ["c": "shutter"])
+            case let .mode(m): return act("camera", ["c": "mode", "mode": m.rawValue])
+            case let .zoom(by): return act("camera", ["c": "zoom", "by": by])
+            case .flip: return act("camera", ["c": "flip"])
+            case .freeze: return act("camera", ["c": "freeze"])
+            case .light: return act("camera", ["c": "light"])
+            case .bright: return act("camera", ["c": "bright"])
             }
         case .settings, .editGlasses, .showWindows, .pad, .remote, .captionsSessions, .captionsLanguage,
              .remoteConnect:
@@ -322,11 +334,34 @@ public enum RemoteWire {
             s.photos.viewing = p["viewing"] as? Bool ?? false
             s.photos.caption = p["caption"] as? String ?? ""
         }
+        if let c = o["camera"] as? [String: Any] {
+            s.camera = camera(from: c)
+        }
         if let p = o["prompter"] as? [String: Any] {
             s.prompter.isRunning = p["isRunning"] as? Bool ?? false
             s.prompter.speed = (p["speed"] as? NSNumber)?.doubleValue ?? 60
         }
         return s
+    }
+
+    /// The camera as the Android phone sends it. Times go as seconds ago, not clock times: the
+    /// two phones' clocks need not agree.
+    public static func camera(from c: [String: Any], now: Date = Date()) -> HudSnapshot.Camera {
+        var v = HudSnapshot.Camera()
+        v.mode = (c["mode"] as? String).flatMap(HudSnapshot.Camera.Mode.init(rawValue:)) ?? .photo
+        v.status = (c["status"] as? String).flatMap(HudSnapshot.Camera.Status.init(rawValue:)) ?? .running
+        v.zoom = max(number(c["zoom"]), 1)
+        v.maxZoom = max(number(c["maxZoom"]), 1)
+        v.front = c["front"] as? Bool ?? false
+        v.light = c["light"] as? Bool ?? false
+        v.bright = c["bright"] as? Bool ?? false
+        v.frozen = c["frozen"] as? Bool ?? false
+        if let recording = c["recordingFor"] as? NSNumber {
+            v.recordingSince = now.addingTimeInterval(-recording.doubleValue)
+        }
+        if let shot = c["shotAgo"] as? NSNumber { v.shotAt = now.addingTimeInterval(-shot.doubleValue) }
+        v.notice = c["notice"] as? String ?? ""
+        return v
     }
 
     private static func number(_ any: Any?) -> Double { (any as? NSNumber)?.doubleValue ?? 0 }

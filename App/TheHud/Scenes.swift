@@ -101,6 +101,9 @@ struct GlassesHost: View {
                           browserContent: AnyView(WebBrowserView(controller.browser)),
                           desktopContent: AnyView(DesktopVideoView(layer: controller.desktopLink.displayLayer)),
                           youtubeContent: AnyView(YouTubePlayerView(controller.youtubePlayer)),
+                          cameraContent: { fill in
+                              AnyView(CameraPictureView(camera: controller.camera, filmed: !liveGlass, fill: fill))
+                          },
                           mapGround: controller.mapGround,
                           artwork: controller.artwork,
                           photoImages: controller.photoImages,

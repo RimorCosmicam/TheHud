@@ -58,6 +58,8 @@
 
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Shows your day and your month on the glasses.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>The camera app saves the photos and videos you take to your library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Shows your photos on the glasses, one at a time or as a gallery.</string>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -68,7 +70,7 @@
 		<string>_thehud-remote._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Remote Connect scans the code on your Android phone to pair with it.</string>
+	<string>The camera app shows what the phone sees on the glasses, and Remote Connect scans the code on your Android phone to pair with it.</string>
 	<!-- Remote Connect's QR code is a thehud:// link, so the Camera app can open it here too. -->
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -86,7 +88,7 @@
 	<key>NSAppleMusicUsageDescription</key>
 	<string>The music widget shows what the Music app is playing and lets you play, pause and skip.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Captions listen to what is said around you and write it on the glasses.</string>
+	<string>Captions listen to what is said around you and write it on the glasses, and the camera records sound with video.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Captions turn speech into text on the phone.</string>
 	<key>UIFileSharingEnabled</key>

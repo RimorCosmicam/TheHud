@@ -15,7 +15,7 @@ extension HudPanelKind {
     /// Apps that are better worked with a thumb than a cursor when they fill the glasses.
     public var hasPhoneControls: Bool {
         switch self {
-        case .sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos: return true
+        case .sky, .music, .clock, .captions, .note, .youtube, .prompter, .photos, .camera: return true
         default: return false
         }
     }
@@ -292,7 +292,7 @@ public struct RemotePad: View {
 
 // MARK: - Shared pieces
 
-private struct PadCard<Content: View>: View {
+struct PadCard<Content: View>: View {
     var content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
     var body: some View {
@@ -303,7 +303,7 @@ private struct PadCard<Content: View>: View {
     }
 }
 
-private struct PadButton: View {
+struct PadButton: View {
     var symbol: String
     var title: String?
     var lit = false
@@ -1039,6 +1039,7 @@ public struct AppPad: View {
             case .youtube: YouTubeControls(youtube: snapshot.youtube, scrolls: scrolls, action: action)
             case .prompter: PrompterControls(prompter: snapshot.prompter, note: snapshot.note, action: action)
             case .photos: PhotosControls(photos: snapshot.photos, inGallery: fullscreen, action: action)
+            case .camera: CameraControls(camera: snapshot.camera, action: action)
             default: Color.black
             }
         }
@@ -1133,6 +1134,115 @@ public struct PhotosControls: View {
                           title: photos.viewing ? "BACK TO THE GRID" : "OPEN") { action(.photos(.open)) }
                     .frame(height: 84)
             }
+        }
+    }
+}
+
+// MARK: - Camera
+
+/// The mode, the shutter between zoom out and in, and the mode's own switches: the other camera
+/// and the light to take pictures; to read, the picture held still and made brighter.
+public struct CameraControls: View {
+    public var camera: HudSnapshot.Camera
+    public var action: (PhoneAction) -> Void
+
+    public init(camera: HudSnapshot.Camera, action: @escaping (PhoneAction) -> Void = { _ in }) {
+        self.camera = camera
+        self.action = action
+    }
+
+    private var status: String {
+        switch camera.status {
+        case .paused: return "Paused while TheHud is in the background"
+        case .denied: return "Allow the camera in Settings"
+        case .unavailable: return "No camera"
+        case .running:
+            if !camera.notice.isEmpty { return camera.notice }
+            if camera.frozen { return "Frozen \u{00B7} \(camera.zoomTitle)" }
+            return "\(camera.front ? "Front" : "Back") \u{00B7} \(camera.zoomTitle)"
+        }
+    }
+
+    public var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                ForEach(HudSnapshot.Camera.Mode.allCases, id: \.self) { mode in
+                    PadButton(symbol: Self.symbol(mode), title: mode.title, lit: camera.mode == mode) {
+                        action(.camera(.mode(mode)))
+                    }
+                    .disabled(camera.isRecording)
+                }
+            }
+            .frame(height: 64)
+            PadCard {
+                HStack {
+                    if camera.isRecording, let since = camera.recordingSince {
+                        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                            HStack(spacing: 8) {
+                                Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 10, height: 10)
+                                Text(CameraView.duration(context.date.timeIntervalSince(since))).monospacedDigit()
+                            }
+                        }
+                    } else {
+                        Text(status).lineLimit(1)
+                    }
+                    Spacer()
+                }
+                .font(HudTheme.mont(16, .black)).tracking(1.2).foregroundStyle(HudTheme.ink)
+                .padding(.horizontal, 18).padding(.vertical, 14)
+            }
+            HStack(spacing: 10) {
+                PadButton(symbol: "minus.magnifyingglass", title: "OUT", big: true) { action(.camera(.zoom(-1))) }
+                    .disabled(camera.zoom <= 1.01)
+                shutter
+                PadButton(symbol: "plus.magnifyingglass", title: "IN", big: true) { action(.camera(.zoom(1))) }
+                    .disabled(camera.zoom >= camera.maxZoom - 0.01)
+            }
+            .frame(maxHeight: .infinity)
+            HStack(spacing: 8) {
+                if camera.mode == .magnify {
+                    PadButton(symbol: camera.frozen ? "play.fill" : "pause.fill",
+                              title: camera.frozen ? "GO ON" : "FREEZE", lit: camera.frozen) { action(.camera(.freeze)) }
+                    PadButton(symbol: "sun.max.fill", title: "BRIGHTER", lit: camera.bright) { action(.camera(.bright)) }
+                } else {
+                    PadButton(symbol: "arrow.triangle.2.circlepath.camera", title: "FLIP") { action(.camera(.flip)) }
+                        .disabled(camera.isRecording)
+                }
+                PadButton(symbol: camera.light ? "flashlight.on.fill" : "flashlight.off.fill", title: "LIGHT",
+                          lit: camera.light) { action(.camera(.light)) }
+                    .disabled(camera.front)
+            }
+            .frame(height: 72)
+        }
+        .disabled(camera.status != .running)
+        .opacity(camera.status == .running ? 1 : 0.5)
+    }
+
+    /// Round, the way a shutter is: white for a photo, red to record, a square to stop.
+    private var shutter: some View {
+        Button { action(.camera(.shutter)) } label: {
+            ZStack {
+                Circle().strokeBorder(Color.white, lineWidth: 5)
+                if camera.isRecording {
+                    RoundedRectangle(cornerRadius: 8).fill(Color(red: 1, green: 0.27, blue: 0.23))
+                        .frame(width: 38, height: 38)
+                } else {
+                    Circle().fill(camera.mode == .video ? Color(red: 1, green: 0.27, blue: 0.23) : Color.white)
+                        .padding(11)
+                }
+            }
+            .frame(width: 108, height: 108)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    static func symbol(_ mode: HudSnapshot.Camera.Mode) -> String {
+        switch mode {
+        case .photo: return "camera"
+        case .video: return "video"
+        case .magnify: return "plus.magnifyingglass"
         }
     }
 }

@@ -186,10 +186,16 @@ struct Hudshot {
         phoneSky.skyView.selected = "plane:4951d6"
         try write(PhoneScreen(surface: plain, solo: .sky, pad: .app, appSnapshot: phoneSky),
                   to: outDir, "phone-pad-sky", scale: scale)
-        for kind in [HudPanelKind.music, .clock, .captions, .note, .prompter, .photos] {
+        for kind in [HudPanelKind.music, .clock, .captions, .note, .prompter, .photos, .camera] {
             try write(PhoneScreen(surface: plain, solo: kind, pad: .app, appSnapshot: skyStill),
                       to: outDir, "phone-pad-\(kind.rawValue)", scale: scale)
         }
+        var magnifying = skyStill
+        magnifying.camera.mode = .magnify
+        magnifying.camera.zoom = 4
+        magnifying.camera.frozen = true
+        try write(PhoneScreen(surface: plain, solo: .camera, pad: .app, appSnapshot: magnifying),
+                  to: outDir, "phone-pad-camera-magnifier", scale: scale)
 
         // YouTube held up alone: the browse grid with the cursor on a card, then the player.
         var tube = still
@@ -310,10 +316,31 @@ struct Hudshot {
                       to: outDir, "glasses-centre-\(kind.rawValue)", scale: 1)
         }
         // Full screen: the month, the gallery, the teleprompter.
-        for kind in [HudPanelKind.calendar, .photos, .prompter] {
+        for kind in [HudPanelKind.calendar, .photos, .prompter, .camera] {
             try write(GlassesScreen(snapshot: centreStill, arrangement: fullGrid, solo: kind),
                       to: outDir, "glasses-solo-\(kind.rawValue)", scale: 1)
         }
+        // The camera: the magnifier held still and brighter, recording in a slot, and paused.
+        var magnifier = centreStill
+        magnifier.camera.mode = .magnify
+        magnifier.camera.zoom = 4
+        magnifier.camera.frozen = true
+        magnifier.camera.bright = true
+        try write(GlassesScreen(snapshot: magnifier, arrangement: fullGrid, solo: .camera),
+                  to: outDir, "glasses-solo-camera-magnifier", scale: 1)
+        var recording = centreStill
+        recording.camera.mode = .video
+        recording.camera.recordingSince = Date().addingTimeInterval(-83)
+        var slotted = HudArrangement(left: [.clock, .camera, .weather], right: [.browser, .music, .note])
+        slotted.setCentre(.map)
+        try write(GlassesScreen(snapshot: recording, arrangement: slotted),
+                  to: outDir, "glasses-camera-widget-recording", scale: 1)
+        var cameraPaused = centreStill
+        cameraPaused.camera.status = .paused
+        var centred = HudArrangement(left: [.clock, .calendar, .weather], right: [.browser, .music, .note])
+        centred.setCentre(.camera)
+        try write(GlassesScreen(snapshot: cameraPaused, arrangement: centred),
+                  to: outDir, "glasses-centre-camera-paused", scale: 1)
 
         // Every theme colour: the phone and the glasses, then back to mustard.
         for theme in ThemeColor.allCases where theme != .mustard {

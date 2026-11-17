@@ -19,6 +19,9 @@ public struct GlassesScreen: View {
     public var desktopContent: AnyView?
     /// The YouTube player's page. Nil draws a stand-in frame when `placeholders` is on.
     public var youtubeContent: AnyView?
+    /// The camera's live picture, filling its place (true) or fitted in it. Nil draws a stand-in
+    /// when `placeholders` is on.
+    public var cameraContent: ((Bool) -> AnyView)?
     /// The map raster, when one has arrived.
     public var mapGround: Image?
     /// The Music app's artwork for what is playing.
@@ -42,6 +45,7 @@ public struct GlassesScreen: View {
                 browserContent: AnyView? = nil,
                 desktopContent: AnyView? = nil,
                 youtubeContent: AnyView? = nil,
+                cameraContent: ((Bool) -> AnyView)? = nil,
                 mapGround: Image? = nil,
                 artwork: Image? = nil,
                 photoImages: [Int: Image] = [:],
@@ -55,6 +59,7 @@ public struct GlassesScreen: View {
         self.browserContent = browserContent
         self.desktopContent = desktopContent
         self.youtubeContent = youtubeContent
+        self.cameraContent = cameraContent
         self.mapGround = mapGround
         self.artwork = artwork
         self.photoImages = photoImages
@@ -97,6 +102,9 @@ public struct GlassesScreen: View {
                 } else if solo == .youtube && snapshot.youtube.page == .player {
                     // Watching: the video is the canvas.
                     YouTubeFullscreen(snapshot.youtube, live: youtubeContent != nil, standIn: placeholders)
+                } else if solo == .camera {
+                    // The picture is the whole canvas, as wide as the glasses.
+                    CameraApp(snapshot.camera, content: cameraContent, standIn: placeholders, corner: 0)
                 } else if solo == .sky {
                     // The sky is the whole canvas, edge to edge.
                     SkyApp(snapshot.sky, overhead: snapshot.overhead, view: snapshot.skyView,
@@ -214,6 +222,7 @@ public struct GlassesScreen: View {
         case .prompter: PrompterWidget(text: snapshot.note.text, prompter: snapshot.prompter)
         case .browser: preview(frame.size) { browserPanel(nil) }
         case .mac: macPanel
+        case .camera: CameraWidget(snapshot.camera, content: cameraContent, standIn: placeholders)
         }
     }
 
@@ -254,6 +263,8 @@ public struct GlassesScreen: View {
         case .photos: PhotoView(snapshot.photos, image: photoImages[snapshot.photos.current])
         case .prompter:
             PrompterView(text: snapshot.note.text, prompter: snapshot.prompter, fontSize: 64)
+        case .camera:
+            CameraApp(snapshot.camera, content: cameraContent, standIn: placeholders, corner: HudTheme.cornerRadius)
         case .browser, .mac: EmptyView()
         }
     }
@@ -275,7 +286,7 @@ public struct GlassesScreen: View {
             PhotosGallery(snapshot.photos, images: photoImages, size: GlassesLayout.safeFrame.size, hover: hover)
         case .prompter:
             PrompterView(text: snapshot.note.text, prompter: snapshot.prompter, fontSize: 96)
-        case .map, .sky, .browser, .mac: EmptyView()
+        case .map, .sky, .browser, .mac, .camera: EmptyView()
         }
     }
 

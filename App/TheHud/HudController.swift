@@ -166,6 +166,7 @@ final class HudController: ObservableObject {
         didSet {
             UIApplication.shared.isIdleTimerDisabled = glassesConnected
             location.keepsRunningInBackground = glassesConnected
+            updateCamera()
         }
     }
 
@@ -243,6 +244,10 @@ final class HudController: ObservableObject {
     /// The photo library's pictures on show, by index.
     @Published private(set) var photoImages: [Int: Image] = [:]
     private let photosProvider = PhotosProvider()
+    /// The phone's camera, while it is on the glasses and the phone's screen is this app's.
+    let camera = CameraService()
+    /// The phone's own screen is this app's: the camera is only given to the app in front.
+    private var phoneActive = UIApplication.shared.applicationState == .active
     private var photoScroll = 0
     private var lastSlide = Date()
     /// The activity ring's target.
@@ -454,6 +459,7 @@ final class HudController: ObservableObject {
         activityProvider.onChange = { [weak self] activity in self?.snapshot.activity = activity }
         captions.onChange = { [weak self] captions in self?.snapshot.captions = captions }
         photosProvider.onChange = { [weak self] in self?.photosChanged() }
+        camera.onChange = { [weak self] in self?.cameraChanged() }
         snapshot.youtube.showsSubscriptions = youtubeSubscriptions
         youtubePlayer.onChange = { [weak self] state in self?.youtubeChanged(state) }
         panelsChanged()
@@ -596,6 +602,7 @@ final class HudController: ObservableObject {
     private func panelsChanged() {
         stopTypingIntoHidden()
         startWidgetSources()
+        updateCamera()
         if isOnGlasses(.mac) && !hostStandingIn {
             desktopLink.start()
         } else {
@@ -793,6 +800,8 @@ final class HudController: ObservableObject {
             prompterAction(action)
         case let .photos(action):
             photosAction(action)
+        case let .camera(action):
+            camera.perform(action)
         case .clearView:
             if solo != nil { solo = nil }
             clearView.toggle()
@@ -1135,6 +1144,8 @@ final class HudController: ObservableObject {
             photosChanged()
         case .photos:
             photosAction(.step(1))
+        case .camera:
+            camera.perform(.shutter)
         default:
             break
         }
@@ -1252,6 +1263,19 @@ final class HudController: ObservableObject {
         let now = Date()
         snapshot.prompter.anchorOffset = max(snapshot.prompter.offset(at: now) + CGFloat(ticks) * 24, 0)
         snapshot.prompter.anchorTime = now
+    }
+
+    // ------------------------------------------------------------------ camera
+
+    /// The camera runs while it is on glasses this phone draws (its own, or the Android phone's
+    /// in Host mode) and the phone's screen is this app's; the glasses say it is paused otherwise.
+    private func updateCamera() {
+        camera.filmsFrames = hostStreamer != nil
+        camera.run(!isRemote && glassesConnected && isOnGlasses(.camera) && phoneActive && !hostStandingIn)
+    }
+
+    private func cameraChanged() {
+        if snapshot.camera != camera.state { snapshot.camera = camera.state }
     }
 
     // ------------------------------------------------------------------ photos
@@ -1877,6 +1901,7 @@ final class HudController: ObservableObject {
                 self.sendTheme()
             } else if self.remoteState != nil {
                 self.remoteState = nil
+                self.updateCamera()
                 self.remoteDraft = ""
                 self.appPadSetAside = false
                 self.padChanged()
@@ -1898,6 +1923,7 @@ final class HudController: ObservableObject {
         }
         if old?.solo != state.solo { appPadSetAside = false }
         remoteState = state
+        updateCamera()
         if pad != padBefore { padChanged() }
     }
 
@@ -2193,6 +2219,8 @@ final class HudController: ObservableObject {
 
     /// The phone was locked or left: the cursor goes, and so does pointing with the phone.
     private func phoneWentAway() {
+        phoneActive = false
+        updateCamera()
         putCursorAway()
         remote.stop()
         remoteTouches.removeAll()
@@ -2200,6 +2228,8 @@ final class HudController: ObservableObject {
     }
 
     private func phoneCameBack() {
+        phoneActive = true
+        updateCamera()
         if pad == .remote { remote.start() }
         hostCatchUp()
     }
