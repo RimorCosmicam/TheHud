@@ -2,7 +2,7 @@
 
 A heads-up display for Xreal glasses, run from your phone. Plug the glasses into an iPhone and
 they become a screen of apps. These include a browser, your Mac, YouTube, maps, the night sky,
-music, calendar, photos, live captions and more. The phone becomes the trackpad and keyboard
+music, calendar, photos, the camera, live captions and more. The phone becomes the trackpad and keyboard
 that work them.
 
 ![The glasses: clock, calendar and weather on the left, the sky in the centre, a browser, music and a note on the right](docs/glasses.png)
@@ -32,6 +32,7 @@ three sizes:
 | Music | What's playing, with its controls |
 | Calendar | Today's agenda and the month |
 | Photos | The photo library, newest first, as a gallery or slideshow |
+| Camera | The phone's camera on the glasses: photos and video into the library, and a magnifier that zooms close, holds the picture still and brightens it |
 | Teleprompter | Your text scrolling at a pace you set from the phone |
 | Note | A note typed on the phone |
 | Weather | Now, the next days, air quality, UV and pollen |
@@ -61,7 +62,7 @@ The rest of the phone is the input:
 - **Remote**: point the phone like an air mouse. The gyroscope moves the cursor.
 - **Keyboard**: the system keyboard types into whatever has focus on the glasses.
 - **App pads**: controls for the app in the centre, such as YouTube search, music controls,
-  teleprompter speed and photo stepping.
+  teleprompter speed, photo stepping and the camera's shutter and zoom.
 
 The cursor hides after a minute untouched, or when the phone locks.
 
@@ -211,7 +212,7 @@ run.
 | Planes overhead | adsb.lol | |
 | ISS | wheretheiss.at | |
 | Sky | Astronomy Engine and the d3-celestial catalogue | Computed on the phone |
-| Calendar, photos, music, steps | The phone's own APIs | Each asks for permission once |
+| Calendar, photos, camera, music, steps | The phone's own APIs | Each asks for permission once |
 | Captions | On-device speech recognition | Nothing leaves the phone |
 
 Each app degrades on its own. If one doesn't get permission or network, it shows less, and the rest
