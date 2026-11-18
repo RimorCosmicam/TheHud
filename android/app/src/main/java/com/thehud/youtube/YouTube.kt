@@ -159,6 +159,17 @@ object YouTubeData {
  * in the browser is signed in here. A style sheet put in before the page draws hides all but the
  * player; the HUD draws its own titles, buttons and lists around it.
  */
+/**
+ * A context at one pixel a CSS pixel. The glasses report no density of their own, so a web view
+ * there took the phone's (2.625), and Chromium drew the video's picture at its size in CSS pixels:
+ * 1280 pixels of page, 488 pixels of picture, in the top left corner. At one to one the two agree.
+ */
+private fun onePixelAPoint(context: Context): Context {
+    val config = android.content.res.Configuration(context.resources.configuration)
+    config.densityDpi = android.util.DisplayMetrics.DENSITY_DEFAULT
+    return context.createConfigurationContext(config)
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
     data class State(
@@ -175,7 +186,7 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
     private var loading = false
     private var polling = false
 
-    val view: WebView = WebView(context).apply {
+    val view: WebView = WebView(onePixelAPoint(context)).apply {
         setBackgroundColor(Color.BLACK)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
