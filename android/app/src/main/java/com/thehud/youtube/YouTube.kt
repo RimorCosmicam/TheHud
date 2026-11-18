@@ -237,6 +237,9 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
 
     fun play(id: String) {
         loadedId = id
+        lastTime = 0.0
+        lastFrames = -1
+        stalled = 0
         loadedAt = System.currentTimeMillis()
         state = State(hasVideo = true, videoId = id)
         onChange(state)
@@ -308,7 +311,34 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
             d.optString("channel").takeIf { it.isNotEmpty() }?.let { next = next.copy(channel = it) }
             next = next.copy(notice = notice(d, (System.currentTimeMillis() - loadedAt) / 1000.0))
             if (next != state) { state = next; onChange(next) }
+            watchPicture(next.isPlaying && !next.isAd, d.optDouble("t", 0.0), d.optLong("frames", -1))
         }
+    }
+
+    private var lastFrames = -1L
+    private var lastTime = 0.0
+    private var stalled = 0
+    private var healedAt = 0L
+
+    /**
+     * The sound playing on with no new pictures: after the phone was locked, now and then the
+     * video's picture stopped while its sound went on. Three seconds of that and the picture is
+     * laid out again, as when the player moves; if that was not enough, the video is sought to
+     * where it is, which makes it decode a picture.
+     */
+    private fun watchPicture(playing: Boolean, time: Double, frames: Long) {
+        val moving = playing && frames >= 0 && time > lastTime + 0.5
+        stalled = if (moving && frames == lastFrames) stalled + 1 else 0
+        lastFrames = frames
+        lastTime = time
+        val now = System.currentTimeMillis()
+        if (stalled < 3 || now - healedAt < 10_000) return
+        val again = now - healedAt < 30_000
+        healedAt = now
+        stalled = 0
+        android.util.Log.i("YouTube", "Sound without pictures at ${"%.1f".format(time)} s: laying the picture out again${if (again) ", and seeking" else ""}")
+        settle()
+        if (again) view.evaluateJavascript("(function(){var v=document.querySelector('video'); if (v) v.currentTime = v.currentTime;})()", null)
     }
 
     private fun notice(d: JSONObject, seconds: Double): String {
@@ -368,6 +398,7 @@ class YouTubePlayer(context: Context, private val onChange: (State) -> Unit) {
   var errText = err && err.textContent ? err.textContent.trim().replace(/\s+/g, ' ').slice(0, 120) : '';
   return JSON.stringify({
     video: !!v, w: v ? v.videoWidth : 0, error: errText,
+    frames: v && v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : -1,
     playing: !!v && !v.paused && !v.ended, ended: !!v && v.ended,
     t: v ? v.currentTime : 0, d: d,
     ad: !!(p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))),
