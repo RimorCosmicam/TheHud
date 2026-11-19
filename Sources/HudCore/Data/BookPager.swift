@@ -53,6 +53,8 @@ public enum BookScripts {
           meta.setAttribute('name', 'viewport');
           meta.setAttribute('content', 'width=device-width, initial-scale=1, user-scalable=no');
           W = window.innerWidth;
+          // The page has not caught up with the view's new size yet: asked again in a moment.
+          if (o.width && Math.abs(W - o.width) > 1) return -1;
           var m = o.margin, g = 2 * m;
           set(root, 'margin:0;padding:0;height:100vh;overflow:hidden;background:' + o.paper + ';-webkit-text-size-adjust:100%');
           set(document.body, 'margin:0;padding:' + m + 'px ' + m + 'px ' + (m + o.footer) + 'px;box-sizing:border-box;' +
@@ -78,9 +80,9 @@ public enum BookScripts {
     """
 
     /// The call that lays the chapter out, answering how many screens it has.
-    public static func layout(_ style: BookStyle, columns: Int) -> String {
+    public static func layout(_ style: BookStyle, columns: Int, width: Double = 0) -> String {
         "hudBook.layout({font: \(style.fontSize), ink: '\(style.ink)', paper: '\(style.paper)', " +
-            "columns: \(columns), margin: \(margin), footer: \(footer)})"
+            "columns: \(columns), margin: \(margin), footer: \(footer), width: \(width)})"
     }
 }
 
@@ -115,6 +117,7 @@ public final class BookPager: NSObject, WKNavigationDelegate {
     private var epub: EPUB?
     private var generation = 0
     private var laidOutSize = CGSize.zero
+    private var layoutRetries = 0
 
     public override init() {
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 944, height: 952), configuration: WKWebViewConfiguration())
@@ -192,8 +195,18 @@ public final class BookPager: NSObject, WKNavigationDelegate {
         laidOutSize = webView.bounds.size
         // The script goes with every layout, rather than as a user script: it is there whatever
         // the page, and whenever it loaded.
-        webView.evaluateJavaScript(BookScripts.page + "\n" + BookScripts.layout(style, columns: columns)) { [weak self] result, _ in
+        let width = Double(webView.bounds.width)
+        webView.evaluateJavaScript(BookScripts.page + "\n" + BookScripts.layout(style, columns: columns, width: width)) { [weak self] result, _ in
             guard let self, current == self.generation else { return }
+            if (result as? NSNumber)?.intValue == -1, self.layoutRetries < 40 {
+                self.layoutRetries += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    guard let self, current == self.generation else { return }
+                    self.layout()
+                }
+                return
+            }
+            self.layoutRetries = 0
             let screens = max((result as? NSNumber)?.intValue ?? 1, 1)
             let screen: Int
             switch self.landing {
