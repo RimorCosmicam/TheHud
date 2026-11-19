@@ -4,15 +4,21 @@ import Security
 import HudCore
 
 /// Remote Connect, opened by holding the gear: scan the code on the Android phone, and this
-/// phone works its glasses until disconnected.
+/// phone works its glasses until disconnected. One card says where things are; the buttons under
+/// it are only the ones that state has.
 struct RemoteConnectView: View {
     @ObservedObject var controller: HudController
-    @State private var scanning = false
+    /// A new code wanted while paired: the scanner over the card's advice.
+    @State private var rescanning = false
     @State private var problem: String?
+
+    private var paired: Bool { controller.remoteStatus != .off }
+    private var refused: Bool { controller.remoteStatus == .refused }
+    private var showsScanner: Bool { QRScanner.isAvailable && (!paired || refused || rescanning) }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 22) {
+            VStack(spacing: 18) {
                 Picker("Mode", selection: Binding(get: { controller.remoteHosting },
                                                   set: { controller.setRemoteHosting($0) })) {
                     Text("REMOTE").tag(false)
@@ -25,39 +31,24 @@ struct RemoteConnectView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                status
-                if scanning {
+                card
+                if showsScanner {
                     QRScanner { payload in
                         if controller.pair(with: payload) {
-                            scanning = false
+                            rescanning = false
                             problem = nil
                         } else {
                             problem = "That is not a TheHud code."
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .frame(maxWidth: .infinity, maxHeight: 360)
-                } else {
-                    Text("On the Android phone, hold its settings button to show its code, then scan it here. Both phones need to be on the same Wi-Fi.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: 340)
                 }
                 if let problem {
                     Text(problem).font(.footnote).foregroundStyle(.red)
                 }
-                Spacer()
-                VStack(spacing: 12) {
-                    if QRScanner.isAvailable {
-                        Button(scanning ? "Stop scanning" : "Scan the code") { scanning.toggle() }
-                            .buttonStyle(.borderedProminent)
-                            .tint(HudTheme.accent)
-                    }
-                    if controller.remoteStatus != .off {
-                        Button("Disconnect", role: .destructive) { controller.forgetRemote() }
-                    }
-                }
-                .controlSize(.large)
+                Spacer(minLength: 0)
+                buttons.controlSize(.large)
             }
             .padding(20)
             .navigationTitle("Remote Connect")
@@ -67,25 +58,93 @@ struct RemoteConnectView: View {
                     Button("Done") { controller.showingRemoteConnect = false }
                 }
             }
-            .onAppear { scanning = controller.remoteStatus == .off && QRScanner.isAvailable }
         }
         .preferredColorScheme(.dark)
     }
 
-    private var status: some View {
-        let (text, colour): (String, Color) = switch controller.remoteStatus {
-        case .off: ("NOT CONNECTED", HudTheme.inkFaint)
-        case .connecting: ("LOOKING FOR THE ANDROID PHONE", HudTheme.inkDim)
-        case let .connected(name) where controller.remoteHosting:
-            ("SHOWING THIS IPHONE ON \(name.uppercased())'S GLASSES", HudTheme.accent)
-        case let .connected(name): ("WORKING \(name.uppercased())'S GLASSES", HudTheme.accent)
-        case .refused: ("ITS CODE CHANGED: SCAN IT AGAIN", .red)
+    /// Where things are, and what to do about it.
+    private var card: some View {
+        let looking = controller.remoteStatus == .connecting
+        let (title, detail, colour): (String, String, Color) = switch controller.remoteStatus {
+        case .off:
+            ("NOT CONNECTED",
+             QRScanner.isAvailable
+                ? "On the Android phone, hold its settings button to show its code, and scan it here."
+                : "This iPhone can't scan codes.",
+             HudTheme.inkDim)
+        case .connecting:
+            (controller.remoteProblem?.title ?? "LOOKING FOR THE ANDROID PHONE",
+             controller.remoteProblem?.detail ?? "Both phones need to be on the same Wi-Fi, with TheHud open on the Android phone.",
+             controller.remoteProblem == nil ? HudTheme.ink : .orange)
+        case let .connected(name):
+            (controller.remoteHosting ? "SHOWING THIS IPHONE ON \(name.uppercased())'S GLASSES"
+                                      : "WORKING \(name.uppercased())'S GLASSES",
+             controller.remoteHosting ? "The apps run here; the glasses show them over Wi-Fi."
+                                      : "Everything on this phone now works the Android phone's glasses.",
+             HudTheme.accent)
+        case .refused:
+            ("ITS CODE CHANGED", "The Android phone shows a new code: scan it.", .red)
         }
-        return Text(text)
-            .font(HudTheme.mont(12, .black))
-            .tracking(2)
-            .foregroundStyle(colour)
-            .multilineTextAlignment(.center)
+        return HStack(alignment: .top, spacing: 14) {
+            Group {
+                if looking {
+                    ProgressView().tint(colour)
+                } else {
+                    Image(systemName: controller.remoteStatus == .off ? "qrcode"
+                          : refused ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(colour)
+                }
+            }
+            .font(.system(size: 22, weight: .semibold))
+            .frame(width: 26, height: 26)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(HudTheme.mont(13, .black))
+                    .tracking(1.5)
+                    .foregroundStyle(colour)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    /// Only what this state can do.
+    @ViewBuilder private var buttons: some View {
+        VStack(spacing: 12) {
+            switch controller.remoteStatus {
+            case .off:
+                EmptyView()
+            case .connecting:
+                if controller.remoteProblem == .localNetworkOff {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(HudTheme.accent)
+                }
+                if QRScanner.isAvailable {
+                    Button(rescanning ? "Keep the code I have" : "Scan a new code") { rescanning.toggle() }
+                        .buttonStyle(.bordered)
+                }
+                Button("Stop looking", role: .destructive) { forget() }
+            case .connected:
+                Button("Disconnect", role: .destructive) { forget() }
+                    .buttonStyle(.bordered)
+            case .refused:
+                Button("Forget this phone", role: .destructive) { forget() }
+            }
+        }
+    }
+
+    private func forget() {
+        rescanning = false
+        problem = nil
+        controller.forgetRemote()
     }
 }
 

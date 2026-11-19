@@ -88,6 +88,8 @@ final class HudController: ObservableObject {
     let remoteLink = RemoteLink()
     @Published var showingRemoteConnect = false
     @Published private(set) var remoteStatus: RemoteLink.Status = .off
+    /// Why the Android phone has not been reached yet, while looking for it.
+    @Published private(set) var remoteProblem: RemoteLink.Problem?
     /// Remote Connect's mode, picked when pairing: HOST runs this phone's apps on the Android
     /// phone's glasses; otherwise this phone is the Android phone's remote. Saved.
     @Published private(set) var remoteHosting = UserDefaults.standard.bool(forKey: "remoteHosting")
@@ -2034,6 +2036,7 @@ final class HudController: ObservableObject {
             self?.androidVideo = (o["id"] as? String ?? "", (o["time"] as? NSNumber)?.doubleValue ?? 0,
                                   o["playing"] as? Bool ?? false, Date())
         }
+        remoteLink.onProblem = { [weak self] problem in self?.remoteProblem = problem }
         remoteLink.onStatus = { [weak self] status in
             guard let self else { return }
             self.remoteStatus = status

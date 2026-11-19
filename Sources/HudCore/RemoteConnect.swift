@@ -435,6 +435,45 @@ public final class RemoteLink {
         didSet { if status != oldValue { onStatus?(status) } }
     }
     public var onStatus: ((Status) -> Void)?
+
+    /// Why the Android phone has not been reached yet, from what the last try ran into.
+    public enum Problem: Equatable, Sendable {
+        /// iOS keeps the app off the local network until it is allowed in Settings.
+        case localNetworkOff
+        /// Nothing answered at the address in the code, nor by name.
+        case noAnswer(String)
+        /// The phone is there, but TheHud on it is not listening.
+        case notListening
+        /// No network to look on.
+        case offline
+
+        public var title: String {
+            switch self {
+            case .localNetworkOff: "LOCAL NETWORK IS OFF FOR THEHUD"
+            case .noAnswer: "NO ANSWER FROM THE ANDROID PHONE"
+            case .notListening: "THEHUD ISN'T OPEN ON THE ANDROID PHONE"
+            case .offline: "THIS IPHONE ISN'T ON WI-FI"
+            }
+        }
+
+        public var detail: String {
+            switch self {
+            case .localNetworkOff:
+                "Turn on Local Network for TheHud in Settings, then come back: it keeps trying."
+            case let .noAnswer(address):
+                "Nothing answered\(address.isEmpty ? "" : " at \(address)"). Both phones need to be on the same Wi-Fi, with TheHud open on the Android phone."
+            case .notListening:
+                "Open TheHud on the Android phone: it keeps trying."
+            case .offline:
+                "Join the same Wi-Fi as the Android phone: it keeps trying."
+            }
+        }
+    }
+
+    public private(set) var problem: Problem? {
+        didSet { if problem != oldValue { onProblem?(problem) } }
+    }
+    public var onProblem: ((Problem?) -> Void)?
     public var onState: ((RemoteState) -> Void)?
     /// Host mode: the Android phone asks for a keyframe (its picture starts or restarts).
     public var onKeyframe: (() -> Void)?
@@ -475,6 +514,7 @@ public final class RemoteLink {
         pairing = nil
         close()
         status = .off
+        problem = nil
     }
 
     public func send(_ object: [String: Any]) {
@@ -526,14 +566,40 @@ public final class RemoteLink {
             Task { @MainActor in
                 guard let self, let connection, connection === self.connection else { return }
                 switch update {
-                case .failed, .cancelled: self.dropped()
-                case .waiting: self.dropped()
+                case let .failed(error), let .waiting(error):
+                    var found = Self.problem(error, at: endpoint)
+                    if #available(iOS 14.2, macOS 11.0, *), connection.currentPath?.unsatisfiedReason == .localNetworkDenied {
+                        found = .localNetworkOff
+                    }
+                    // Tries alternate the address and the name: keep the address once seen.
+                    if case .noAnswer("") = found, case .noAnswer = self.problem {} else { self.problem = found }
+                    self.dropped()
+                case .cancelled: self.dropped()
                 default: break
                 }
             }
         }
         connection.start(queue: queue)
         receive(on: connection)
+    }
+
+    /// What a failed try says about why: iOS's local network switch, nobody there, or no network.
+    nonisolated static func problem(_ error: NWError, at endpoint: NWEndpoint) -> Problem {
+        let address: String = if case let .hostPort(host, _) = endpoint { "\(host)" } else { "" }
+        switch error {
+        case let .dns(code) where code == -65570: // kDNSServiceErr_PolicyDenied
+            return .localNetworkOff
+        case let .posix(code):
+            switch code {
+            case .ECONNREFUSED: return .notListening
+            case .ENETDOWN, .ENETUNREACH: return .offline
+            default: return .noAnswer(address)
+            }
+        default:
+            // Local network refused shows as "policy denied" in the error's text too.
+            if "\(error)".lowercased().contains("policy") { return .localNetworkOff }
+            return .noAnswer(address)
+        }
     }
 
     private func close() {
@@ -603,6 +669,7 @@ public final class RemoteLink {
             awaitingWelcome = false
             authed = true
             attempt = 0
+            problem = nil
             status = .connected(pendingName)
         case "state":
             guard authed, !hosting else { return }
