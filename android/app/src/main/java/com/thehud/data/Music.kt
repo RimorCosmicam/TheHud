@@ -15,7 +15,25 @@ import android.service.notification.NotificationListenerService
 import com.thehud.core.HudSnapshot
 
 /** Nothing of its own: being enabled is what lets the app see other apps' media sessions. */
-class MediaListener : NotificationListenerService()
+class MediaListener : NotificationListenerService() {
+    override fun onListenerConnected() {
+        instance = this
+        // Off, TheHud does not stay bound to the phone's notifications either.
+        if (com.thehud.HudController.isOff) runCatching { requestUnbind() }
+    }
+    override fun onListenerDisconnected() { if (instance === this) instance = null }
+    override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
+
+    companion object {
+        private var instance: MediaListener? = null
+
+        /** Off: unbound; on again: bound again, if notification access is still allowed. */
+        fun bind(context: Context, on: Boolean) {
+            if (on) runCatching { requestRebind(ComponentName(context, MediaListener::class.java)) }
+            else instance?.let { runCatching { it.requestUnbind() } }
+        }
+    }
+}
 
 /**
  * Whatever is playing on the phone, from any app with a media session, and its buttons. Android
@@ -44,6 +62,15 @@ class MusicProvider(private val context: Context, private val onChange: (HudSnap
         val manager = context.getSystemService(MediaSessionManager::class.java) ?: return
         started = runCatching { manager.addOnActiveSessionsChangedListener(sessionsChanged, listener, main); true }.getOrDefault(false)
         pick()
+    }
+
+    /** Off: no sessions watched, no player followed. */
+    fun stop() {
+        if (!started) return
+        started = false
+        runCatching { context.getSystemService(MediaSessionManager::class.java)?.removeOnActiveSessionsChangedListener(sessionsChanged) }
+        controller?.unregisterCallback(callback)
+        controller = null
     }
 
     /** The session that is playing, or the most recent one. */

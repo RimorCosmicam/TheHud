@@ -102,6 +102,15 @@ class RemoteServer(private val context: Context) {
         }
     }
 
+    /** Off: the iPhone let go, no socket listening and nothing advertised on the network. */
+    fun stop() {
+        registration?.let { l -> runCatching { context.getSystemService(NsdManager::class.java)?.unregisterService(l) } }
+        registration = null
+        runCatching { client?.close() }
+        runCatching { server?.close() }
+        server = null
+    }
+
     /** What the QR code says. The address is a first guess; DNS-SD finds the phone after that. */
     fun pairingLink(): String {
         val k = Base64.encodeToString(key, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)

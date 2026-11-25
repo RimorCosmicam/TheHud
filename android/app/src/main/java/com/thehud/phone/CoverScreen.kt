@@ -237,8 +237,9 @@ fun CoverScreen() {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
             // The browser's buttons and tabs only while the browser is held open on the glasses (or
             // in settings, whose button lives there); otherwise the keyboard and settings ride in the pad's header.
-            if (c.browsing || c.showingSettings) ToolBar()
-            if (c.showingSettings) {
+            // Off, there is nothing to touch but the switch that turns it on again.
+            if ((c.browsing || c.showingSettings) && !c.isOff) ToolBar()
+            if (c.showingSettings || c.isOff) {
                 SettingsPage()
             } else {
                 SettingsArea(editor)
@@ -1024,6 +1025,12 @@ private fun SettingsPage() {
     val sessions = remember(version) { CaptionsLog.sessions(context) }
     fun open(intent: Intent) = runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { SettingsTitle("THEHUD") }
+        item { SettingsToggle("On", !c.isOff) { c.turnOff(!c.isOff) } }
+        item {
+            SettingsNote(if (c.isOff) "Totally off: nothing on the glasses and nothing running in the background, not even Remote Connect. Turn it on to use TheHud."
+                else "Turn it off to save the battery: the glasses, sensors, location, Remote Connect and every page stop until it is turned on again.")
+        }
         item { SettingsTitle("GLASSES") }
         item {
             BasicText(display?.let { "${it.name} · ${it.mode.physicalWidth}×${it.mode.physicalHeight}" } ?: "Not connected",

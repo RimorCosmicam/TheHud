@@ -45,9 +45,17 @@ class PhotosProvider(private val context: Context, private val scope: CoroutineS
     fun start() {
         if (started || !hasAccess) return
         started = true
-        context.contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true,
-            object : ContentObserver(Handler(Looper.getMainLooper())) { override fun onChange(selfChange: Boolean) = reload() })
+        context.contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
         reload()
+    }
+
+    private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) { override fun onChange(selfChange: Boolean) = reload() }
+
+    /** Off: the library no longer watched. */
+    fun stop() {
+        if (!started) return
+        started = false
+        context.contentResolver.unregisterContentObserver(observer)
     }
 
     private fun reload() {

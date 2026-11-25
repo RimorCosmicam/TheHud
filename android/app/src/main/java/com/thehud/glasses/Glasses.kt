@@ -257,12 +257,36 @@ object GlassesPresenter {
         override fun onDisplayChanged(displayId: Int) {}
     }
 
+    private var listening = false
+
     fun start(context: Context, phone: () -> Set<Int>) {
         phoneDisplays = phone
-        if (::app.isInitialized) { refresh(); return }
-        app = context.applicationContext
-        app.getSystemService(DisplayManager::class.java).registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        if (!::app.isInitialized) app = context.applicationContext
+        // Off, nothing goes on the glasses and their coming and going is not watched.
+        if (com.thehud.HudController.isOff) { stop(); return }
+        if (!listening) {
+            app.getSystemService(DisplayManager::class.java).registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+            listening = true
+        }
         refresh()
+    }
+
+    /** On again: the glasses back, with the phone's screens as last told. */
+    fun restart() { if (::app.isInitialized) start(app, phoneDisplays) }
+
+    /** Off: the glasses' window gone and the displays no longer watched. */
+    fun stop() {
+        if (!::app.isInitialized) return
+        if (listening) {
+            app.getSystemService(DisplayManager::class.java).unregisterDisplayListener(listener)
+            listening = false
+        }
+        presentation?.dismiss()
+        presentation = null
+        overlay?.remove()
+        overlay = null
+        shownOn = null
+        GlassesActivity.shown?.finish()
     }
 
     fun glassesDisplay(): Display? {
@@ -288,11 +312,12 @@ object GlassesPresenter {
 
     /** The accessibility service came or went: the glasses move between the overlay and the presentation. */
     fun serviceChanged() {
-        if (!::app.isInitialized) return
+        if (!::app.isInitialized || !listening) return
         Handler(Looper.getMainLooper()).post { shownOn = null; overlayRetries = 0; refresh() }
     }
 
     fun refresh() {
+        if (!listening) return
         val display = glassesDisplay()
         val service = com.thehud.apps.HudAccessibility.instance
         val upToDate = if (service != null) overlay != null else presentation?.isShowing == true
@@ -388,6 +413,7 @@ internal fun immersive(window: android.view.Window) {
 class GlassesActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        shown = this
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent { GlassesRoot() }
         immersive(window)
@@ -396,5 +422,16 @@ class GlassesActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         immersive(window)
+    }
+
+    override fun onDestroy() {
+        if (shown === this) shown = null
+        super.onDestroy()
+    }
+
+    companion object {
+        /** The one on the glasses, so turning TheHud off can close it. */
+        var shown: GlassesActivity? = null
+            private set
     }
 }

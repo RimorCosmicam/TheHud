@@ -41,6 +41,7 @@ import com.thehud.data.LatLon
 import com.thehud.data.LocationProvider
 import com.thehud.data.MapGround
 import com.thehud.data.MapsService
+import com.thehud.data.MediaListener
 import com.thehud.data.MusicProvider
 import com.thehud.data.NavigationTracker
 import com.thehud.data.OverheadProvider
@@ -267,6 +268,9 @@ object HudController {
     var glassesConnected by mutableStateOf(false)
         private set
     var showingSettings by mutableStateOf(false)
+    /** Turned totally off: nothing runs, on the glasses or in the background, until it is turned on again. */
+    var isOff by mutableStateOf(false)
+        private set
     var pad by mutableStateOf(PhonePad.touchpad)
         private set
     /** Fingers on the pad, for the halftone to ripple under. */
@@ -450,10 +454,54 @@ object HudController {
             val catalogue = runCatching { SkyCatalogue(app.assets.open("sky.json").bufferedReader().use { it.readText() }) }.getOrNull()
             withContext(Dispatchers.Main) { skyCatalogue = catalogue; lastSky = 0 }
         }
-        startProviders()
-        tick()
-        refreshWeather()
+        isOff = prefs.getBoolean("off", false)
         startConnect()
+        if (!isOff) {
+            startProviders()
+            tick()
+            refreshWeather()
+        }
+    }
+
+    /**
+     * Totally off saves the battery: no sensors, no location, no network, no timers, no pages
+     * and nothing on the glasses, and the phone's notifications unbound. Only the settings page
+     * stays, to turn it on again. It stays off when the phone restarts.
+     */
+    fun turnOff(off: Boolean) {
+        if (off == isOff) return
+        isOff = off
+        prefs.edit().putBoolean("off", off).apply()
+        if (off) {
+            main.removeCallbacks(weatherRetry)
+            captions.stop()
+            camera.run(false)
+            location.stop()
+            desktop.stop()
+            remote.stop()
+            activity.stop()
+            music.stop()
+            photos.stop()
+            youtube?.stop()
+            // The pages' scripts and timers, all of them (the call is for every page at once).
+            tabs.forEach { it.view.onPause() }
+            (tabs.firstOrNull()?.view ?: youtube?.view)?.pauseTimers()
+            connect.stop()
+            MediaListener.bind(app, on = false)
+            GlassesPresenter.stop()
+            showingSettings = true
+        } else {
+            MediaListener.bind(app, on = true)
+            tabs.forEach { it.view.onResume() }
+            (tabs.firstOrNull()?.view ?: youtube?.view)?.resumeTimers()
+            connect.start()
+            GlassesPresenter.restart()
+            startProviders()
+            tick()
+            refreshWeather()
+            showingSettings = false
+        }
+        settingsVersion++
     }
 
     // ------------------------------------------------------------------ Remote Connect
@@ -485,7 +533,7 @@ object HudController {
         }
         connect.onMessage = { remoteMessage(it) }
         connect.onOverlay = { hostOverlayArrived(it) }
-        connect.start()
+        if (!isOff) connect.start()
         // The state as the iPhone draws it, sent when it changes, at most ten times a second.
         scope.launch {
             snapshotFlow { if (remotePeer != null && !hosted) RemoteWire.state(this@HudController) else "" }
@@ -596,6 +644,7 @@ object HudController {
 
     /** After a permission is granted, or settings come back: start whatever can now start. */
     fun startProviders() {
+        if (isOff) return
         activity.start()
         music.start()
         photos.start()
@@ -608,6 +657,7 @@ object HudController {
 
     /** Location and the Mac run only while something on the glasses needs them. */
     private fun sensorsChanged() {
+        if (isOff) return
         val needsLocation = isOnGlasses(HudPanelKind.map) || isOnGlasses(HudPanelKind.sky) || tracker != null
         if (needsLocation) location.start() else location.stop()
         if (isOnGlasses(HudPanelKind.mac)) desktop.start() else desktop.stop()
@@ -642,6 +692,7 @@ object HudController {
     // ------------------------------------------------------------------ the clock and the weather
 
     private fun tick() {
+        if (isOff) return
         val now = Date()
         val is24 = android.text.format.DateFormat.is24HourFormat(app)
         val time = SimpleDateFormat(if (is24) "H:mm" else "h:mm", Locale.getDefault()).format(now)
@@ -1161,6 +1212,7 @@ object HudController {
     /** Every fifteen minutes; every minute while there is no location or no answer yet. */
     fun refreshWeather() {
         main.removeCallbacks(weatherRetry)
+        if (isOff) return
         val where = Whereabouts(app)
         scope.launch {
             val location = where.last() ?: where.current()
@@ -1389,7 +1441,7 @@ object HudController {
     /** The camera runs while it is on these glasses and the app is in front; the glasses say it is paused otherwise. */
     private fun updateCamera() {
         if (!::camera.isInitialized) return
-        camera.run(glassesConnected && isOnGlasses(HudPanelKind.camera) && inFront)
+        camera.run(!isOff && glassesConnected && isOnGlasses(HudPanelKind.camera) && inFront)
     }
 
     // ------------------------------------------------------------------ the phone's buttons

@@ -38,6 +38,13 @@ class ActivityProvider(private val context: Context, private val prefs: SharedPr
         publish()
     }
 
+    /** Off: the step counter let go. */
+    fun stop() {
+        if (!started) return
+        started = false
+        context.getSystemService(SensorManager::class.java)?.unregisterListener(this)
+    }
+
     private fun today() = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
     private fun hourNow() = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
 
